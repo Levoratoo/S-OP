@@ -1,0 +1,21 @@
+VALIDAÇÃO DO CÁLCULO DE CAPACIDADE - MIRAFLEX
+==============================================
+
+Dados do recurso:
+- Nome: Miraflex
+- Velocidade líquida: 51.064 un/h
+- Turno configurado: 2/10 (2 turnos × 9 horas = 18 horas/dia)
+- Dias trabalhados: segunda a sexta
+
+Cálculo para Janeiro 2026:
+- Dias úteis (seg-sex): 22 dias
+- Horas por dia: 18 horas (2 turnos × 9h)
+- Velocidade: 51.064 un/h
+
+Fórmula: Dias × Horas × Velocidade
+22 × 18 × 51.064 = 20.221.344 un/mês
+
+Resultado na tela: 20.221.344 ✓ CORRETO!
+
+O cálculo está funcionando corretamente com o multiplicador de turnos.
+O número antes da barra (ex: 2/10) indica a quantidade de turnos.

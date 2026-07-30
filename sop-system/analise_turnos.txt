@@ -1,0 +1,28 @@
+Análise dos Turnos Cadastrados
+
+Turnos atuais e seus dias trabalhados:
+
+| Turno     | Horas Trabalhadas | Dias Trabalhados    | Observação                    |
+|-----------|-------------------|---------------------|-------------------------------|
+| 1/10      | 09:00             | segunda - sexta     | CORRETO - 5 dias              |
+| 1/8       | 07:00             | segunda - sábado    | CORRETO - 6 dias              |
+| 12/36     | 11:00             | Domingo - Domingo   | CORRETO - 7 dias              |
+| 2/10      | 09:00             | segunda - sábado    | ERRADO - deveria ser seg-sex  |
+| 2/8       | 07:00             | segunda - sábado    | CORRETO - 6 dias              |
+| 3/8       | 07:00             | segunda - sábado    | CORRETO - 6 dias              |
+| Comercial | 00:00             | segunda - sexta     | CORRETO - 5 dias              |
+| s/ turno  | 00:00             | segunda - sexta     | CORRETO - 5 dias              |
+
+Correção necessária:
+- 2/10: Mudar de "segunda - sábado" para "segunda - sexta"
+
+Segundo o usuário:
+- 1/8, 2/8, 3/8 = segunda a sábado (6 dias)
+- 1/10, 2/10 = segunda a sexta (5 dias)
+
+O turno 2/10 está configurado incorretamente como "segunda - sábado" quando deveria ser "segunda - sexta".
+
+Próximos passos:
+1. Corrigir o turno 2/10 no banco de dados
+2. Adicionar campo de hora extra na configuração mensal de recursos
+3. Atualizar o cálculo de capacidade

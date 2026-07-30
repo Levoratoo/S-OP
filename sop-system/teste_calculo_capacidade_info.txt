@@ -1,0 +1,45 @@
+Teste de Cálculo de Capacidade - Funcionando!
+=============================================
+
+A página de Cálculo de Capacidade está funcionando corretamente após adicionar a coluna horasExtras.
+
+Dados exibidos:
+- 39 recursos filtrados
+- Capacidade Total: 4.137.700 unidades/ano
+- Média Mensal: 344.808 unidades/mês
+- Dias Úteis: 257 dias no ano
+
+Recurso A330 (único com turno configurado para 2025):
+- Velocidade Líquida: 2.300 un/h
+- Linha: Flexo
+- Grupo: Automática 3
+- Capacidade por mês:
+  - Jan (22d): 354.200
+  - Fev (20d): 322.000
+  - Mar (21d): 338.100
+  - Abr (21d): 338.100
+  - Mai (22d): 354.200
+  - Jun (21d): 338.100
+  - Jul (23d): 370.300
+  - Ago (21d): 338.100
+  - Set (22d): 354.200
+  - Out (23d): 370.300
+  - Nov (20d): 322.000
+  - Dez (21d): 338.100
+  - Total: 4.137.700
+
+Fórmula utilizada:
+(Dias úteis × Horas úteis + Horas Extras - H. Manutenção) × Velocidade Líquida
+
+Verificação do cálculo para Janeiro:
+- Dias úteis: 22
+- Horas trabalhadas (turno 1/8): 7h
+- Horas extras: 0
+- Horas manutenção: 0
+- Velocidade líquida: 2.300 un/h
+- Capacidade = 22 × 7 × 2.300 = 354.200 ✓
+
+Próximos passos:
+1. Configurar turnos para os demais recursos
+2. Cadastrar dias úteis para 2026 considerando o tipo de turno
+3. Testar filtros de Linha Produto e Tipo Acabamento

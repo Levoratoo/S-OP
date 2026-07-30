@@ -1,0 +1,22 @@
+Turnos cadastrados e suas regras de dias trabalhados:
+
+| Turno     | Horas Trabalho | Horas Trabalhadas | Dias Trabalhados    |
+|-----------|----------------|-------------------|---------------------|
+| 1/10      | 10:00          | 09:00             | segunda - sábado    |
+| 1/8       | 08:00          | 07:00             | segunda - sábado    |
+| 12/36     | 12:00          | 11:00             | Domingo - Domingo   |
+| 2/10      | 10:00          | 09:00             | segunda - sábado    |
+| 2/8       | 08:00          | 07:00             | segunda - sábado    |
+| 3/8       | 08:00          | 07:00             | segunda - sábado    |
+| Comercial | 00:00          | 00:00             | segunda - sexta     |
+| s/ turno  | 00:00          | 00:00             | segunda - sexta     |
+
+Regras:
+- segunda - sexta: 5 dias por semana (Comercial, s/ turno)
+- segunda - sábado: 6 dias por semana (1/8, 2/8, 3/8, 1/10, 2/10)
+- Domingo - Domingo: 7 dias por semana (12/36)
+
+Para 2026, preciso calcular:
+- Dias úteis seg-sex (para turnos Comercial e s/ turno)
+- Dias úteis seg-sab (para turnos 1/8, 2/8, 3/8, 1/10, 2/10)
+- Dias totais do mês (para turno 12/36)

@@ -1,0 +1,19 @@
+Teste de Configuração de Hora Extra
+=====================================
+
+A interface de configuração de turnos está funcionando, mas preciso verificar se o campo
+de Hora Extra está aparecendo corretamente quando um turno é selecionado.
+
+Observações:
+- O modal de configuração de turnos está abrindo corretamente
+- Os dropdowns de turno estão funcionando
+- Preciso selecionar um turno para ver os campos adicionais (H. Manutenção, H. Extras, Vel. Líquida)
+
+O código foi atualizado para incluir:
+1. Campo horasExtras no schema do banco de dados
+2. Campo horasExtras no router de recursos mensais
+3. Campo horasExtras na função saveRecursoMensal
+4. Campo H. Extras no formulário de configuração mensal
+5. Cálculo de capacidade atualizado: (Dias úteis × Horas úteis + Horas Extras - Horas Manutenção) × Velocidade Líquida
+
+Próximo passo: Verificar se os campos aparecem após selecionar um turno

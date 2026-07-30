@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "mysql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "5",
+      "when": 1765925671392,
+      "tag": "0000_next_colossus",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1765925774035,
+      "tag": "0001_powerful_darkhawk",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1765929056243,
+      "tag": "0002_fair_doctor_spectrum",
+      "breakpoints": true
+    }
+  ]
+}

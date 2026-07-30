@@ -1,0 +1,16 @@
+LAYOUT DA TABELA DE CÁLCULO DE CAPACIDADE - AJUSTADO
+=====================================================
+
+Alterações realizadas:
+1. Removidas colunas "Linha" e "Grupo" da tabela
+2. Ajustado tamanho das fontes para text-[11px] e text-[10px]
+3. Reduzido padding das células (px-0.5, py-0.5)
+4. Coluna "Recurso" com largura fixa de 120px
+5. Coluna "Total" destacada com fundo bg-muted/30
+6. Tabela com table-fixed para largura fixa
+7. Informações de Linha e Grupo disponíveis no tooltip (hover sobre o nome do recurso)
+
+Resultado:
+- Todos os 12 meses + Total visíveis na tela
+- Sem necessidade de scroll horizontal
+- Tabela mais compacta e legível

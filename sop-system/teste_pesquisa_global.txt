@@ -1,0 +1,22 @@
+Teste de Pesquisa Global de Recursos - 26/12/2025
+
+A funcionalidade de pesquisa global está funcionando corretamente!
+
+Funcionalidades testadas:
+1. Barra de pesquisa no menu lateral - OK
+2. Atalho de teclado Ctrl+K - OK
+3. Busca por nome do recurso (Miraflex) - OK
+4. Exibição de resultados com badges (Flexo) - OK
+5. Detalhes do recurso selecionado:
+   - Nome: Miraflex
+   - Velocidade: 51.064 un/h
+   - Tipo: Intermediário
+   - Execução: Interno
+   - Linha Produção: Flexo
+   - Tipo Acabamento: Impressão
+   - Status: Ativo
+6. Botões de navegação rápida (Cadastro, Capacidade) - OK
+7. Seção de Turnos Configurados (2025) - OK
+   - Mostra "Nenhum turno configurado para este ano" quando não há turnos
+
+A pesquisa está funcionando perfeitamente!

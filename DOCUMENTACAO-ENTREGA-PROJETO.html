@@ -1,0 +1,345 @@
+<!DOCTYPE html><html><head><meta charset=utf-8><title>Documentacao SOP Manus</title><style>body{font-family:Segoe UI,Arial,sans-serif;max-width:900px;margin:24px auto;line-height:1.45;color:#111;font-size:11pt} table{border-collapse:collapse;width:100%;margin:1em 0;font-size:10pt} th,td{border:1px solid #ccc;padding:6px 8px;text-align:left} h1{border-bottom:2px solid #333;padding-bottom:8px;font-size:18pt} h2{margin-top:1.4em;border-bottom:1px solid #ddd;font-size:14pt} h3{font-size:12pt} code{background:#f4f4f4;padding:2px 6px;font-size:10pt} pre{background:#f4f4f4;padding:12px;overflow:auto;font-size:9pt} hr{margin:2em 0}</style></head><body><h1>Documentação de entrega — Software S&amp;OP Manus</h1>
+<p><strong>Data de referência:</strong> 6 de maio de 2026<br />
+<strong>Audiência:</strong> novo desenvolvedor assumindo o projeto  </p>
+<hr />
+<h2>1. Visão geral do repositório</h2>
+<p>Este diretório agrupa material de <strong>Sales &amp; Operations Planning (S&amp;OP)</strong> para o contexto Manus / Printbag: referências (Easy 360), dados auxiliares em CSV, scripts Python legados de previsão de demanda e <strong>o aplicativo principal</strong>, que vive na pasta <code>sop-system/</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Pasta / arquivo</th>
+<th>Função</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>sop-system/</code></td>
+<td><strong>Código-fonte da aplicação web</strong> (frontend React + backend Node + MariaDB). É o núcleo técnico a manter.</td>
+</tr>
+<tr>
+<td><code>package.json</code> (raiz)</td>
+<td>Workspace npm com atalhos (<code>dev</code>, <code>install:app</code>, <code>db:local:start</code>, etc.) que delegam para <code>sop-system</code>.</td>
+</tr>
+<tr>
+<td><code>1.Software Easy Informações/</code></td>
+<td>Documentação e prints de referência do produto Easy 360 (contexto de negócio, não é código executável do SOP atual).</td>
+</tr>
+<tr>
+<td><code>3. Script Python Previsão Demanda/</code></td>
+<td>Scripts e planilhas históricas de previsão (Excel + Python); complementares ao fluxo moderno em <code>sop-system</code>.</td>
+</tr>
+<tr>
+<td><code>dados sistema/</code></td>
+<td>CSVs de cadastros auxiliares (de-para, dias úteis, fluxos, linhas, etc.) usados como base ou importação.</td>
+</tr>
+<tr>
+<td><code>Exemplos de exel scrip/</code></td>
+<td>Exemplos de saídas Excel.</td>
+</tr>
+<tr>
+<td><code>Mapeamento Software S&amp;OP Printbag.docx</code></td>
+<td>Documento de mapeamento funcional (negócio).</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>2. O que é o sistema (<code>sop-system</code>)</h2>
+<p>É uma <strong>aplicação corporativa de S&amp;OP</strong> com:</p>
+<ul>
+<li><strong>Cadastros</strong> de famílias, subfamílias, produtos, clientes, recursos, calendário (dias úteis), roteiros, paradas, marcas, gestores, de-para de códigos, fluxos, turnos e tabelas auxiliares (status, tipo de negócio, tipo de estoque, linhas, modelos, tamanhos).</li>
+<li><strong>Demanda:</strong> dashboards, acurácia, previsões, colaborações, consensos, orçamentos.</li>
+<li><strong>Capacidade:</strong> dashboard e cálculo de capacidade.</li>
+<li><strong>Vendas:</strong> histórico, carteira de pedidos, forecast, importação de faturamento.</li>
+<li><strong>Produção:</strong> metas de produção.</li>
+<li><strong>Integrações:</strong> SharePoint e jobs de <strong>previsão via Python</strong> (execução externa orquestrada pelo backend).</li>
+<li><strong>Administração:</strong> usuários, marcas, níveis de acesso (gestor / gerente / master).</li>
+</ul>
+<p>Autenticação prevê <strong>OAuth</strong> em produção; em desenvolvimento local usa <strong>bypass</strong> configurável via variáveis de ambiente (ver secção 6).</p>
+<hr />
+<h2>3. Stack técnica</h2>
+<h3>3.1 Frontend</h3>
+<table>
+<thead>
+<tr>
+<th>Tecnologia</th>
+<th>Uso</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>React 19</strong></td>
+<td>UI</td>
+</tr>
+<tr>
+<td><strong>TypeScript</strong></td>
+<td>Tipagem</td>
+</tr>
+<tr>
+<td><strong>Vite 7</strong></td>
+<td>Build e dev server integrado ao Express em modo middleware</td>
+</tr>
+<tr>
+<td><strong>Wouter</strong></td>
+<td>Roteamento no cliente</td>
+</tr>
+<tr>
+<td><strong>TanStack React Query</strong></td>
+<td>Cache e chamadas assíncronas</td>
+</tr>
+<tr>
+<td><strong>tRPC (client + react-query)</strong></td>
+<td>Chamadas type-safe ao backend</td>
+</tr>
+<tr>
+<td><strong>Tailwind CSS 4</strong></td>
+<td>Estilização</td>
+</tr>
+<tr>
+<td><strong>Radix UI + shadcn-style components</strong></td>
+<td>Componentes acessíveis</td>
+</tr>
+<tr>
+<td><strong>Recharts</strong></td>
+<td>Gráficos</td>
+</tr>
+<tr>
+<td><strong>React Hook Form + Zod</strong></td>
+<td>Formulários e validação</td>
+</tr>
+<tr>
+<td><strong>Framer Motion</strong></td>
+<td>Animações</td>
+</tr>
+<tr>
+<td><strong>date-fns</strong>, <strong>xlsx</strong>, etc.</td>
+<td>Utilitários e Excel</td>
+</tr>
+</tbody>
+</table>
+<h3>3.2 Backend</h3>
+<table>
+<thead>
+<tr>
+<th>Tecnologia</th>
+<th>Uso</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Node.js (ESM)</strong></td>
+<td>Runtime (<code>"type": "module"</code> no <code>package.json</code>)</td>
+</tr>
+<tr>
+<td><strong>Express 4</strong></td>
+<td>HTTP server</td>
+</tr>
+<tr>
+<td><strong>tRPC 11</strong></td>
+<td>API tipada em <code>/api/trpc</code></td>
+</tr>
+<tr>
+<td><strong>SuperJSON</strong></td>
+<td>Serialização</td>
+</tr>
+<tr>
+<td><strong>Drizzle ORM</strong></td>
+<td>Acesso ao MySQL/MariaDB</td>
+</tr>
+<tr>
+<td><strong>mysql2</strong></td>
+<td>Driver</td>
+</tr>
+<tr>
+<td><strong>Zod</strong></td>
+<td>Validação de inputs nos routers</td>
+</tr>
+<tr>
+<td><strong>Multer</strong></td>
+<td>Uploads</td>
+</tr>
+<tr>
+<td><strong>AWS SDK S3</strong></td>
+<td>Armazenamento/referência S3 (quando configurado)</td>
+</tr>
+<tr>
+<td><strong>jose</strong></td>
+<td>JWT / sessão</td>
+</tr>
+<tr>
+<td><strong>dotenv</strong></td>
+<td>Variáveis de ambiente</td>
+</tr>
+</tbody>
+</table>
+<h3>3.3 Base de dados</h3>
+<ul>
+<li><strong>MySQL compatível / MariaDB</strong> (localmente MariaDB portátil na porta <strong>3307</strong>, usuário <code>root</code> / senha <code>root</code>, database <code>sop_system</code>).</li>
+<li>Migrações e schema em <code>sop-system/drizzle/</code> (<code>schema.ts</code>, SQL gerados, <code>drizzle-kit</code>).</li>
+</ul>
+<h3>3.4 Previsão (Python)</h3>
+<ul>
+<li>Ambiente virtual recomendado: <code>sop-system/.venv-previsao/</code>.</li>
+<li>Dependências em <code>sop-system/requirements-previsao-python.txt</code>: NumPy, Pandas, scikit-learn, openpyxl, python-dateutil, matplotlib, statsmodels.</li>
+<li>O servidor Node invoca o interpretador configurado em <strong><code>PREVISAO_PYTHON_CMD</code></strong> (caminho para <code>python.exe</code> da venv).</li>
+</ul>
+<h3>3.5 Ferramentas de desenvolvimento</h3>
+<ul>
+<li><strong>pnpm</strong> (gerenciador declarado no <code>package.json</code> do app).</li>
+<li><strong>tsx</strong> — execução/watch do servidor TypeScript.</li>
+<li><strong>esbuild</strong> — bundle do servidor para produção.</li>
+<li><strong>Vitest</strong> — testes.</li>
+<li><strong>Prettier</strong> — formatação.</li>
+<li><strong>PowerShell</strong> — scripts de setup local e MariaDB portátil no Windows.</li>
+</ul>
+<hr />
+<h2>4. Estrutura principal de <code>sop-system</code></h2>
+<pre><code>sop-system/
+├── client/              # SPA React (entrada: client/index.html, src/)
+├── server/
+│   ├── _core/           # Express, Vite middleware, OAuth, contexto tRPC
+│   ├── routers.ts       # Router tRPC principal (milhares de linhas — domínio completo)
+│   ├── db.ts            # Funções de persistência
+│   ├── previsaoPython.ts
+│   ├── sharepoint.ts
+│   └── ...
+├── shared/              # Tipos e constantes compartilhadas
+├── drizzle/             # Schema Drizzle + migrações SQL
+├── scripts/             # setup-local-dev.ps1, start-local-db.ps1, importações, etc.
+├── patches/             # Patch pnpm (ex.: wouter)
+├── dist/                # Saída de build (produção)
+├── .env / .env.example
+├── vite.config.* 
+└── package.json
+</code></pre>
+<p><strong>Entrada do servidor:</strong> <code>server/_core/index.ts</code> — monta Express, OAuth em <code>/api/oauth/callback</code>, tRPC em <code>/api/trpc</code>, e em desenvolvimento o <strong>Vite em middleware</strong>; em produção serve estáticos de <code>dist/public</code>.</p>
+<hr />
+<h2>5. O que já foi implementado (domínio na API)</h2>
+<p>O arquivo <code>server/routers.ts</code> expõe routers tRPC agrupados por domínio, incluindo (lista não exaustiva dos grupos principais):</p>
+<p><code>system</code>, <code>auth</code>, <code>familias</code>, <code>subfamilias</code>, <code>produtos</code>, <code>clientes</code>, <code>recursos</code>, <code>diasUteis</code>, <code>hierarquias</code>, <code>membros</code>, <code>paradas</code>, <code>roteiros</code>, <code>vendas</code>, <code>carteiraPedidos</code>, <code>forecasts</code>, <code>orcamentos</code>, <code>previsoes</code>, <code>colaboracoes</code>, <code>consensos</code>, <code>metasProducao</code>, <code>faturamento</code>, cadastros auxiliares (<code>statusCadastro</code>, <code>tiposNegocio</code>, <code>tiposEstoque</code>, <code>linhas</code>, <code>modelos</code>, <code>tamanhos</code>), <code>marcas</code>, <code>gestores</code>, <code>gestorMarca</code>, <code>deParaCodigos</code>, <code>sharepoint</code>, <code>previsaoPython</code>, <code>niveisAcesso</code>, <code>usuarios</code>, <code>turnos</code>, <code>recursosMensais</code>, <code>fluxos</code>, <code>cadastrosSistema</code>, <code>dashboard</code>, <code>capacidade</code>, <code>pesquisa</code>.</p>
+<p>O schema Drizzle (<code>drizzle/schema.ts</code>) modela usuários (com <strong>nível de acesso</strong> 1–3), relacionamento usuário–marca, famílias/subfamílias, produtos com diversos atributos comerciais e operacionais, e demais entidades alinhadas aos cadastros.</p>
+<hr />
+<h2>6. Configuração e execução local (Windows)</h2>
+<h3>6.1 Pré-requisitos</h3>
+<ul>
+<li>Node.js compatível com as versões do <code>package.json</code>.</li>
+<li>PowerShell para scripts <code>.ps1</code>.</li>
+<li>Opcional: Python 3 para criar <code>.venv-previsao</code> (previsão).</li>
+</ul>
+<h3>6.2 Variáveis de ambiente</h3>
+<p>Copiar <code>sop-system/.env.example</code> para <code>sop-system/.env</code> e ajustar:</p>
+<ul>
+<li><strong><code>DATABASE_URL</code></strong> — ex.: <code>mysql://root:root@127.0.0.1:3307/sop_system</code></li>
+<li><strong><code>PORT</code> / <code>HOST</code></strong> — servidor HTTP (padrão típico porta <strong>3012</strong>)</li>
+<li><strong><code>DEV_AUTH_BYPASS=true</code></strong> — desenvolvimento sem OAuth real</li>
+<li><strong><code>PREVISAO_PYTHON_CMD</code></strong> — caminho absoluto para <code>python.exe</code> da venv de previsão</li>
+</ul>
+<h3>6.3 Scripts npm (raiz do monorepo leve)</h3>
+<p>Na pasta <strong><code>Software SOP Manus</code></strong> (raiz):</p>
+<table>
+<thead>
+<tr>
+<th>Comando</th>
+<th>Efeito</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>npm run install:app</code></td>
+<td>Instala dependências em <code>sop-system</code></td>
+</tr>
+<tr>
+<td><code>npm run setup:local</code></td>
+<td>Sobe MariaDB local, aplica schema Drizzle se necessário, seed básico</td>
+</tr>
+<tr>
+<td><code>npm run setup:python-previsao</code></td>
+<td>Cria venv e instala requirements de previsão</td>
+</tr>
+<tr>
+<td><code>npm run db:local:start</code></td>
+<td>Apenas inicia MariaDB portátil (3307)</td>
+</tr>
+<tr>
+<td><code>npm run dev</code></td>
+<td>MariaDB + servidor de desenvolvimento (watch)</td>
+</tr>
+</tbody>
+</table>
+<p>Equivalentes diretos dentro de <code>sop-system</code>: ver <code>package.json</code> scripts.</p>
+<h3>6.4 Banco local portátil</h3>
+<ul>
+<li>Script: <code>sop-system/scripts/start-local-db.ps1</code>.</li>
+<li>Baixa/extrai MariaDB 11.8 winx64 em <code>sop-system/.local/</code>, dados em <code>sop-system/.local/mariadb-data/</code>.</li>
+<li><strong>Refatoração importante:</strong> caminhos são calculados a partir de <strong><code>$PSScriptRoot</code></strong> (não dependem do nome da pasta pai do projeto); <code>my.ini</code> é regenerado para evitar caminhos absolutos obsoletos após renomear pastas.</li>
+<li>Porta <strong>3307</strong>; cria database <code>sop_system</code> se aplicável (via fluxo de setup).</li>
+</ul>
+<h3>6.5 Build de produção</h3>
+<p>No <code>sop-system</code>:</p>
+<ul>
+<li><code>pnpm run build</code> — Vite (<code>dist/public</code>) + bundle do servidor (<code>dist/index.js</code>).</li>
+<li><code>pnpm run start</code> — executa <code>NODE_ENV=production node dist/index.js</code> (ajuste de env no Windows conforme necessidade).</li>
+</ul>
+<hr />
+<h2>7. Rotas da interface (wouter)</h2>
+<p>Principais grupos de URLs (ver <code>client/src/App.tsx</code>):</p>
+<ul>
+<li><code>/</code> — Home  </li>
+<li><strong>Demanda:</strong> <code>/demanda/dashboard</code>, <code>acuracidade</code>, <code>previsoes</code>, <code>colaboracoes</code>, <code>consensos</code>, <code>orcamentos</code>  </li>
+<li><strong>Capacidade:</strong> <code>/capacidade/dashboard</code>, <code>/capacidade/calculo</code>  </li>
+<li><strong>Produção:</strong> <code>/producao/metas</code>  </li>
+<li><strong>Vendas:</strong> <code>/vendas/*</code> (dashboard, histórico, carteira, forecast, importar)  </li>
+<li><strong>Cadastros:</strong> <code>/cadastros/*</code>  </li>
+<li><strong>Integração:</strong> <code>/integracao/sharepoint</code>, <code>/previsao-python</code>, jobs de visualização  </li>
+<li><strong>Admin:</strong> <code>/admin/usuarios</code>, <code>/admin/marcas</code>  </li>
+</ul>
+<hr />
+<h2>8. Pontos de atenção para o novo desenvolvedor</h2>
+<ol>
+<li><strong><code>server/routers.ts</code> é muito grande</strong> — para alterações, buscar o router do domínio (ex.: <code>previsaoPython:</code>) e extrair lógica para <code>server/services/</code> quando fizer sentido.  </li>
+<li><strong>Segredos</strong> — não commitar <code>.env</code>; usar <code>.env.example</code> como referência.  </li>
+<li><strong>Previsão Python</strong> — tempo limite e heartbeat configuráveis (<code>PREVISAO_PYTHON_TIMEOUT_MIN</code>, <code>PREVISAO_PYTHON_HEARTBEAT_SEC</code>).  </li>
+<li><strong>Renomeação de pastas</strong> — o projeto já foi renomeado (ex.: remoção de <code>&amp;</code> no nome da pasta); scripts de DB locais foram ajustados para <strong>não fixar caminhos absolutos</strong>.  </li>
+<li><strong>pnpm patches</strong> — há patch aplicado a <code>wouter</code>; manter ao atualizar dependências.  </li>
+</ol>
+<hr />
+<h2>9. Referências rápidas de arquivos</h2>
+<table>
+<thead>
+<tr>
+<th>Arquivo</th>
+<th>Descrição</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>sop-system/package.json</code></td>
+<td>Scripts e dependências</td>
+</tr>
+<tr>
+<td><code>sop-system/server/_core/index.ts</code></td>
+<td>Bootstrap Express + tRPC + Vite</td>
+</tr>
+<tr>
+<td><code>sop-system/server/routers.ts</code></td>
+<td>API tRPC</td>
+</tr>
+<tr>
+<td><code>sop-system/drizzle/schema.ts</code></td>
+<td>Modelo de dados</td>
+</tr>
+<tr>
+<td><code>sop-system/scripts/start-local-db.ps1</code></td>
+<td>MariaDB portátil</td>
+</tr>
+<tr>
+<td><code>sop-system/scripts/setup-local-dev.ps1</code></td>
+<td>Setup inicial do BD + seed</td>
+</tr>
+<tr>
+<td><code>sop-system/.env.example</code></td>
+<td>Template de configuração</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<p><em>Documento gerado para facilitar a continuidade do desenvolvimento do Software S&amp;OP Manus.</em></p></body></html>

@@ -1,0 +1,23 @@
+Cálculo de Capacidade Corrigido - Funcionando com dias por tipo de turno!
+=========================================================================
+
+O cálculo agora usa os dias corretos baseado no tipo de turno. O recurso A330 está configurado com turno 2/8 (segunda a sábado), então agora usa os dias de seg-sab em vez de seg-sex.
+
+Comparação antes/depois para Janeiro 2025:
+- Antes (seg-sex): 22 dias × 7h × 2.300 = 354.200 un
+- Depois (seg-sab): 27 dias × 7h × 2.300 = 434.700 un
+
+Capacidade Total A330 2025:
+- Antes: 4.137.700 un/ano
+- Depois: 5.039.300 un/ano (aumento de 21.8%)
+
+Dias úteis cadastrados para 2025 e 2026:
+- seg-sex: 261 dias/ano (segunda a sexta)
+- seg-sab: 313 dias/ano (segunda a sábado)
+- 7-dias: 365 dias/ano (todos os dias)
+
+Turnos e seus tipos de dias:
+- s/ turno, Comercial: seg-sex (segunda a sexta)
+- 1/8, 2/8, 3/8: seg-sab (segunda a sábado)
+- 1/10, 2/10: seg-sex (segunda a sexta)
+- 12/36: 7-dias (todos os dias)

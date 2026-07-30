@@ -1,0 +1,27 @@
+Teste dos Filtros de Cálculo de Capacidade
+
+Filtros disponíveis:
+1. Ano: 2025
+2. Linha Produção: Flexo (selecionado)
+3. Grupo Trabalho: Todos
+4. Linha Produto: Todas
+5. Tipo Acabamento: Todos
+
+Resultado após filtrar por Flexo:
+- 18 recursos filtrados (antes eram 39)
+- Capacidade Total: 4.137.700 unidades/ano
+- Média Mensal: 344.808 unidades/mês
+- Dias Úteis: 257 dias no ano
+
+Recursos exibidos (apenas Flexo):
+- A330 (2.300 un/h, Automática 3)
+- Amber (4.100 un/h)
+- FB 01 (1.800 un/h, Automática 1)
+- FB 02 (1.800 un/h, Automática 1)
+- FB 03 (2.300 un/h, Automática 2)
+- FB 04 (2.600 un/h, Automática 3)
+- FB 05 (3.000 un/h, J13)
+- Feva (4.500 un/h)
+- etc.
+
+Filtros funcionando corretamente!

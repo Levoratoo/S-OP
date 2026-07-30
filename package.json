@@ -1,0 +1,11 @@
+{
+  "name": "sop-workspace",
+  "private": true,
+  "scripts": {
+    "install:app": "npm --prefix sop-system install",
+    "setup:local": "npm --prefix sop-system run setup:local",
+    "setup:python-previsao": "npm --prefix sop-system run setup:python-previsao",
+    "db:local:start": "npm --prefix sop-system run db:local:start",
+    "dev": "npm --prefix sop-system run dev"
+  }
+}

@@ -1,0 +1,15 @@
+TESTE DE VISUALIZAÇÃO - CORES NA TABELA DE CAPACIDADE
+======================================================
+
+Resultado do teste:
+- Fonte aumentada para text-sm (14px)
+- Legenda de cores adicionada acima da tabela
+- Verde claro (bg-green-100) para meses com maior capacidade
+- Vermelho claro (bg-red-100) para meses com menor capacidade
+
+Exemplo visível na tela:
+- A330: Fev (828.000) em vermelho, Jul (952.200) em verde
+- As cores estão funcionando corretamente!
+
+A tabela agora mostra visualmente quais meses têm maior e menor capacidade
+para cada recurso, facilitando a análise.

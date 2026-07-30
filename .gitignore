@@ -1,0 +1,61 @@
+# Dependencies
+**/node_modules/
+.pnpm-store/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Python
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.venv-*/
+**/venv/
+
+# Build outputs
+dist/
+build/
+*.dist
+.next/
+.nuxt/
+.out/
+
+# Local runtime / jobs
+.local/
+.previsao-python-jobs/
+tmp/
+temp/
+tmp_*/
+
+# Logs
+*.log
+logs/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+ehthumbs.db
+*~
+*.swp
+*.swo
+
+# Coverage / caches
+coverage/
+.cache/
+.parcel-cache/
+*.tsbuildinfo
+.eslintcache
+.npm
+
+# Database local files
+*.db
+*.sqlite
+*.sqlite3
+
+# Oversized local assets (GitHub limit 100MB)
+*.pptx
