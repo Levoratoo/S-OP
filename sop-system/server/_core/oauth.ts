@@ -2,6 +2,7 @@ import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import type { Express, Request, Response } from "express";
 import * as db from "../db";
 import { getSessionCookieOptions } from "./cookies";
+import { ENV } from "./env";
 import { sdk } from "./sdk";
 
 function getQueryParam(req: Request, key: string): string | undefined {
@@ -10,6 +11,28 @@ function getQueryParam(req: Request, key: string): string | undefined {
 }
 
 export function registerOAuthRoutes(app: Express) {
+  /** Login local quando DEV_AUTH_BYPASS=true (sem portal OAuth). */
+  app.get("/api/auth/local-login", async (req: Request, res: Response) => {
+    if (!ENV.devAuthBypass) {
+      res.status(403).json({ error: "Local login disabled" });
+      return;
+    }
+
+    try {
+      const user = await sdk.authenticateRequest(req);
+      const sessionToken = await sdk.createSessionToken(user.openId, {
+        name: user.name || ENV.devAuthName,
+        expiresInMs: ONE_YEAR_MS,
+      });
+      const cookieOptions = getSessionCookieOptions(req);
+      res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
+      res.redirect(302, "/");
+    } catch (error) {
+      console.error("[Auth] Local login failed", error);
+      res.status(500).json({ error: "Local login failed" });
+    }
+  });
+
   app.get("/api/oauth/callback", async (req: Request, res: Response) => {
     const code = getQueryParam(req, "code");
     const state = getQueryParam(req, "state");

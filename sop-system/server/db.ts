@@ -1,4 +1,4 @@
-import { eq, desc, and, sql } from "drizzle-orm";
+import { eq, desc, and, sql, asc } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { 
   InsertUser, users, User,
@@ -41,6 +41,9 @@ import {
   previsaoPythonScenarioSnapshots,
   InsertPrevisaoPythonScenarioSnapshot,
   PrevisaoPythonScenarioSnapshot,
+  sazonalidadeMarca, InsertSazonalidadeMarca,
+  ciclosComerciais, InsertCicloComercial,
+  cicloComercialItens, InsertCicloComercialItem,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
@@ -2076,4 +2079,222 @@ export async function updatePrevisaoPythonScenarioSnapshot(
     .update(previsaoPythonScenarioSnapshots)
     .set(data)
     .where(eq(previsaoPythonScenarioSnapshots.id, id));
+}
+
+// ==================== SAZONALIDADE MARCA ====================
+export async function listSazonalidadeMarca(marcaNome?: string) {
+  const db = await getDb();
+  if (!db) return [];
+  if (marcaNome) {
+    return db
+      .select()
+      .from(sazonalidadeMarca)
+      .where(eq(sazonalidadeMarca.marcaNome, marcaNome))
+      .orderBy(sazonalidadeMarca.mes);
+  }
+  return db
+    .select()
+    .from(sazonalidadeMarca)
+    .orderBy(asc(sazonalidadeMarca.marcaNome), asc(sazonalidadeMarca.mes));
+}
+
+export async function upsertSazonalidadeMarcaBatch(
+  rows: Array<{ marcaNome: string; mes: number; percentual: string; marcaId?: number; observacoes?: string }>
+) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  for (const row of rows) {
+    const existing = await db
+      .select()
+      .from(sazonalidadeMarca)
+      .where(
+        and(eq(sazonalidadeMarca.marcaNome, row.marcaNome), eq(sazonalidadeMarca.mes, row.mes))
+      )
+      .limit(1);
+
+    if (existing[0]) {
+      await db
+        .update(sazonalidadeMarca)
+        .set({
+          percentual: row.percentual,
+          marcaId: row.marcaId,
+          observacoes: row.observacoes,
+        })
+        .where(eq(sazonalidadeMarca.id, existing[0].id));
+    } else {
+      await db.insert(sazonalidadeMarca).values({
+        marcaNome: row.marcaNome,
+        mes: row.mes,
+        percentual: row.percentual,
+        marcaId: row.marcaId,
+        observacoes: row.observacoes,
+      });
+    }
+  }
+  return { count: rows.length };
+}
+
+// ==================== CICLO COMERCIAL ====================
+export async function listCiclosComerciais() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(ciclosComerciais).orderBy(desc(ciclosComerciais.createdAt));
+}
+
+export async function getCicloComercial(id: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(ciclosComerciais).where(eq(ciclosComerciais.id, id)).limit(1);
+  return rows[0] || null;
+}
+
+export async function createCicloComercial(data: InsertCicloComercial) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(ciclosComerciais).values(data);
+  return { id: result[0].insertId };
+}
+
+export async function updateCicloComercial(id: number, data: Partial<InsertCicloComercial>) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(ciclosComerciais).set(data).where(eq(ciclosComerciais.id, id));
+}
+
+export async function listCicloComercialItens(
+  cicloId: number,
+  planoColab?: "MTS" | "JITO" | "PV_MTO" | "CRM"
+) {
+  const db = await getDb();
+  if (!db) return [];
+  if (planoColab) {
+    return db
+      .select()
+      .from(cicloComercialItens)
+      .where(
+        and(eq(cicloComercialItens.cicloId, cicloId), eq(cicloComercialItens.planoColab, planoColab))
+      );
+  }
+  return db.select().from(cicloComercialItens).where(eq(cicloComercialItens.cicloId, cicloId));
+}
+
+export async function updateCicloComercialItem(
+  id: number,
+  data: Partial<InsertCicloComercialItem>
+) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.update(cicloComercialItens).set(data).where(eq(cicloComercialItens.id, id));
+}
+
+function sumItemMonths(item: {
+  m1?: string | null;
+  m2?: string | null;
+  m3?: string | null;
+  m4?: string | null;
+  m5?: string | null;
+  m6?: string | null;
+  m7?: string | null;
+  m8?: string | null;
+  m9?: string | null;
+  m10?: string | null;
+  m11?: string | null;
+  m12?: string | null;
+}) {
+  return (
+    Number(item.m1 || 0) +
+    Number(item.m2 || 0) +
+    Number(item.m3 || 0) +
+    Number(item.m4 || 0) +
+    Number(item.m5 || 0) +
+    Number(item.m6 || 0) +
+    Number(item.m7 || 0) +
+    Number(item.m8 || 0) +
+    Number(item.m9 || 0) +
+    Number(item.m10 || 0) +
+    Number(item.m11 || 0) +
+    Number(item.m12 || 0)
+  );
+}
+
+export async function getCicloComercialConsolidado(cicloId: number) {
+  const ciclo = await getCicloComercial(cicloId);
+  const itens = await listCicloComercialItens(cicloId);
+  const byPlano: Record<string, { itens: number; qtde: number }> = {};
+  const byMarca: Record<string, { itens: number; qtde: number; estatistica: number }> = {};
+  let total = 0;
+  let totalEstatistica = 0;
+
+  const mesKeys = ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12"] as const;
+  const baseCiclo: Array<{
+    ano: number;
+    mes: number;
+    sku: string;
+    marca: string | null;
+    linha: string | null;
+    planoColab: string;
+    tipoEstoque: string | null;
+    qtd: number;
+  }> = [];
+
+  for (const item of itens) {
+    const q = sumItemMonths(item);
+    const estat = Number(item.qtdeTotalEstatistica || 0);
+    total += q;
+    totalEstatistica += estat;
+
+    if (!byPlano[item.planoColab]) byPlano[item.planoColab] = { itens: 0, qtde: 0 };
+    byPlano[item.planoColab].itens += 1;
+    byPlano[item.planoColab].qtde += q;
+
+    const marcaKey = (item.marca || "SEM-MARCA").trim();
+    if (!byMarca[marcaKey]) byMarca[marcaKey] = { itens: 0, qtde: 0, estatistica: 0 };
+    byMarca[marcaKey].itens += 1;
+    byMarca[marcaKey].qtde += q;
+    byMarca[marcaKey].estatistica += estat;
+
+    const anoBase = ciclo?.anoInicio ?? new Date().getFullYear();
+    const mesBase = ciclo?.mesInicio ?? 1;
+    for (let i = 0; i < 12; i++) {
+      const qMes = Number(item[mesKeys[i]] || 0);
+      if (qMes === 0) continue;
+      const mesAbs = mesBase + i;
+      const ano = anoBase + Math.floor((mesAbs - 1) / 12);
+      const mes = ((mesAbs - 1) % 12) + 1;
+      baseCiclo.push({
+        ano,
+        mes,
+        sku: item.sku,
+        marca: item.marca,
+        linha: item.linha,
+        planoColab: item.planoColab,
+        tipoEstoque: item.tipoEstoque,
+        qtd: qMes,
+      });
+    }
+  }
+
+  const pvMto = byPlano["PV_MTO"]?.qtde ?? 0;
+  const mts = byPlano["MTS"]?.qtde ?? 0;
+  const jito = byPlano["JITO"]?.qtde ?? 0;
+  const crm = byPlano["CRM"]?.qtde ?? 0;
+
+  return {
+    totalQtde: total,
+    totalEstatistica,
+    gapColabVsEstatistica: total - totalEstatistica,
+    byPlano,
+    byMarca,
+    resumoPlanos: {
+      mts,
+      jito,
+      pvMto,
+      crm,
+      pvVsCrm: pvMto - crm,
+      colaboracaoTotal: mts + jito + pvMto + crm,
+    },
+    baseCiclo: baseCiclo.slice(0, 5000),
+    itens: itens.length,
+  };
 }

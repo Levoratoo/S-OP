@@ -1,0 +1,14 @@
+---
+description: Sempre fazer deploy Docker do SNOP após mudanças
+alwaysApply: true
+---
+
+# Deploy Docker automático (SNOP)
+
+Após concluir feature, UI, tour, fix ou qualquer mudança que o usuário vá usar no ambiente compartilhado:
+
+1. Rode o deploy sem esperar o usuário pedir: `python docker/deploy_to_server.py` a partir de `sop-system/`.
+2. Use `SNOP_SSH_PASS` (ou `SNOP_DOCKER_PASS`) do ambiente; não grave a senha em arquivos commitados.
+3. Host padrão: `192.168.1.82`, user `pedro-levorato`, remote `/opt/sites_dev/snop`, app em **http://192.168.1.82:3042/**.
+4. Ao terminar, informe o link e confirme que o container subiu.
+5. Só pule o deploy se o usuário pedir explicitamente para não subir.

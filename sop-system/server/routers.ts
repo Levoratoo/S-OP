@@ -2,12 +2,49 @@ import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
+import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import path from "node:path";
+import fs from "node:fs";
 import * as db from "./db";
 import * as sharepoint from "./sharepoint";
 import * as previsaoPythonService from "./previsaoPython";
 import { importSystemCadastros } from "./services/system-cadastros-importer";
+import { gerarBasesPrevisaoPython, PrevisaoEtlUserError } from "./services/previsao-etl";
+import { seedDadosMestresOperacionais } from "./services/seed-mestres";
+import {
+  calcularSazonalidadeDoFaturamento,
+  desagregarJobParaCicloComercial,
+  parseSazonalidadeWorkbook,
+  seedSazonalidadeUniformeSeVazia,
+} from "./services/desagregacao";
+
+function resolveDadosSistemaDir(explicit?: string): string {
+  if (explicit?.trim()) return path.resolve(explicit.trim());
+  const candidates = [
+    process.env.SEED_CADASTROS_DIR,
+    path.resolve(process.cwd(), "dados-sistema"),
+    path.resolve(process.cwd(), "..", "dados sistema"),
+  ].filter(Boolean) as string[];
+  for (const dir of candidates) {
+    if (fs.existsSync(dir)) return dir;
+  }
+  return candidates[0] ?? path.resolve(process.cwd(), "dados-sistema");
+}
+
+async function runGerarBasesOrThrow(input?: { dataInicio?: string; dataFim?: string }) {
+  try {
+    return await gerarBasesPrevisaoPython(input);
+  } catch (error) {
+    if (error instanceof PrevisaoEtlUserError) {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message: error.message,
+      });
+    }
+    throw error;
+  }
+}
 
 export const appRouter = router({
   system: systemRouter,
@@ -124,6 +161,7 @@ export const appRouter = router({
         fluxoId: z.number().optional(),
         caminho: z.string().optional(),
         pista: z.number().optional(),
+        projetarEstatistica: z.boolean().default(true),
       }))
       .mutation(({ input }) => db.createProduto(input)),
     
@@ -157,6 +195,7 @@ export const appRouter = router({
         fluxoId: z.number().optional(),
         caminho: z.string().optional(),
         pista: z.number().optional(),
+        projetarEstatistica: z.boolean().optional(),
       }))
       .mutation(({ input }) => {
         const { id, ...data } = input;
@@ -344,8 +383,7 @@ export const appRouter = router({
         mes: z.number().min(1).max(12),
         diasUteis: z.number(),
         feriados: z.number().default(0),
-        horasSemanais: z.number().default(44),
-        turnos: z.number().default(1),
+        tipoDias: z.enum(["seg-sex", "seg-sab", "7-dias"]).default("seg-sex"),
       }))
       .mutation(({ input }) => db.createDiaUtil(input)),
     
@@ -356,8 +394,7 @@ export const appRouter = router({
         mes: z.number().min(1).max(12).optional(),
         diasUteis: z.number().optional(),
         feriados: z.number().optional(),
-        horasSemanais: z.number().optional(),
-        turnos: z.number().optional(),
+        tipoDias: z.enum(["seg-sex", "seg-sab", "7-dias"]).optional(),
       }))
       .mutation(({ input }) => {
         const { id, ...data } = input;
@@ -810,6 +847,135 @@ export const appRouter = router({
       .mutation(({ input }) => db.deleteColaboracao(input.id)),
   }),
 
+  // ==================== CICLO COMERCIAL (MTS/JITO/PV/CRM) ====================
+  cicloComercial: router({
+    list: protectedProcedure.query(() => db.listCiclosComerciais()),
+
+    getById: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .query(({ input }) => db.getCicloComercial(input.id)),
+
+    itens: protectedProcedure
+      .input(
+        z.object({
+          cicloId: z.number(),
+          planoColab: z.enum(["MTS", "JITO", "PV_MTO", "CRM"]).optional(),
+        })
+      )
+      .query(({ input }) => db.listCicloComercialItens(input.cicloId, input.planoColab)),
+
+    consolidado: protectedProcedure
+      .input(z.object({ cicloId: z.number() }))
+      .query(({ input }) => db.getCicloComercialConsolidado(input.cicloId)),
+
+    updateItem: protectedProcedure
+      .input(
+        z.object({
+          id: z.number(),
+          m1: z.string().optional(),
+          m2: z.string().optional(),
+          m3: z.string().optional(),
+          m4: z.string().optional(),
+          m5: z.string().optional(),
+          m6: z.string().optional(),
+          m7: z.string().optional(),
+          m8: z.string().optional(),
+          m9: z.string().optional(),
+          m10: z.string().optional(),
+          m11: z.string().optional(),
+          m12: z.string().optional(),
+          qtdeColaborada: z.string().optional(),
+          projetar: z.boolean().optional(),
+          planoColab: z.enum(["MTS", "JITO", "PV_MTO", "CRM"]).optional(),
+        })
+      )
+      .mutation(({ input }) => {
+        const { id, ...rest } = input;
+        return db.updateCicloComercialItem(id, rest);
+      }),
+
+    updateStatus: protectedProcedure
+      .input(
+        z.object({
+          id: z.number(),
+          status: z.enum(["ABERTO", "EM_COLABORACAO", "CONSOLIDADO", "FECHADO"]),
+        })
+      )
+      .mutation(({ input }) => db.updateCicloComercial(input.id, { status: input.status })),
+
+    desagregarDoJob: protectedProcedure
+      .input(
+        z.object({
+          jobId: z.number(),
+          nomeCiclo: z.string().optional(),
+          anoInicio: z.number().optional(),
+          mesInicio: z.number().min(1).max(12).optional(),
+        })
+      )
+      .mutation(async ({ input, ctx }) => {
+        await seedSazonalidadeUniformeSeVazia();
+        return desagregarJobParaCicloComercial({
+          jobId: input.jobId,
+          nomeCiclo: input.nomeCiclo,
+          anoInicio: input.anoInicio,
+          mesInicio: input.mesInicio,
+          createdBy: ctx.user?.email || ctx.user?.name || "usuario",
+        });
+      }),
+  }),
+
+  sazonalidadeMarca: router({
+    list: protectedProcedure
+      .input(z.object({ marcaNome: z.string().optional() }).optional())
+      .query(({ input }) => db.listSazonalidadeMarca(input?.marcaNome)),
+
+    seedUniforme: protectedProcedure.mutation(() => seedSazonalidadeUniformeSeVazia()),
+
+    calcularDoFaturamento: protectedProcedure
+      .input(z.object({ anosHistorico: z.number().min(1).max(10).default(3) }).optional())
+      .mutation(({ input }) =>
+        calcularSazonalidadeDoFaturamento(input?.anosHistorico ?? 3)
+      ),
+
+    upsertBatch: protectedProcedure
+      .input(
+        z.object({
+          rows: z.array(
+            z.object({
+              marcaNome: z.string().min(1),
+              mes: z.number().min(1).max(12),
+              percentual: z.string(),
+              marcaId: z.number().optional(),
+              observacoes: z.string().optional(),
+            })
+          ),
+        })
+      )
+      .mutation(({ input }) => db.upsertSazonalidadeMarcaBatch(input.rows)),
+
+    importExcel: protectedProcedure
+      .input(
+        z.object({
+          fileName: z.string().min(1),
+          contentBase64: z.string().min(1),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const raw = input.contentBase64.includes(",")
+          ? input.contentBase64.split(",")[1]
+          : input.contentBase64;
+        const buffer = Buffer.from(raw, "base64");
+        const parsed = parseSazonalidadeWorkbook(buffer);
+        await db.upsertSazonalidadeMarcaBatch(parsed.rows);
+        return {
+          fileName: input.fileName,
+          sheetName: parsed.sheetName,
+          marcas: parsed.marcas,
+          rows: parsed.rows.length,
+        };
+      }),
+  }),
+
   // ==================== CONSENSOS ====================
   consensos: router({
     list: protectedProcedure
@@ -1190,6 +1356,66 @@ export const appRouter = router({
           clientes: input.clientes,
         });
         return job;
+      }),
+
+    /** Passo 1: gera as 3 bases a partir do faturamento e enfileira o job Python. */
+    createFromSistema: protectedProcedure
+      .input(
+        z
+          .object({
+            dataInicio: z.string().optional(),
+            dataFim: z.string().optional(),
+          })
+          .optional()
+      )
+      .mutation(async ({ input, ctx }) => {
+        const bases = await runGerarBasesOrThrow({
+          dataInicio: input?.dataInicio,
+          dataFim: input?.dataFim,
+        });
+        const createdBy = ctx.user?.email || ctx.user?.name || "usuario";
+        const job = await previsaoPythonService.createAndQueuePrevisaoJob({
+          createdBy,
+          vendas: {
+            fileName: "1- Base de Dados Vendas.xlsx",
+            contentBase64: bases.vendasBase64,
+          },
+          previsto: bases.previstoBase64
+            ? {
+                fileName: "1-BasedeDadosPrevisto.xlsx",
+                contentBase64: bases.previstoBase64,
+              }
+            : null,
+          clientes: bases.clientesBase64
+            ? {
+                fileName: "1-BasedeDadosClientes.xlsx",
+                contentBase64: bases.clientesBase64,
+              }
+            : null,
+        });
+        return { job, stats: bases.stats };
+      }),
+
+    gerarBasesPreview: protectedProcedure
+      .input(
+        z
+          .object({
+            dataInicio: z.string().optional(),
+            dataFim: z.string().optional(),
+          })
+          .optional()
+      )
+      .mutation(async ({ input }) => {
+        const bases = await runGerarBasesOrThrow({
+          dataInicio: input?.dataInicio,
+          dataFim: input?.dataFim,
+        });
+        return {
+          stats: bases.stats,
+          vendasBase64: bases.vendasBase64,
+          previstoBase64: bases.previstoBase64,
+          clientesBase64: bases.clientesBase64,
+        };
       }),
 
     createCiclo13Upload: protectedProcedure
@@ -1606,14 +1832,37 @@ export const appRouter = router({
           .optional()
       )
       .mutation(async ({ input }) => {
-        const defaultDir = path.resolve(process.cwd(), "..", "dados sistema");
         const summary = await importSystemCadastros({
-          dirPath: input?.dirPath || defaultDir,
+          dirPath: resolveDadosSistemaDir(input?.dirPath),
           dryRun: input?.dryRun ?? true,
           only: input?.only,
         });
 
         return summary;
+      }),
+
+    /** Carga operacional: CSVs mestres + marcas/gestores/vínculos + sazonalidade uniforme. */
+    seedOperacional: protectedProcedure
+      .input(
+        z
+          .object({
+            dirPath: z.string().optional(),
+            dryRun: z.boolean().default(false),
+          })
+          .optional()
+      )
+      .mutation(async ({ input }) => {
+        const dirPath = resolveDadosSistemaDir(input?.dirPath);
+        if (!fs.existsSync(dirPath)) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `Pasta de cadastros não encontrada: ${dirPath}. Inclua "dados-sistema" no deploy.`,
+          });
+        }
+        return seedDadosMestresOperacionais({
+          dirPath,
+          dryRun: input?.dryRun ?? false,
+        });
       }),
   }),
 

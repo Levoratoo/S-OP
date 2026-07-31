@@ -39,14 +39,10 @@ import {
   TrendingUp,
   Settings,
   ChevronRight,
-  Boxes,
-  UserCircle,
   Wrench,
   Calendar,
   Route,
-  Building2,
   UserCog,
-  PauseCircle,
   ShoppingCart,
   FileSpreadsheet,
   BarChart3,
@@ -55,7 +51,6 @@ import {
   TableProperties,
   Cloud,
   Shield,
-  Tag,
   Briefcase,
   Layers,
   CheckCircle,
@@ -65,18 +60,22 @@ import {
   Shirt,
   Cog,
   Clock,
-  Calculator
+  Calculator,
+  CircleHelp,
 } from "lucide-react";
-import { CSSProperties, useEffect, useRef, useState } from "react";
+import { CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { DashboardLayoutSkeleton } from './DashboardLayoutSkeleton';
-import { Button } from "./ui/button";
 import { GlobalSearch } from "./GlobalSearch";
+import { HelpTourContext } from "@/help/HelpTourContext";
+import { SopHelpButton, SopTour } from "@/help/SopTour";
+import type { TourStep } from "@/help/sop-tour-content";
 
 type SubMenuItem = {
   label: string;
   path: string;
   icon?: React.ElementType;
+  tourId?: string;
 };
 
 type SubSection = {
@@ -89,6 +88,7 @@ type MenuItem = {
   icon: React.ElementType;
   label: string;
   path?: string;
+  tourId?: string;
   children?: SubMenuItem[];
   sections?: SubSection[];
 };
@@ -98,87 +98,95 @@ const menuItems: MenuItem[] = [
     icon: LayoutDashboard,
     label: "Dashboard",
     path: "/",
+    tourId: "nav-dashboard",
   },
   {
     icon: TrendingUp,
     label: "Previsao de Demanda",
+    tourId: "nav-demanda",
     children: [
-      { label: "Dashboard Demanda", path: "/demanda/dashboard", icon: BarChart3 },
-      { label: "Acuracidade", path: "/demanda/acuracidade", icon: Target },
-      { label: "Previsoes", path: "/demanda/previsoes", icon: BarChart3 },
-      { label: "Colaboracoes", path: "/demanda/colaboracoes", icon: Users },
-      { label: "Consensos", path: "/demanda/consensos", icon: CheckCircle },
-      { label: "Orcamentos", path: "/demanda/orcamentos", icon: TableProperties },
+      { label: "Dashboard Demanda", path: "/demanda/dashboard", icon: BarChart3, tourId: "nav-demanda-dashboard" },
+      { label: "Acuracidade", path: "/demanda/acuracidade", icon: Target, tourId: "nav-demanda-acuracidade" },
+      { label: "Previsoes", path: "/demanda/previsoes", icon: BarChart3, tourId: "nav-demanda-previsoes" },
+      { label: "Colaboracao Comercial", path: "/demanda/colaboracoes", icon: Users, tourId: "nav-demanda-colaboracoes" },
+      { label: "Consensos", path: "/demanda/consensos", icon: CheckCircle, tourId: "nav-demanda-consensos" },
+      { label: "Orcamentos", path: "/demanda/orcamentos", icon: TableProperties, tourId: "nav-demanda-orcamentos" },
     ],
   },
   {
     icon: Factory,
     label: "Analise de Capacidade",
+    tourId: "nav-capacidade",
     children: [
-      { label: "Dashboard Capacidade", path: "/capacidade/dashboard", icon: Gauge },
-      { label: "Calculo de Capacidade", path: "/capacidade/calculo", icon: Calculator },
+      { label: "Dashboard Capacidade", path: "/capacidade/dashboard", icon: Gauge, tourId: "nav-capacidade-dashboard" },
+      { label: "Calculo de Capacidade", path: "/capacidade/calculo", icon: Calculator, tourId: "nav-capacidade-calculo" },
+      { label: "Capacidade x Demanda", path: "/capacidade/vs-demanda", icon: TrendingUp, tourId: "nav-capacidade-vs-demanda" },
     ],
   },
   {
     icon: Target,
     label: "Gestao de Producao",
+    tourId: "nav-producao",
     children: [
-      { label: "Metas de Producao", path: "/producao/metas", icon: Target },
+      { label: "Metas de Producao", path: "/producao/metas", icon: Target, tourId: "nav-producao-metas" },
     ],
   },
   {
     icon: ShoppingCart,
     label: "Gestao de Vendas",
+    tourId: "nav-vendas",
     children: [
-      { label: "Dashboard Vendas", path: "/vendas/dashboard", icon: BarChart3 },
-      { label: "Historico de Vendas", path: "/vendas/historico", icon: FileSpreadsheet },
-      { label: "Importar Faturamento", path: "/vendas/importar", icon: FileSpreadsheet },
-      { label: "Carteira de Pedidos", path: "/vendas/carteira", icon: ShoppingCart },
-      { label: "Forecast", path: "/vendas/forecast", icon: TrendingUp },
+      { label: "Dashboard Vendas", path: "/vendas/dashboard", icon: BarChart3, tourId: "nav-vendas-dashboard" },
+      { label: "Historico de Vendas", path: "/vendas/historico", icon: FileSpreadsheet, tourId: "nav-vendas-historico" },
+      { label: "Importar Faturamento", path: "/vendas/importar", icon: FileSpreadsheet, tourId: "nav-vendas-importar" },
+      { label: "Carteira de Pedidos", path: "/vendas/carteira", icon: ShoppingCart, tourId: "nav-vendas-carteira" },
+      { label: "Forecast", path: "/vendas/forecast", icon: TrendingUp, tourId: "nav-vendas-forecast" },
     ],
   },
   {
     icon: Settings,
     label: "Cadastros",
+    tourId: "nav-cadastros",
     sections: [
       {
         label: "Comercial",
         icon: Briefcase,
         items: [
-          { label: "Gestor x Marca", path: "/cadastros/gestor-marca", icon: UserCog },
-          { label: "Clientes", path: "/cadastros/clientes", icon: Users },
+          { label: "Gestor x Marca", path: "/cadastros/gestor-marca", icon: UserCog, tourId: "nav-cadastros-gestor-marca" },
+          { label: "Sazonalidade Marca", path: "/cadastros/sazonalidade-marca", icon: Calendar, tourId: "nav-cadastros-sazonalidade" },
+          { label: "Clientes", path: "/cadastros/clientes", icon: Users, tourId: "nav-cadastros-clientes" },
         ],
       },
       {
         label: "Produto",
         icon: Package,
         items: [
-          { label: "Produtos", path: "/cadastros/produtos", icon: Package },
-          { label: "De-Para", path: "/cadastros/depara", icon: Route },
-          { label: "Status", path: "/cadastros/status", icon: CheckCircle },
-          { label: "Tipo Negocio", path: "/cadastros/tipo-negocio", icon: Building },
-          { label: "Tipo Estoque", path: "/cadastros/tipo-estoque", icon: Archive },
-          { label: "Linhas", path: "/cadastros/linhas", icon: Layers },
-          { label: "Modelos", path: "/cadastros/modelos", icon: Shirt },
-          { label: "Tamanhos", path: "/cadastros/tamanhos", icon: Ruler },
+          { label: "Produtos", path: "/cadastros/produtos", icon: Package, tourId: "nav-cadastros-produtos" },
+          { label: "De-Para", path: "/cadastros/depara", icon: Route, tourId: "nav-cadastros-depara" },
+          { label: "Status", path: "/cadastros/status", icon: CheckCircle, tourId: "nav-cadastros-status" },
+          { label: "Tipo Negocio", path: "/cadastros/tipo-negocio", icon: Building, tourId: "nav-cadastros-tipo-negocio" },
+          { label: "Tipo Estoque", path: "/cadastros/tipo-estoque", icon: Archive, tourId: "nav-cadastros-tipo-estoque" },
+          { label: "Linhas", path: "/cadastros/linhas", icon: Layers, tourId: "nav-cadastros-linhas" },
+          { label: "Modelos", path: "/cadastros/modelos", icon: Shirt, tourId: "nav-cadastros-modelos" },
+          { label: "Tamanhos", path: "/cadastros/tamanhos", icon: Ruler, tourId: "nav-cadastros-tamanhos" },
         ],
       },
       {
         label: "Operacoes",
         icon: Cog,
         items: [
-          { label: "Dias Uteis", path: "/cadastros/dias-uteis", icon: Calendar },
-          { label: "Turnos", path: "/cadastros/turnos", icon: Clock },
-          { label: "Recursos", path: "/cadastros/recursos", icon: Wrench },
-          { label: "Fluxo", path: "/cadastros/fluxos", icon: Route },
+          { label: "Dias Uteis", path: "/cadastros/dias-uteis", icon: Calendar, tourId: "nav-cadastros-dias-uteis" },
+          { label: "Turnos", path: "/cadastros/turnos", icon: Clock, tourId: "nav-cadastros-turnos" },
+          { label: "Recursos", path: "/cadastros/recursos", icon: Wrench, tourId: "nav-cadastros-recursos" },
+          { label: "Fluxo", path: "/cadastros/fluxos", icon: Route, tourId: "nav-cadastros-fluxos" },
         ],
       },
       {
         label: "Geral",
         icon: UserCog,
         items: [
-          { label: "Membros", path: "/cadastros/membros", icon: UserCog },
-          { label: "Importacao Base", path: "/cadastros/importacao-base", icon: FileSpreadsheet },
+          { label: "Membros", path: "/cadastros/membros", icon: UserCog, tourId: "nav-cadastros-membros" },
+          { label: "Importacao Base", path: "/cadastros/importacao-base", icon: FileSpreadsheet, tourId: "nav-cadastros-importacao" },
         ],
       },
     ],
@@ -187,26 +195,35 @@ const menuItems: MenuItem[] = [
     icon: FileSpreadsheet,
     label: "Previsao Python",
     path: "/previsao-python",
+    tourId: "nav-previsao-python",
   },
   {
     icon: TableProperties,
     label: "Previsão Demanda Estatística",
     path: "/previsao-python/ciclo-13",
+    tourId: "nav-previsao-ciclo13",
   },
   {
     icon: Cloud,
     label: "Integracoes",
+    tourId: "nav-integracoes",
     children: [
-      { label: "SharePoint", path: "/integracao/sharepoint", icon: Cloud },
+      { label: "SharePoint", path: "/integracao/sharepoint", icon: Cloud, tourId: "nav-integracao-sharepoint" },
     ],
   },
   {
     icon: Shield,
     label: "Administracao",
-    children: [{ label: "Usuarios", path: "/admin/usuarios", icon: Users }],
+    tourId: "nav-admin",
+    children: [{ label: "Usuarios", path: "/admin/usuarios", icon: Users, tourId: "nav-admin-usuarios" }],
+  },
+  {
+    icon: CircleHelp,
+    label: "Ajuda",
+    path: "/ajuda",
+    tourId: "nav-ajuda",
   },
 ];
-
 const SIDEBAR_WIDTH_KEY = "sidebar-width";
 const DEFAULT_WIDTH = 280;
 const MIN_WIDTH = 200;
@@ -227,37 +244,19 @@ export default function DashboardLayout({
     localStorage.setItem(SIDEBAR_WIDTH_KEY, sidebarWidth.toString());
   }, [sidebarWidth]);
 
-  if (loading) {
-    return <DashboardLayoutSkeleton />
-  }
+  // Sem tela de login: entra direto (local-login / bypass no Docker)
+  useEffect(() => {
+    if (loading || user) return;
+    const loginUrl = getLoginUrl();
+    if (!loginUrl || loginUrl === "/" || loginUrl.startsWith("/")) {
+      window.location.replace("/api/auth/local-login");
+      return;
+    }
+    window.location.replace(loginUrl);
+  }, [loading, user]);
 
-  if (!user) {
-    return (
-      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-primary/5 to-primary/10">
-        <div className="flex flex-col items-center gap-8 p-8 max-w-md w-full bg-card rounded-xl shadow-lg border">
-          <div className="flex flex-col items-center gap-4">
-            <div className="h-16 w-16 rounded-xl bg-primary/10 flex items-center justify-center">
-              <LayoutDashboard className="h-8 w-8 text-primary" />
-            </div>
-            <h1 className="text-2xl font-bold tracking-tight text-center">
-              Sistema S&OP
-            </h1>
-            <p className="text-sm text-muted-foreground text-center max-w-sm">
-              FaÃ§a login para acessar o sistema de Sales & Operations Planning
-            </p>
-          </div>
-          <Button
-            onClick={() => {
-              window.location.href = getLoginUrl();
-            }}
-            size="lg"
-            className="w-full shadow-lg hover:shadow-xl transition-all"
-          >
-            Entrar
-          </Button>
-        </div>
-      </div>
-    );
+  if (loading || !user) {
+    return <DashboardLayoutSkeleton />;
   }
 
   return (
@@ -286,13 +285,36 @@ function DashboardLayoutContent({
 }: DashboardLayoutContentProps) {
   const { user, logout } = useAuth();
   const [location, setLocation] = useLocation();
-  const { state, toggleSidebar } = useSidebar();
+  const { state, toggleSidebar, setOpenMobile } = useSidebar();
   const isCollapsed = state === "collapsed";
   const [isResizing, setIsResizing] = useState(false);
   const sidebarRef = useRef<HTMLDivElement>(null);
   const isMobile = useIsMobile();
   const [openMenus, setOpenMenus] = useState<string[]>([]);
   const [openSections, setOpenSections] = useState<string[]>([]);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const startTourRef = useRef<((steps: TourStep[]) => void) | null>(null);
+
+  const ensureMenuOpen = useCallback((menuLabel: string, sectionLabel?: string) => {
+    if (isMobile) {
+      setOpenMobile(true);
+    }
+    setOpenMenus(prev => (prev.includes(menuLabel) ? prev : [...prev, menuLabel]));
+    if (sectionLabel) {
+      setOpenSections(prev =>
+        prev.includes(sectionLabel) ? prev : [...prev, sectionLabel]
+      );
+    }
+  }, [isMobile, setOpenMobile]);
+
+  const helpApi = useMemo(
+    () => ({
+      startTour: (steps: TourStep[]) => startTourRef.current?.(steps),
+      openHelpModal: () => setHelpOpen(true),
+      ensureMenuOpen,
+    }),
+    [ensureMenuOpen]
+  );
 
   const toggleSection = (sectionLabel: string) => {
     setOpenSections(prev => 
@@ -366,15 +388,18 @@ function DashboardLayoutContent({
   };
 
   return (
-    <>
-      <div className="relative" ref={sidebarRef}>
+    <HelpTourContext.Provider value={helpApi}>
+      <div className="relative" ref={sidebarRef} data-tour="nav-sidebar">
         <Sidebar
           collapsible="icon"
           className="border-r-0"
           disableTransition={isResizing}
         >
           <SidebarHeader className="h-16 justify-center border-b border-sidebar-border">
-            <div className="flex items-center gap-3 px-2 transition-all w-full">
+            <div
+              className="flex items-center gap-3 px-2 transition-all w-full"
+              data-tour="nav-brand"
+            >
               <button
                 onClick={toggleSidebar}
                 className="h-8 w-8 flex items-center justify-center hover:bg-accent rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring shrink-0"
@@ -399,7 +424,7 @@ function DashboardLayoutContent({
 
           {/* Barra de Pesquisa Global */}
           {!isCollapsed && (
-            <div className="px-3 py-2">
+            <div className="px-3 py-2" data-tour="nav-search">
               <GlobalSearch />
             </div>
           )}
@@ -425,6 +450,7 @@ function DashboardLayoutContent({
                         <CollapsibleTrigger asChild>
                           <SidebarMenuButton
                             tooltip={item.label}
+                            data-tour={item.tourId}
                             className={`h-10 transition-all font-normal ${isActive ? "bg-accent" : ""}`}
                           >
                             <item.icon
@@ -471,6 +497,7 @@ function DashboardLayoutContent({
                                             <SidebarMenuSubButton
                                               onClick={() => setLocation(sectionItem.path)}
                                               isActive={isItemActive}
+                                              data-tour={sectionItem.tourId}
                                               className="h-8 pl-6"
                                             >
                                               {ItemIcon && <ItemIcon className="h-3.5 w-3.5 mr-2" />}
@@ -502,6 +529,7 @@ function DashboardLayoutContent({
                         <CollapsibleTrigger asChild>
                           <SidebarMenuButton
                             tooltip={item.label}
+                            data-tour={item.tourId}
                             className={`h-10 transition-all font-normal ${isActive ? "bg-accent" : ""}`}
                           >
                             <item.icon
@@ -523,6 +551,7 @@ function DashboardLayoutContent({
                                   <SidebarMenuSubButton
                                     onClick={() => setLocation(child.path)}
                                     isActive={isChildActive}
+                                    data-tour={child.tourId}
                                     className="h-9"
                                   >
                                     {ChildIcon && <ChildIcon className="h-3.5 w-3.5 mr-2" />}
@@ -544,6 +573,7 @@ function DashboardLayoutContent({
                       isActive={location === item.path}
                       onClick={() => item.path && setLocation(item.path)}
                       tooltip={item.label}
+                      data-tour={item.tourId}
                       className="h-10 transition-all font-normal"
                     >
                       <item.icon
@@ -557,7 +587,10 @@ function DashboardLayoutContent({
             </SidebarMenu>
           </SidebarContent>
 
-          <SidebarFooter className="p-3 border-t border-sidebar-border">
+          <SidebarFooter className="p-3 border-t border-sidebar-border space-y-2">
+            {!isCollapsed && (
+              <SopHelpButton onClick={() => setHelpOpen(true)} />
+            )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button className="flex items-center gap-3 rounded-lg px-1 py-1 hover:bg-accent/50 transition-colors w-full text-left group-data-[collapsible=icon]:justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
@@ -577,6 +610,13 @@ function DashboardLayoutContent({
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuItem
+                  onClick={() => setHelpOpen(true)}
+                  className="cursor-pointer"
+                >
+                  <CircleHelp className="mr-2 h-4 w-4" />
+                  <span>Ajuda / Tours</span>
+                </DropdownMenuItem>
                 <DropdownMenuItem
                   onClick={logout}
                   className="cursor-pointer text-destructive focus:text-destructive"
@@ -611,11 +651,21 @@ function DashboardLayoutContent({
                 </div>
               </div>
             </div>
+            <SopHelpButton onClick={() => setHelpOpen(true)} />
           </div>
         )}
         <main className="flex-1 p-4 md:p-6">{children}</main>
       </SidebarInset>
-    </>
+
+      <SopTour
+        ready={Boolean(user)}
+        userId={String((user as { id?: string | number } | null)?.id ?? user?.email ?? "anon")}
+        helpOpen={helpOpen}
+        onHelpOpenChange={setHelpOpen}
+        ensureMenuOpen={ensureMenuOpen}
+        onStartTourRef={startTourRef}
+      />
+    </HelpTourContext.Provider>
   );
 }
 

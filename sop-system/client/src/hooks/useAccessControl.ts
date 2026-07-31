@@ -10,10 +10,20 @@ export interface AccessControlState {
   podeVerTodasMarcas: boolean;
   podeGerenciarUsuarios: boolean;
   marcasPermitidas: number[];
+  /** Nomes das marcas permitidas (lower-case, sem acento) para filtrar itens sem marcaId. */
+  marcasPermitidasNomes: string[];
   isLoading: boolean;
   isGestor: boolean;
   isGerenteComercial: boolean;
   isMaster: boolean;
+}
+
+function normalizeMarcaNome(value: string | null | undefined) {
+  return (value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase();
 }
 
 /**
@@ -48,6 +58,7 @@ export function useAccessControl(): AccessControlState {
       podeVerTodasMarcas: isGerenteComercial || isMaster,
       podeGerenciarUsuarios: isMaster,
       marcasPermitidas: marcasPermitidas.map((m: any) => m.id),
+      marcasPermitidasNomes: marcasPermitidas.map((m: any) => normalizeMarcaNome(m.nome)),
       isLoading: authLoading || loadingMarcas,
       isGestor,
       isGerenteComercial,
@@ -76,14 +87,19 @@ export function useCanAccessMarca(marcaId: number | undefined): boolean {
 export function useFilterByMarcas<T extends { marcaId?: number | null; marca?: string | null }>(
   data: T[] | undefined
 ): T[] {
-  const { podeVerTodasMarcas, marcasPermitidas, isLoading } = useAccessControl();
-  
+  const { podeVerTodasMarcas, marcasPermitidas, marcasPermitidasNomes, isLoading } =
+    useAccessControl();
+
   if (isLoading || !data) return data || [];
   if (podeVerTodasMarcas) return data;
-  
-  // Filtrar apenas dados das marcas permitidas
+
   return data.filter(item => {
-    if (!item.marcaId) return false;
-    return marcasPermitidas.includes(item.marcaId);
+    if (item.marcaId != null && marcasPermitidas.includes(item.marcaId)) return true;
+    if (item.marca) {
+      return marcasPermitidasNomes.includes(normalizeMarcaNome(item.marca));
+    }
+    return false;
   });
 }
+
+export { normalizeMarcaNome };

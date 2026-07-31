@@ -190,6 +190,8 @@ export const produtos = mysqlTable("produtos", {
   familiaId: int("familiaId"),
   subfamiliaId: int("subfamiliaId"),
   unidade: varchar("unidade", { length: 20 }).default("UN"),
+  /** Se false, SKU não entra na estatística (usa projeção comercial/cliente). */
+  projetarEstatistica: boolean("projetarEstatistica").default(true).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
@@ -643,7 +645,7 @@ export type InsertFluxoRecurso = typeof fluxoRecursos.$inferInsert;
 export const previsaoPythonJobs = mysqlTable("previsao_python_jobs", {
   id: int("id").autoincrement().primaryKey(),
   status: mysqlEnum("status", ["PENDING", "RUNNING", "SUCCESS", "ERROR"]).default("PENDING").notNull(),
-  scriptVersion: varchar("scriptVersion", { length: 50 }).default("v5.2").notNull(),
+  scriptVersion: varchar("scriptVersion", { length: 50 }).default("v5.7.0").notNull(),
   createdBy: varchar("createdBy", { length: 320 }),
   vendasFileName: varchar("vendasFileName", { length: 255 }).notNull(),
   previstoFileName: varchar("previstoFileName", { length: 255 }),
@@ -677,3 +679,76 @@ export const previsaoPythonScenarioSnapshots = mysqlTable("previsao_python_scena
 export type PrevisaoPythonScenarioSnapshot = typeof previsaoPythonScenarioSnapshots.$inferSelect;
 export type InsertPrevisaoPythonScenarioSnapshot =
   typeof previsaoPythonScenarioSnapshots.$inferInsert;
+
+// ==================== SAZONALIDADE POR MARCA (Passo 3) ====================
+export const sazonalidadeMarca = mysqlTable("sazonalidade_marca", {
+  id: int("id").autoincrement().primaryKey(),
+  marcaId: int("marcaId"),
+  marcaNome: varchar("marcaNome", { length: 100 }).notNull(),
+  mes: int("mes").notNull(), // 1-12
+  percentual: decimal("percentual", { precision: 8, scale: 6 }).notNull(), // fração 0-1
+  anoReferencia: int("anoReferencia"),
+  observacoes: text("observacoes"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type SazonalidadeMarca = typeof sazonalidadeMarca.$inferSelect;
+export type InsertSazonalidadeMarca = typeof sazonalidadeMarca.$inferInsert;
+
+// ==================== CICLO COMERCIAL S&OP ====================
+export const ciclosComerciais = mysqlTable("ciclos_comerciais", {
+  id: int("id").autoincrement().primaryKey(),
+  nome: varchar("nome", { length: 140 }).notNull(),
+  anoInicio: int("anoInicio").notNull(),
+  mesInicio: int("mesInicio").notNull(), // 1-12
+  horizonteMeses: int("horizonteMeses").default(12).notNull(),
+  jobId: int("jobId"), // job Python origem (Visao_Executiva)
+  status: mysqlEnum("status", ["ABERTO", "EM_COLABORACAO", "CONSOLIDADO", "FECHADO"])
+    .default("ABERTO")
+    .notNull(),
+  observacoes: text("observacoes"),
+  createdBy: varchar("createdBy", { length: 320 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type CicloComercial = typeof ciclosComerciais.$inferSelect;
+export type InsertCicloComercial = typeof ciclosComerciais.$inferInsert;
+
+/** Linhas do ciclo: desagregação estatística + edição comercial (MTS/JITO/PV/CRM). */
+export const cicloComercialItens = mysqlTable("ciclo_comercial_itens", {
+  id: int("id").autoincrement().primaryKey(),
+  cicloId: int("cicloId").notNull(),
+  planoColab: mysqlEnum("planoColab", ["MTS", "JITO", "PV_MTO", "CRM"]).notNull(),
+  sku: varchar("sku", { length: 80 }).notNull(),
+  descricao: varchar("descricao", { length: 300 }),
+  marca: varchar("marca", { length: 100 }),
+  linha: varchar("linha", { length: 100 }),
+  tipoEstoque: mysqlEnum("tipoEstoque", ["MTS", "MTO"]).default("MTS"),
+  tipoMarcaLinha: varchar("tipoMarcaLinha", { length: 200 }), // ex. MTS-Adidas-Automática
+  projetar: boolean("projetar").default(true).notNull(),
+  rateio12m: decimal("rateio12m", { precision: 10, scale: 6 }),
+  rateio6m: decimal("rateio6m", { precision: 10, scale: 6 }),
+  rateioConsiderar: decimal("rateioConsiderar", { precision: 10, scale: 6 }),
+  qtdeTotalEstatistica: decimal("qtdeTotalEstatistica", { precision: 15, scale: 2 }),
+  m1: decimal("m1", { precision: 15, scale: 2 }).default("0"),
+  m2: decimal("m2", { precision: 15, scale: 2 }).default("0"),
+  m3: decimal("m3", { precision: 15, scale: 2 }).default("0"),
+  m4: decimal("m4", { precision: 15, scale: 2 }).default("0"),
+  m5: decimal("m5", { precision: 15, scale: 2 }).default("0"),
+  m6: decimal("m6", { precision: 15, scale: 2 }).default("0"),
+  m7: decimal("m7", { precision: 15, scale: 2 }).default("0"),
+  m8: decimal("m8", { precision: 15, scale: 2 }).default("0"),
+  m9: decimal("m9", { precision: 15, scale: 2 }).default("0"),
+  m10: decimal("m10", { precision: 15, scale: 2 }).default("0"),
+  m11: decimal("m11", { precision: 15, scale: 2 }).default("0"),
+  m12: decimal("m12", { precision: 15, scale: 2 }).default("0"),
+  qtdeColaborada: decimal("qtdeColaborada", { precision: 15, scale: 2 }),
+  origem: mysqlEnum("origem", ["ESTATISTICA", "MANUAL", "CRM", "PV"]).default("ESTATISTICA").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type CicloComercialItem = typeof cicloComercialItens.$inferSelect;
+export type InsertCicloComercialItem = typeof cicloComercialItens.$inferInsert;

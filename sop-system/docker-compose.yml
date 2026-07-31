@@ -1,0 +1,83 @@
+services:
+  db:
+    image: mariadb:11.8
+    container_name: snop-db
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-snop_root_change_me}
+      MARIADB_DATABASE: ${MYSQL_DATABASE:-sop_system}
+      MARIADB_USER: ${MYSQL_USER:-snop}
+      MARIADB_PASSWORD: ${MYSQL_PASSWORD:-snop_change_me}
+    volumes:
+      - snop_db_data:/var/lib/mysql
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "healthcheck.sh",
+          "--connect",
+          "--innodb_initialized",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+    networks:
+      - snop_net
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: snop-app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${APP_PORT:-3042}:3012"
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3012
+      ENABLE_MANUS_RUNTIME: "false"
+      DATABASE_URL: mysql://${MYSQL_USER:-snop}:${MYSQL_PASSWORD:-snop_change_me}@db:3306/${MYSQL_DATABASE:-sop_system}
+      JWT_SECRET: ${JWT_SECRET:-troque-este-jwt-em-producao}
+      OAUTH_SERVER_URL: ${OAUTH_SERVER_URL:-http://127.0.0.1:9999}
+      VITE_OAUTH_PORTAL_URL: ${VITE_OAUTH_PORTAL_URL:-http://127.0.0.1:9999}
+      VITE_APP_ID: ${VITE_APP_ID:-snop-printbag}
+      OWNER_OPEN_ID: ${OWNER_OPEN_ID:-local-dev-user}
+      DEV_AUTH_BYPASS: ${DEV_AUTH_BYPASS:-true}
+      DEV_AUTH_OPEN_ID: ${DEV_AUTH_OPEN_ID:-local-dev-user}
+      DEV_AUTH_NAME: ${DEV_AUTH_NAME:-Admin S&OP}
+      DEV_AUTH_EMAIL: ${DEV_AUTH_EMAIL:-admin@printbag.local}
+      DEV_AUTH_ROLE: ${DEV_AUTH_ROLE:-admin}
+      DEV_AUTH_NIVEL_ACESSO: ${DEV_AUTH_NIVEL_ACESSO:-3}
+      PREVISAO_PYTHON_CMD: /opt/venv-previsao/bin/python
+      PREVISAO_PYTHON_TIMEOUT_MIN: ${PREVISAO_PYTHON_TIMEOUT_MIN:-35}
+      PREVISAO_PYTHON_HEARTBEAT_SEC: ${PREVISAO_PYTHON_HEARTBEAT_SEC:-15}
+      PYTHONUTF8: "1"
+    volumes:
+      - snop_jobs_data:/app/.previsao-python-jobs
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3012/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 8s
+      retries: 5
+      start_period: 60s
+    networks:
+      - snop_net
+
+volumes:
+  snop_db_data:
+  snop_jobs_data:
+
+networks:
+  snop_net:
+    driver: bridge

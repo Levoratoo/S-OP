@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Progress } from "@/components/ui/progress";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Switch } from "@/components/ui/switch";
 import { trpc } from "@/lib/trpc";
 import { Plus, Pencil, Trash2, Loader2, Upload, Download, FileSpreadsheet, AlertCircle, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
@@ -108,6 +109,7 @@ export default function Produtos() {
     fluxoId: "" as string,
     caminho: "",
     pista: "",
+    projetarEstatistica: true,
   });
 
   // Filter states
@@ -195,6 +197,7 @@ export default function Produtos() {
       tipoEstoque: "MTS", tipoEstoqueId: "", linha: "", linhaId: "", modelo: "", modeloId: "",
       tamanho: "", tamanhoId: "", axlxp: "", marca: "", marcaId: "", grupo: "", ramoAtuacao: "",
       valorVenda: "", valorCusto: "", qtdePallet: "", loteEconomicoViavel: "", fluxo: "", fluxoId: "", caminho: "", pista: "",
+      projetarEstatistica: true,
     });
     setEditingId(null);
     setIsOpen(false);
@@ -332,6 +335,7 @@ export default function Produtos() {
       fluxoId: (produto as any).fluxoId?.toString() || "",
       caminho: produto.caminho || "",
       pista: produto.pista?.toString() || "",
+      projetarEstatistica: produto.projetarEstatistica !== false,
     });
     setEditingId(produto.id);
     setIsOpen(true);
@@ -778,6 +782,22 @@ export default function Produtos() {
                     </div>
                   </div>
 
+                  <div className="flex items-center gap-3 rounded-md border p-3">
+                    <Switch
+                      id="projetarEstatistica"
+                      checked={formData.projetarEstatistica}
+                      onCheckedChange={checked =>
+                        setFormData({ ...formData, projetarEstatistica: checked })
+                      }
+                    />
+                    <div>
+                      <Label htmlFor="projetarEstatistica">Projetar estatística</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Se desligado, o SKU fica fora do motor estatístico (Passo 1/3).
+                      </p>
+                    </div>
+                  </div>
+
                   <div className="flex justify-end gap-2 pt-4">
                     <Button type="button" variant="outline" onClick={resetForm}>
                       Cancelar
@@ -810,6 +830,7 @@ export default function Produtos() {
                       <TableHead>Linha</TableHead>
                       <TableHead>Modelo</TableHead>
                       <TableHead>Fluxo</TableHead>
+                      <TableHead>Projetar</TableHead>
                       <TableHead className="w-[100px]">Ações</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -835,6 +856,11 @@ export default function Produtos() {
                           <TableCell>{produto.linha || "-"}</TableCell>
                           <TableCell>{produto.modelo || "-"}</TableCell>
                           <TableCell>{produto.fluxo || "-"}</TableCell>
+                          <TableCell>
+                            <Badge variant={produto.projetarEstatistica !== false ? "default" : "secondary"}>
+                              {produto.projetarEstatistica !== false ? "Sim" : "Não"}
+                            </Badge>
+                          </TableCell>
                           <TableCell>
                             <div className="flex items-center gap-2">
                               <Button variant="ghost" size="icon" onClick={() => handleEdit(produto)}>

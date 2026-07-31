@@ -44,6 +44,13 @@ export default function SharePointConfig() {
   
   const configQuery = trpc.sharepoint.getConfig.useQuery();
   const logsQuery = trpc.sharepoint.getLogs.useQuery({ limit: 50 });
+
+  const credenciaisProntas = Boolean(
+    config.tenantId.trim() &&
+      config.clientId.trim() &&
+      config.clientSecret.trim() &&
+      config.siteUrl.trim()
+  );
   
   const saveConfigMutation = trpc.sharepoint.saveConfig.useMutation({
     onSuccess: () => {
@@ -108,11 +115,19 @@ export default function SharePointConfig() {
   };
   
   const handleTestar = () => {
+    if (!credenciaisProntas) {
+      toast.error("Preencha Tenant ID, Client ID, Client Secret e Site URL antes de testar.");
+      return;
+    }
     setTestando(true);
     testarConexaoMutation.mutate();
   };
   
   const handleSincronizar = (tipo: "produtos" | "faturamento" | "clientes" | "todos") => {
+    if (!credenciaisProntas) {
+      toast.error("Configure e salve as credenciais reais do SharePoint antes de sincronizar.");
+      return;
+    }
     setSincronizando(true);
     sincronizarMutation.mutate({ tipo });
   };
@@ -153,6 +168,21 @@ export default function SharePointConfig() {
         </div>
       </div>
       
+      {!credenciaisProntas ? (
+        <Card className="border-amber-500/40 bg-amber-500/5">
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <AlertCircle className="w-5 h-5 text-amber-600" />
+              Credenciais ainda não configuradas
+            </CardTitle>
+            <CardDescription>
+              Não teste nem sincronize sem Tenant ID, Client ID, Client Secret e Site URL reais do Azure AD / SharePoint.
+              Até lá, use a Importação de Cadastros e Importar Faturamento no sistema.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      ) : null}
+
       <Tabs defaultValue="config" className="space-y-4">
         <TabsList>
           <TabsTrigger value="config" className="flex items-center gap-2">
@@ -321,7 +351,7 @@ export default function SharePointConfig() {
           </Card>
           
           <div className="flex justify-between">
-            <Button variant="outline" onClick={handleTestar} disabled={testando}>
+            <Button variant="outline" onClick={handleTestar} disabled={testando || !credenciaisProntas}>
               {testando ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle className="w-4 h-4 mr-2" />}
               Testar Conexão
             </Button>
@@ -349,7 +379,7 @@ export default function SharePointConfig() {
                 <Button 
                   className="w-full" 
                   onClick={() => handleSincronizar("produtos")}
-                  disabled={sincronizando}
+                  disabled={sincronizando || !credenciaisProntas}
                 >
                   {sincronizando ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Play className="w-4 h-4 mr-2" />}
                   Sincronizar Produtos
@@ -371,7 +401,7 @@ export default function SharePointConfig() {
                 <Button 
                   className="w-full" 
                   onClick={() => handleSincronizar("faturamento")}
-                  disabled={sincronizando}
+                  disabled={sincronizando || !credenciaisProntas}
                 >
                   {sincronizando ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Play className="w-4 h-4 mr-2" />}
                   Sincronizar Faturamento
@@ -393,7 +423,7 @@ export default function SharePointConfig() {
                 <Button 
                   className="w-full" 
                   onClick={() => handleSincronizar("clientes")}
-                  disabled={sincronizando}
+                  disabled={sincronizando || !credenciaisProntas}
                 >
                   {sincronizando ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Play className="w-4 h-4 mr-2" />}
                   Sincronizar Clientes
@@ -416,7 +446,7 @@ export default function SharePointConfig() {
                   className="w-full" 
                   variant="default"
                   onClick={() => handleSincronizar("todos")}
-                  disabled={sincronizando}
+                  disabled={sincronizando || !credenciaisProntas}
                 >
                   {sincronizando ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Play className="w-4 h-4 mr-2" />}
                   Sincronizar Tudo

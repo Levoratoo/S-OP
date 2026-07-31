@@ -30,7 +30,7 @@ $myIniPath = Join-Path $dataDir "my.ini"
 if (-not (Test-Path $mariaRoot)) {
   if (-not (Test-Path $zipPath)) {
     Write-Output "[local-db] Downloading MariaDB portable package..."
-    curl.exe -L "https://archive.mariadb.org/mariadb-11.8/winx64-packages/mariadb-11.8.6-winx64.zip" -o $zipPath
+    curl.exe -L "https://archive.mariadb.org/mariadb-11.8.6/winx64-packages/mariadb-11.8.6-winx64.zip" -o $zipPath
   }
 
   Write-Output "[local-db] Extracting MariaDB package..."

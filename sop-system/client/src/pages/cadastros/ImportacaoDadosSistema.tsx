@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Loader2, FolderOpen, Database, CheckCircle2, AlertTriangle } from "lucide-react";
+import { Loader2, FolderOpen, Database, CheckCircle2, AlertTriangle, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 
 type Summary = {
@@ -32,17 +32,29 @@ type Summary = {
   fatalErrors: string[];
 };
 
-const DEFAULT_DIR = "..\\dados sistema";
+type SeedResult = {
+  dirPath: string;
+  dryRun: boolean;
+  importacao: Summary;
+  marcasCriadas: number;
+  gestoresCriados: number;
+  vinculosCriados: number;
+  sazonalidade: { inserted: number };
+};
+
+const DEFAULT_DIR = "dados-sistema";
 
 export default function ImportacaoDadosSistema() {
   const [dirPath, setDirPath] = useState(DEFAULT_DIR);
   const [onlyInput, setOnlyInput] = useState("");
   const [result, setResult] = useState<Summary | null>(null);
+  const [seedInfo, setSeedInfo] = useState<SeedResult | null>(null);
 
   const importMutation = trpc.cadastrosSistema.importFromFolder.useMutation({
     onSuccess: (data) => {
       const summary = data as Summary;
       setResult(summary);
+      setSeedInfo(null);
       if (summary.fatalErrors.length > 0) {
         toast.error("Importacao finalizou com erro fatal.");
         return;
@@ -56,6 +68,22 @@ export default function ImportacaoDadosSistema() {
     onError: (error) => toast.error(error.message),
   });
 
+  const seedMutation = trpc.cadastrosSistema.seedOperacional.useMutation({
+    onSuccess: (data) => {
+      const seed = data as SeedResult;
+      setSeedInfo(seed);
+      setResult(seed.importacao);
+      if (seed.importacao.fatalErrors.length > 0) {
+        toast.error("Seed parcial: houve erro fatal na importacao dos CSVs.");
+        return;
+      }
+      toast.success(
+        `Seed OK — marcas +${seed.marcasCriadas}, gestores +${seed.gestoresCriados}, vínculos +${seed.vinculosCriados}, sazonalidade ${seed.sazonalidade.inserted}`
+      );
+    },
+    onError: (error) => toast.error(error.message),
+  });
+
   const parsedOnly = useMemo(
     () =>
       onlyInput
@@ -64,6 +92,8 @@ export default function ImportacaoDadosSistema() {
         .filter(Boolean),
     [onlyInput]
   );
+
+  const pending = importMutation.isPending || seedMutation.isPending;
 
   const runImport = async (dryRun: boolean) => {
     await importMutation.mutateAsync({
@@ -78,9 +108,42 @@ export default function ImportacaoDadosSistema() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Importacao de Cadastros</h1>
         <p className="text-muted-foreground">
-          Executa a carga da pasta de base do sistema direto no modulo de Cadastros.
+          Carga da pasta de base (status, linhas, turnos, de-para, marcas, gestores…) direto nos cadastros.
         </p>
       </div>
+
+      <Card className="border-primary/30 bg-primary/5">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Sparkles className="h-5 w-5 text-primary" />
+            Seed operacional (recomendado)
+          </CardTitle>
+          <CardDescription>
+            Importa todos os CSVs da pasta, cria marcas/gestores padrão, vincula gestor geral × marcas
+            e gera sazonalidade uniforme (1/12) se ainda estiver vazia.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Button
+            onClick={() =>
+              seedMutation.mutate({
+                dirPath: dirPath.trim() || DEFAULT_DIR,
+                dryRun: false,
+              })
+            }
+            disabled={pending}
+          >
+            {seedMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+            Popular dados mestres agora
+          </Button>
+          {seedInfo ? (
+            <p className="mt-3 text-sm text-muted-foreground">
+              Último seed: marcas +{seedInfo.marcasCriadas} · gestores +{seedInfo.gestoresCriados} ·
+              vínculos +{seedInfo.vinculosCriados} · sazonalidade {seedInfo.sazonalidade.inserted} linhas
+            </p>
+          ) : null}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
@@ -89,7 +152,8 @@ export default function ImportacaoDadosSistema() {
             Pasta de origem
           </CardTitle>
           <CardDescription>
-            Use o caminho da pasta com os CSVs de cadastro (status, tipo_negocio, recursos, etc).
+            No Docker o padrão é <code>dados-sistema</code> (incluído no deploy). Localmente pode apontar para{" "}
+            <code>../dados sistema</code>.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -101,7 +165,7 @@ export default function ImportacaoDadosSistema() {
             <div className="space-y-2">
               <Label>Arquivos especificos (opcional)</Label>
               <Input
-                placeholder="ex: recursos.csv,turnos.csv"
+                placeholder="ex: recursos.csv,turnos.csv,marcas.csv"
                 value={onlyInput}
                 onChange={(e) => setOnlyInput(e.target.value)}
               />
@@ -112,14 +176,14 @@ export default function ImportacaoDadosSistema() {
             <Button
               variant="outline"
               onClick={() => runImport(true)}
-              disabled={importMutation.isPending}
+              disabled={pending}
             >
               {importMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               Validar (dry-run)
             </Button>
             <Button
               onClick={() => runImport(false)}
-              disabled={importMutation.isPending}
+              disabled={pending}
               className="bg-blue-700 hover:bg-blue-800"
             >
               {importMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}

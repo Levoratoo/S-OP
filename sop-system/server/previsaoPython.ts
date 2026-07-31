@@ -361,6 +361,7 @@ async function ensureJobsRoot() {
 
 async function findScriptPath() {
   const candidates = [
+    path.resolve(process.cwd(), "scripts-previsao", SCRIPT_NAME),
     path.resolve(process.cwd(), "..", "3. Script Python Previsão Demanda", SCRIPT_NAME),
     path.resolve(process.cwd(), "3. Script Python Previsão Demanda", SCRIPT_NAME),
   ];
@@ -616,7 +617,7 @@ export async function createAndQueuePrevisaoJob(input: CreatePrevisaoJobInput) {
 
   const created = await db.createPrevisaoPythonJob({
     status: "PENDING",
-    scriptVersion: "v5.2",
+    scriptVersion: "v5.7.0",
     createdBy: input.createdBy ?? null,
     vendasFileName: input.vendas.fileName || INPUT_VENDAS_NAME,
     previstoFileName: input.previsto?.fileName || null,

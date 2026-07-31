@@ -317,7 +317,8 @@ class SDKServer {
   }
 
   async authenticateRequest(req: Request): Promise<User> {
-    if (!ENV.isProduction && ENV.devAuthBypass) {
+    // Explicit DEV_AUTH_BYPASS=true works in production too (LAN/Docker internal).
+    if (ENV.devAuthBypass) {
       return this.getDevBypassUser();
     }
 

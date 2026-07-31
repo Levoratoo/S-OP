@@ -839,6 +839,126 @@ async function importDiasUteis(
   return stats;
 }
 
+async function importMarcas(
+  context: ImportContext,
+  filePath: string
+): Promise<FileImportResult> {
+  const stats = initStats("marcas", "marcas.csv");
+  const { headerMap, rows } = readCsv(filePath);
+  assertHeaders(headerMap, "marcas.csv", [{ label: "Nome", aliases: ["nome"] }]);
+
+  const existing = await db.listMarcas();
+  const existingMap = new Map(existing.map(item => [normalizeKeyForMap(item.nome), item]));
+
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
+    const nome = normalizeCell(pick(row, ["nome"]));
+    const grupoMarca = normalizeCell(pick(row, ["grupo marca", "grupomarca", "grupo"])) || undefined;
+    const ramoAtuacao =
+      normalizeCell(pick(row, ["ramo atuacao", "ramo atuação", "ramoatuacao", "ramo"])) || undefined;
+    const ativo = parseBool(pick(row, ["ativo", "status"]), true);
+
+    if (!nome) {
+      stats.errors += 1;
+      pushWarning(stats, `Linha ${index + 2}: nome vazio.`);
+      continue;
+    }
+
+    const existingRow = existingMap.get(normalizeKeyForMap(nome));
+    if (!existingRow) {
+      stats.inserted += 1;
+      if (!context.dryRun) {
+        await db.createMarca({ nome, grupoMarca, ramoAtuacao, ativo });
+      }
+      continue;
+    }
+
+    const shouldUpdate =
+      normalizeCell(existingRow.grupoMarca ?? "") !== (grupoMarca ?? "") ||
+      normalizeCell(existingRow.ramoAtuacao ?? "") !== (ramoAtuacao ?? "") ||
+      Boolean(existingRow.ativo) !== ativo;
+
+    if (!shouldUpdate) {
+      stats.skipped += 1;
+      continue;
+    }
+
+    stats.updated += 1;
+    if (!context.dryRun) {
+      await db.updateMarca(existingRow.id, { grupoMarca, ramoAtuacao, ativo });
+    }
+  }
+
+  context.log(
+    `[marcas.csv] inserted=${stats.inserted} updated=${stats.updated} skipped=${stats.skipped} errors=${stats.errors}`
+  );
+  return stats;
+}
+
+async function importGestores(
+  context: ImportContext,
+  filePath: string
+): Promise<FileImportResult> {
+  const stats = initStats("gestores", "gestores.csv");
+  const { headerMap, rows } = readCsv(filePath);
+  assertHeaders(headerMap, "gestores.csv", [{ label: "Nome", aliases: ["nome"] }]);
+
+  const existing = await db.listGestores();
+  const byEmail = new Map(
+    existing
+      .filter(item => item.email)
+      .map(item => [normalizeKeyForMap(item.email || ""), item])
+  );
+  const byNome = new Map(existing.map(item => [normalizeKeyForMap(item.nome), item]));
+
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
+    const nome = normalizeCell(pick(row, ["nome"]));
+    const email = normalizeCell(pick(row, ["email", "e-mail"])) || undefined;
+    const telefone = normalizeCell(pick(row, ["telefone", "fone", "celular"])) || undefined;
+    const ativo = parseBool(pick(row, ["ativo", "status"]), true);
+
+    if (!nome) {
+      stats.errors += 1;
+      pushWarning(stats, `Linha ${index + 2}: nome vazio.`);
+      continue;
+    }
+
+    const existingRow =
+      (email ? byEmail.get(normalizeKeyForMap(email)) : undefined) ||
+      byNome.get(normalizeKeyForMap(nome));
+
+    if (!existingRow) {
+      stats.inserted += 1;
+      if (!context.dryRun) {
+        await db.createGestor({ nome, email, telefone, ativo });
+      }
+      continue;
+    }
+
+    const shouldUpdate =
+      normalizeCell(existingRow.nome) !== nome ||
+      normalizeCell(existingRow.email ?? "") !== (email ?? "") ||
+      normalizeCell(existingRow.telefone ?? "") !== (telefone ?? "") ||
+      Boolean(existingRow.ativo) !== ativo;
+
+    if (!shouldUpdate) {
+      stats.skipped += 1;
+      continue;
+    }
+
+    stats.updated += 1;
+    if (!context.dryRun) {
+      await db.updateGestor(existingRow.id, { nome, email, telefone, ativo });
+    }
+  }
+
+  context.log(
+    `[gestores.csv] inserted=${stats.inserted} updated=${stats.updated} skipped=${stats.skipped} errors=${stats.errors}`
+  );
+  return stats;
+}
+
 const FILES_IN_ORDER: FileDef[] = [
   { id: "status", fileName: "status.csv", run: importStatus },
   { id: "tipo_negocio", fileName: "tipo_negocio.csv", run: importTiposNegocio },
@@ -846,6 +966,8 @@ const FILES_IN_ORDER: FileDef[] = [
   { id: "linhas", fileName: "linhas.csv", run: importLinhas },
   { id: "modelos", fileName: "modelos.csv", run: importModelos },
   { id: "tamanhos", fileName: "tamanhos.csv", run: importTamanhos },
+  { id: "marcas", fileName: "marcas.csv", run: importMarcas },
+  { id: "gestores", fileName: "gestores.csv", run: importGestores },
   { id: "turnos", fileName: "turnos.csv", run: importTurnos },
   { id: "recursos", fileName: "recursos.csv", run: importRecursos },
   { id: "fluxos", fileName: "fluxos.csv", run: importFluxos },

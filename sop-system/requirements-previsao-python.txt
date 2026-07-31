@@ -5,3 +5,6 @@ openpyxl>=3.1
 python-dateutil>=2.9
 matplotlib>=3.9
 statsmodels>=0.14
+# Modelos opcionais usados pelo script v5.7 (import seguro se ausentes)
+xgboost>=2.0
+prophet>=1.1

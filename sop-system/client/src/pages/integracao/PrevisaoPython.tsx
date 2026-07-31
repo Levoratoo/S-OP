@@ -92,6 +92,25 @@ export default function PrevisaoPython() {
     onError: error => toast.error(error.message),
   });
 
+  const createFromSistemaMutation = trpc.previsaoPython.createFromSistema.useMutation({
+    onSuccess: result => {
+      toast.success(
+        `Job #${result.job?.id} gerado do sistema (${result.stats.gruposVendas} grupos, ${result.stats.mesesHistorico} meses).`
+      );
+      utils.previsaoPython.list.invalidate();
+      if (result.job?.id) setSelectedJobId(result.job.id);
+    },
+    onError: error => toast.error(error.message),
+  });
+
+  const desagregarMutation = trpc.cicloComercial.desagregarDoJob.useMutation({
+    onSuccess: result => {
+      toast.success(`Ciclo comercial #${result.cicloId} criado (${result.itensCriados} itens).`);
+      setLocation("/demanda/colaboracoes");
+    },
+    onError: error => toast.error(error.message),
+  });
+
   const downloadMutation = trpc.previsaoPython.download.useMutation({
     onSuccess: payload => {
       const binary = atob(payload.contentBase64);
@@ -148,12 +167,41 @@ export default function PrevisaoPython() {
 
   return (
     <div className="space-y-6">
-      <div>
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Execucao de Previsao Python</h1>
           <p className="text-muted-foreground">
-            Envie as bases, execute o script e acompanhe logs em tempo real.
+            Gere as bases pelo sistema (Passo 1), execute o script (Passo 2) e desagregue para
+            colaboração (Passo 3).
           </p>
+        </div>
+        <div className="flex flex-wrap gap-2" data-tour="page-python-gerar-bases">
+          <Button
+            variant="default"
+            disabled={createFromSistemaMutation.isPending}
+            onClick={() => createFromSistemaMutation.mutate({})}
+          >
+            {createFromSistemaMutation.isPending ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Play className="mr-2 h-4 w-4" />
+            )}
+            Gerar bases do sistema e executar
+          </Button>
+          {selectedJobDetails?.status === "SUCCESS" && (
+            <Button
+              variant="outline"
+              disabled={desagregarMutation.isPending}
+              onClick={() =>
+                selectedJobId && desagregarMutation.mutate({ jobId: selectedJobId })
+              }
+            >
+              {desagregarMutation.isPending ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : null}
+              Desagregar → Colaboração
+            </Button>
+          )}
         </div>
       </div>
 
@@ -225,7 +273,7 @@ export default function PrevisaoPython() {
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Historico de Jobs</CardTitle>
+            <CardTitle data-tour="page-python-jobs">Historico de Jobs</CardTitle>
           </CardHeader>
           <CardContent>
             {loadingJobs ? (

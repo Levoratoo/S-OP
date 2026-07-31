@@ -448,13 +448,21 @@ export async function testarConexaoSharepoint(): Promise<{ sucesso: boolean; men
   const configs = await db.select().from(sharepointConfig).limit(1);
   
   if (configs.length === 0) {
-    return { sucesso: false, mensagem: "Configuração não encontrada" };
+    return {
+      sucesso: false,
+      mensagem:
+        "Nenhuma configuração salva. Preencha as credenciais reais e clique em Salvar antes de testar.",
+    };
   }
   
   const config = configs[0];
   
   if (!config.tenantId || !config.clientId || !config.clientSecret || !config.siteUrl) {
-    return { sucesso: false, mensagem: "Configuração incompleta" };
+    return {
+      sucesso: false,
+      mensagem:
+        "Configuração incompleta: informe Tenant ID, Client ID, Client Secret e Site URL reais antes de testar a conexão.",
+    };
   }
   
   try {

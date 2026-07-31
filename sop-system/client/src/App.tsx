@@ -17,6 +17,7 @@ import Consensos from "./pages/demanda/Consensos";
 import Orcamentos from "./pages/demanda/Orcamentos";
 import DashboardCapacidade from "./pages/capacidade/DashboardCapacidade";
 import CalculoCapacidade from "./pages/capacidade/CalculoCapacidade";
+import CapacidadeVsDemanda from "./pages/capacidade/CapacidadeVsDemanda";
 import DashboardVendas from "./pages/vendas/DashboardVendas";
 import HistoricoVendas from "./pages/vendas/HistoricoVendas";
 import CarteiraPedidos from "./pages/vendas/CarteiraPedidos";
@@ -42,6 +43,7 @@ import DeParaCodigos from "./pages/cadastros/DeParaCodigos";
 import Turnos from "./pages/cadastros/Turnos";
 import Fluxos from "./pages/cadastros/Fluxos";
 import ImportacaoDadosSistema from "./pages/cadastros/ImportacaoDadosSistema";
+import SazonalidadeMarca from "./pages/cadastros/SazonalidadeMarca";
 import SharePointConfig from "./pages/integracao/SharePointConfig";
 import PrevisaoPython from "./pages/integracao/PrevisaoPython";
 import PrevisaoPythonCiclo13 from "./pages/integracao/PrevisaoPythonCiclo13";
@@ -49,6 +51,7 @@ import PrevisaoPythonViewer from "./pages/previsao/PrevisaoPythonViewer";
 import GerenciamentoUsuarios from "./pages/admin/GerenciamentoUsuarios";
 import GerenciamentoMarcas from "./pages/admin/GerenciamentoMarcas";
 import MetasProducao from "./pages/producao/MetasProducao";
+import Ajuda from "./pages/Ajuda";
 
 function LegacyPrevisaoPythonRedirect() {
   const [, setLocation] = useLocation();
@@ -66,6 +69,7 @@ function Router() {
       <Switch>
         {/* Dashboard Principal */}
         <Route path="/" component={Home} />
+        <Route path="/ajuda" component={Ajuda} />
 
         {/* Previsao de Demanda */}
         <Route path="/demanda/dashboard" component={DashboardDemanda} />
@@ -78,6 +82,7 @@ function Router() {
         {/* Analise de Capacidade */}
         <Route path="/capacidade/dashboard" component={DashboardCapacidade} />
         <Route path="/capacidade/calculo" component={CalculoCapacidade} />
+        <Route path="/capacidade/vs-demanda" component={CapacidadeVsDemanda} />
 
         {/* Gestao de Producao */}
         <Route path="/producao/metas" component={MetasProducao} />
@@ -110,6 +115,7 @@ function Router() {
         <Route path="/cadastros/turnos" component={Turnos} />
         <Route path="/cadastros/fluxos" component={Fluxos} />
         <Route path="/cadastros/importacao-base" component={ImportacaoDadosSistema} />
+        <Route path="/cadastros/sazonalidade-marca" component={SazonalidadeMarca} />
 
         {/* Integracoes */}
         <Route path="/integracao/sharepoint" component={SharePointConfig} />
