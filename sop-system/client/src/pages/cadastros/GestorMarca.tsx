@@ -8,14 +8,66 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { trpc } from "@/lib/trpc";
-import { Plus, Pencil, Trash2, Loader2, Users, Tag, Download, Link } from "lucide-react";
+import { Plus, Pencil, Trash2, Loader2, Users, Tag, Download, Link, AlertCircle } from "lucide-react";
 import { exportToCsv } from "@/lib/exportCsv";
 import { toast } from "sonner";
 
 export default function GestorMarca() {
   const [activeTab, setActiveTab] = useState("relacionamento");
+  const [acceptingChave, setAcceptingChave] = useState<string | null>(null);
+  const [acceptingAll, setAcceptingAll] = useState(false);
+
+  const utils = trpc.useUtils();
+  const { data: pendingClientes = [] } =
+    trpc.cadastrosSistema.pendingClientesFromFaturamento.useQuery();
+
+  const acceptPendingClienteMutation = trpc.cadastrosSistema.acceptPendingCliente.useMutation({
+    onSuccess: () => {
+      utils.cadastrosSistema.pendingClientesFromFaturamento.invalidate();
+      utils.clientes.list.invalidate();
+    },
+    onError: (error) => toast.error(error.message),
+  });
+
+  const handleAcceptCliente = async (chave: string) => {
+    setAcceptingChave(chave);
+    try {
+      await acceptPendingClienteMutation.mutateAsync({ chave });
+      toast.success("Cliente aceito e cadastrado!");
+    } finally {
+      setAcceptingChave(null);
+    }
+  };
+
+  const handleAcceptAllClientes = async () => {
+    setAcceptingAll(true);
+    let ok = 0;
+    let fail = 0;
+    try {
+      for (const cliente of pendingClientes) {
+        try {
+          await acceptPendingClienteMutation.mutateAsync({ chave: cliente.chave });
+          ok += 1;
+        } catch {
+          fail += 1;
+        }
+      }
+      if (ok > 0) {
+        toast.success(`${ok} cliente(s) aceito(s)${fail ? `, ${fail} falha(s)` : ""}`);
+      } else if (fail > 0) {
+        toast.error(`Falha ao aceitar clientes (${fail})`);
+      }
+      await utils.cadastrosSistema.pendingClientesFromFaturamento.invalidate();
+      await utils.clientes.list.invalidate();
+    } finally {
+      setAcceptingAll(false);
+    }
+  };
+
+  const pendingPreview = pendingClientes.slice(0, 10);
   
   return (
     <div className="p-6 space-y-6">
@@ -23,6 +75,75 @@ export default function GestorMarca() {
         <h1 className="text-3xl font-bold">Gestor x Marca</h1>
         <p className="text-muted-foreground">Gerencie o relacionamento entre gestores comerciais e marcas</p>
       </div>
+
+      {pendingClientes.length > 0 && (
+        <Alert className="border-amber-300 bg-amber-50 text-amber-950">
+          <AlertCircle className="h-4 w-4 text-amber-700" />
+          <AlertTitle className="flex items-center gap-2">
+            Clientes novos no Faturamento
+            <Badge variant="secondary" className="bg-amber-200 text-amber-900">
+              {pendingClientes.length}
+            </Badge>
+          </AlertTitle>
+          <AlertDescription className="space-y-3 mt-2">
+            <p>
+              Há clientes no faturamento que ainda não estão cadastrados. Aceite-os para disponibilizar no SNOP.
+            </p>
+            <div className="rounded-md border border-amber-200 bg-white/70 max-h-56 overflow-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Chave</TableHead>
+                    <TableHead>Código</TableHead>
+                    <TableHead>CNPJ</TableHead>
+                    <TableHead>Cidade/UF</TableHead>
+                    <TableHead className="w-[110px]">Ação</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {pendingPreview.map((cliente) => (
+                    <TableRow key={cliente.chave}>
+                      <TableCell className="font-mono text-xs">{cliente.chave}</TableCell>
+                      <TableCell className="font-mono text-sm">{cliente.codCliente || "-"}</TableCell>
+                      <TableCell className="font-mono text-sm">{cliente.cnpj || "-"}</TableCell>
+                      <TableCell>
+                        {cliente.cidade ? `${cliente.cidade}/${cliente.uf || ""}` : "-"}
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={acceptingAll || acceptPendingClienteMutation.isPending}
+                          onClick={() => handleAcceptCliente(cliente.chave)}
+                        >
+                          {acceptingChave === cliente.chave ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            "Aceitar"
+                          )}
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+            {pendingClientes.length > 10 && (
+              <p className="text-xs text-amber-800">
+                Exibindo 10 de {pendingClientes.length} clientes pendentes
+              </p>
+            )}
+            <Button
+              size="sm"
+              disabled={acceptingAll || acceptPendingClienteMutation.isPending}
+              onClick={handleAcceptAllClientes}
+            >
+              {acceptingAll && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Aceitar todos ({pendingClientes.length})
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="grid grid-cols-3 w-full max-w-md">

@@ -1,4 +1,4 @@
-import { eq, desc, and, sql, asc } from "drizzle-orm";
+import { eq, desc, and, sql, asc, gte, lt, inArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import { 
   InsertUser, users, User,
@@ -213,6 +213,116 @@ export async function updateProduto(id: number, data: Partial<InsertProduto>) {
   await db.update(produtos).set(data).where(eq(produtos.id, id));
 }
 
+/** Bulk: define projetarEstatistica por lista de códigos (Skus Projetar). */
+export async function setProjetarEstatisticaBatch(input: {
+  codigos: string[];
+  projetar: boolean;
+  /** Se true, zera projetar de todos os outros SKUs (lista = universo a projetar). */
+  somenteEstes?: boolean;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const codes = Array.from(
+    new Set(input.codigos.map(c => c.trim()).filter(Boolean))
+  );
+  if (codes.length === 0 && !input.somenteEstes) {
+    return { atualizados: 0, naoEncontrados: [] as string[], totalProjetar: 0 };
+  }
+
+  if (input.somenteEstes) {
+    await db.update(produtos).set({ projetarEstatistica: false });
+  }
+
+  const all = await db
+    .select({ id: produtos.id, codItem: produtos.codItem, codigo: produtos.codigo })
+    .from(produtos);
+
+  const byCode = new Map<string, number>();
+  for (const p of all) {
+    if (p.codItem) byCode.set(p.codItem.trim().toUpperCase(), p.id);
+    if (p.codigo) byCode.set(p.codigo.trim().toUpperCase(), p.id);
+  }
+
+  const ids = new Set<number>();
+  const naoEncontrados: string[] = [];
+  for (const code of codes) {
+    const id = byCode.get(code.toUpperCase());
+    if (id == null) naoEncontrados.push(code);
+    else ids.add(id);
+  }
+
+  let atualizados = 0;
+  for (const id of Array.from(ids)) {
+    await db.update(produtos).set({ projetarEstatistica: input.projetar }).where(eq(produtos.id, id));
+    atualizados += 1;
+  }
+
+  const [countRow] = await db
+    .select({ n: sql<number>`count(*)` })
+    .from(produtos)
+    .where(eq(produtos.projetarEstatistica, true));
+
+  return {
+    atualizados,
+    naoEncontrados,
+    totalProjetar: Number(countRow?.n ?? 0),
+  };
+}
+
+/** Cobertura do faturamento vs mês fechado (passo a passo: até o mês anterior). */
+export async function getFaturamentoMesFechadoCheck() {
+  const db = await getDb();
+  const now = new Date();
+  const closed = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const ano = closed.getFullYear();
+  const mes = closed.getMonth() + 1;
+
+  if (!db) {
+    return {
+      ano,
+      mes,
+      label: `${String(mes).padStart(2, "0")}/${ano}`,
+      registrosMesFechado: 0,
+      ok: false,
+      maxDataEmissao: null as string | null,
+      totalSaida: 0,
+    };
+  }
+
+  const [mesStats] = await db
+    .select({
+      registros: sql<number>`count(*)`,
+    })
+    .from(faturamento)
+    .where(
+      and(
+        eq(faturamento.tipoFaturamento, "SAIDA"),
+        sql`YEAR(${faturamento.dataEmissao}) = ${ano}`,
+        sql`MONTH(${faturamento.dataEmissao}) = ${mes}`
+      )
+    );
+
+  const [global] = await db
+    .select({
+      totalSaida: sql<number>`count(*)`,
+      maxData: sql<string | null>`MAX(${faturamento.dataEmissao})`,
+    })
+    .from(faturamento)
+    .where(eq(faturamento.tipoFaturamento, "SAIDA"));
+
+  const registrosMesFechado = Number(mesStats?.registros ?? 0);
+  return {
+    ano,
+    mes,
+    label: `${String(mes).padStart(2, "0")}/${ano}`,
+    registrosMesFechado,
+    ok: registrosMesFechado > 0,
+    maxDataEmissao: global?.maxData ?? null,
+    totalSaida: Number(global?.totalSaida ?? 0),
+  };
+}
+
 export async function deleteProduto(id: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -223,8 +333,14 @@ export async function createProdutosBatch(data: InsertProduto[]) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   if (data.length === 0) return { count: 0 };
-  await db.insert(produtos).values(data);
-  return { count: data.length };
+  const batchSize = 500;
+  let total = 0;
+  for (let i = 0; i < data.length; i += batchSize) {
+    const batch = data.slice(i, i + batchSize);
+    await db.insert(produtos).values(batch);
+    total += batch.length;
+  }
+  return { count: total };
 }
 
 // ==================== CLIENTES ====================
@@ -258,6 +374,20 @@ export async function deleteCliente(id: number) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.delete(clientes).where(eq(clientes.id, id));
+}
+
+export async function createClientesBatch(data: InsertCliente[]) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  if (data.length === 0) return { count: 0 };
+  const batchSize = 500;
+  let total = 0;
+  for (let i = 0; i < data.length; i += batchSize) {
+    const batch = data.slice(i, i + batchSize);
+    await db.insert(clientes).values(batch);
+    total += batch.length;
+  }
+  return { count: total };
 }
 
 // ==================== RECURSOS ====================
@@ -790,11 +920,12 @@ export async function getIndicadoresAcuracidade(ano?: number) {
 export async function getDashboardDemanda() {
   const db = await getDb();
   if (!db) return { totalVendas: 0, totalClientes: 0, totalProdutos: 0 };
-  
-  const [vendasCount] = await db.select({ count: sql<number>`count(*)` }).from(vendas);
+
+  // Fonte oficial de vendas: faturamento (ERP MetricsPROD)
+  const [vendasCount] = await db.select({ count: sql<number>`count(*)` }).from(faturamento);
   const [clientesCount] = await db.select({ count: sql<number>`count(*)` }).from(clientes);
   const [produtosCount] = await db.select({ count: sql<number>`count(*)` }).from(produtos);
-  
+
   return {
     totalVendas: vendasCount?.count || 0,
     totalClientes: clientesCount?.count || 0,
@@ -803,21 +934,13 @@ export async function getDashboardDemanda() {
 }
 
 export async function getVendasPorMes(ano: number) {
-  const db = await getDb();
-  if (!db) return [];
-  
-  const result = await db.execute(sql`
-    SELECT 
-      MONTH(dataNf) as mes,
-      SUM(receitaBruta) as receita,
-      SUM(quantidade) as quantidade
-    FROM vendas 
-    WHERE YEAR(dataNf) = ${ano}
-    GROUP BY MONTH(dataNf)
-    ORDER BY mes
-  `);
-  
-  return (result[0] as unknown) as { mes: number; receita: string; quantidade: string }[];
+  // Dashboard Demanda usa a mesma base de faturamento do Dashboard Vendas
+  const rows = await getFaturamentoPorMes(ano);
+  return rows.map((r) => ({
+    mes: r.mes,
+    receita: String(r.receita ?? "0"),
+    quantidade: String(r.quantidade ?? "0"),
+  }));
 }
 
 // ==================== ROTEIROS ====================
@@ -851,10 +974,37 @@ export async function deleteRoteiro(id: number) {
 
 
 // ==================== FATURAMENTO ====================
-export async function listFaturamento(limit = 100) {
+export type FaturamentoListFilter = {
+  year?: number;
+  month?: number; // 1-12
+  limit?: number;
+  offset?: number;
+};
+
+function faturamentoPeriodFilter(year?: number, month?: number) {
+  if (!year) return undefined;
+  const startMonth = month && month >= 1 && month <= 12 ? month : 1;
+  const start = new Date(year, startMonth - 1, 1);
+  const end =
+    month && month >= 1 && month <= 12
+      ? new Date(year, startMonth, 1)
+      : new Date(year + 1, 0, 1);
+  return and(gte(faturamento.dataEmissao, start), lt(faturamento.dataEmissao, end));
+}
+
+export async function listFaturamento(limitOrFilter: number | FaturamentoListFilter = 100) {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(faturamento).orderBy(desc(faturamento.dataEmissao)).limit(limit);
+
+  const filter: FaturamentoListFilter =
+    typeof limitOrFilter === "number" ? { limit: limitOrFilter } : limitOrFilter ?? {};
+  const limit = filter.limit ?? 100;
+  const offset = filter.offset ?? 0;
+  const where = faturamentoPeriodFilter(filter.year, filter.month);
+
+  const query = db.select().from(faturamento).orderBy(desc(faturamento.dataEmissao)).limit(limit).offset(offset);
+  if (where) return query.where(where);
+  return query;
 }
 
 export async function createFaturamento(data: InsertFaturamento) {
@@ -868,17 +1018,35 @@ export async function createFaturamentoBatch(data: InsertFaturamento[]) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   if (data.length === 0) return { count: 0 };
-  
-  // Inserir em lotes de 500 para evitar timeout
-  const batchSize = 500;
+
+  // Lotes moderados: histórico 2020+ pode ter textos longos / packet limits
+  const batchSize = 250;
   let totalInserted = 0;
-  
+
   for (let i = 0; i < data.length; i += batchSize) {
     const batch = data.slice(i, i + batchSize);
-    await db.insert(faturamento).values(batch);
-    totalInserted += batch.length;
+    try {
+      await db.insert(faturamento).values(batch);
+      totalInserted += batch.length;
+    } catch (batchErr) {
+      // Fallback: insere item a item e pula linhas inválidas
+      for (const row of batch) {
+        try {
+          await db.insert(faturamento).values(row);
+          totalInserted += 1;
+        } catch (rowErr) {
+          const msg = rowErr instanceof Error ? rowErr.message : String(rowErr);
+          console.warn(
+            `[faturamento] skip row codMaterial=${row.codMaterial ?? "?"} data=${String(row.dataEmissao)}: ${msg}`
+          );
+        }
+      }
+      if (totalInserted === 0 && i === 0) {
+        throw batchErr;
+      }
+    }
   }
-  
+
   return { count: totalInserted };
 }
 
@@ -892,23 +1060,82 @@ export async function clearFaturamento() {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   await db.delete(faturamento);
+  await db.execute(sql`DELETE FROM faturamento_resumo_mensal`);
   return { success: true };
 }
 
-export async function getFaturamentoStats() {
+/** Remove apenas o período a partir de `desde` (YYYY-MM-DD), preservando histórico anterior. */
+export async function clearFaturamentoFromDate(desde: string) {
   const db = await getDb();
-  if (!db) return { totalRegistros: 0, totalValor: 0, totalQtd: 0 };
-  
-  const [stats] = await db.select({
-    totalRegistros: sql<number>`count(*)`,
-    totalValor: sql<string>`COALESCE(SUM(valorTotal), 0)`,
-    totalQtd: sql<string>`COALESCE(SUM(qtd), 0)`,
-  }).from(faturamento);
+  if (!db) throw new Error("Database not available");
+  await db.delete(faturamento).where(sql`${faturamento.dataEmissao} >= ${desde}`);
+  const start = new Date(`${desde}T00:00:00`);
+  const year = start.getFullYear();
+  const month = start.getMonth() + 1;
+  await db.execute(sql`
+    DELETE FROM faturamento_resumo_mensal
+    WHERE ano > ${year} OR (ano = ${year} AND mes >= ${month})
+  `);
+  return { success: true, desde };
+}
+
+export async function rebuildFaturamentoResumo() {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.execute(sql`DELETE FROM faturamento_resumo_mensal`);
+  await db.execute(sql`
+    INSERT INTO faturamento_resumo_mensal (
+      ano, mes, totalRegistros, totalValor, totalQtd,
+      receitaLiquida, quantidadeLiquida, lastLoadedAt
+    )
+    SELECT
+      YEAR(dataEmissao),
+      MONTH(dataEmissao),
+      COUNT(*),
+      COALESCE(SUM(valorTotal), 0),
+      COALESCE(SUM(qtd), 0),
+      COALESCE(SUM(CASE WHEN tipoFaturamento = 'SAIDA' THEN valorTotal ELSE -valorTotal END), 0),
+      COALESCE(SUM(CASE WHEN tipoFaturamento = 'SAIDA' THEN qtd ELSE -qtd END), 0),
+      MAX(createdAt)
+    FROM faturamento
+    GROUP BY YEAR(dataEmissao), MONTH(dataEmissao)
+  `);
+  return { success: true };
+}
+
+export async function getFaturamentoStats(filter?: { year?: number; month?: number }) {
+  const db = await getDb();
+  if (!db) return { totalRegistros: 0, totalValor: 0, totalQtd: 0, lastLoadedAt: null as string | null };
+
+  const year = filter?.year;
+  const month = filter?.month;
+  const where =
+    year && month
+      ? sql`WHERE ano = ${year} AND mes = ${month}`
+      : year
+        ? sql`WHERE ano = ${year}`
+        : sql``;
+  const result = await db.execute(sql`
+    SELECT
+      COALESCE(SUM(totalRegistros), 0) AS totalRegistros,
+      COALESCE(SUM(totalValor), 0) AS totalValor,
+      COALESCE(SUM(totalQtd), 0) AS totalQtd,
+      MAX(lastLoadedAt) AS lastLoadedAt
+    FROM faturamento_resumo_mensal
+    ${where}
+  `);
+  const stats = (result[0] as unknown as Array<{
+    totalRegistros: number;
+    totalValor: string;
+    totalQtd: string;
+    lastLoadedAt: string | null;
+  }>)[0];
   
   return {
     totalRegistros: stats?.totalRegistros || 0,
     totalValor: parseFloat(stats?.totalValor || "0"),
     totalQtd: parseFloat(stats?.totalQtd || "0"),
+    lastLoadedAt: stats?.lastLoadedAt ?? null,
   };
 }
 
@@ -917,14 +1144,13 @@ export async function getFaturamentoPorMes(ano: number) {
   if (!db) return [];
   
   const result = await db.execute(sql`
-    SELECT 
-      MONTH(dataEmissao) as mes,
-      SUM(CASE WHEN tipoFaturamento = 'SAIDA' THEN valorTotal ELSE -valorTotal END) as receita,
-      SUM(CASE WHEN tipoFaturamento = 'SAIDA' THEN qtd ELSE -qtd END) as quantidade,
-      COUNT(*) as registros
-    FROM faturamento 
-    WHERE YEAR(dataEmissao) = ${ano}
-    GROUP BY MONTH(dataEmissao)
+    SELECT
+      mes,
+      receitaLiquida AS receita,
+      quantidadeLiquida AS quantidade,
+      totalRegistros AS registros
+    FROM faturamento_resumo_mensal
+    WHERE ano = ${ano}
     ORDER BY mes
   `);
   
@@ -1262,7 +1488,15 @@ export async function listDeParaCodigos() {
 export async function createDeParaCodigo(data: InsertDeParaCodigo) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(deParaCodigos).values(data);
+  const skuAntigo = data.skuAntigo.trim().toUpperCase();
+  const skuNovo = data.skuNovo.trim();
+  if (!skuAntigo || !skuNovo || skuAntigo === skuNovo.toUpperCase()) {
+    throw new Error("Relação De-Para inválida.");
+  }
+  const result = await db
+    .insert(deParaCodigos)
+    .values({ ...data, skuAntigo, skuNovo })
+    .onDuplicateKeyUpdate({ set: { skuNovo } });
   return { id: result[0].insertId };
 }
 
@@ -1282,8 +1516,20 @@ export async function createDeParaCodigosBatch(data: InsertDeParaCodigo[]) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   if (data.length === 0) return { count: 0 };
-  await db.insert(deParaCodigos).values(data);
-  return { count: data.length };
+  const normalized = new Map<string, string>();
+  for (const row of data) {
+    const skuAntigo = row.skuAntigo.trim().toUpperCase();
+    const skuNovo = row.skuNovo.trim();
+    if (!skuAntigo || !skuNovo || skuAntigo === skuNovo.toUpperCase()) continue;
+    normalized.set(skuAntigo, skuNovo);
+  }
+  for (const [skuAntigo, skuNovo] of normalized) {
+    await db
+      .insert(deParaCodigos)
+      .values({ skuAntigo, skuNovo })
+      .onDuplicateKeyUpdate({ set: { skuNovo } });
+  }
+  return { count: normalized.size };
 }
 
 // Função para obter o código atual de um produto (seguindo a cadeia de De-Para)
@@ -1898,7 +2144,9 @@ async function ensurePrevisaoPythonJobsTable() {
     CREATE TABLE IF NOT EXISTS previsao_python_jobs (
       id INT AUTO_INCREMENT PRIMARY KEY,
       status ENUM('PENDING','RUNNING','SUCCESS','ERROR') NOT NULL DEFAULT 'PENDING',
-      scriptVersion VARCHAR(50) NOT NULL DEFAULT 'v5.2',
+      scriptVersion VARCHAR(50) NOT NULL DEFAULT 'v5.2-COMPLETO',
+      scriptHash VARCHAR(64) NULL,
+      inputMetadataJson TEXT NULL,
       createdBy VARCHAR(320) NULL,
       vendasFileName VARCHAR(255) NOT NULL,
       previstoFileName VARCHAR(255) NULL,
@@ -1941,7 +2189,7 @@ export async function listPrevisaoPythonJobsByStatus(
 
 export async function getPrevisaoPythonJobById(id: number) {
   const db = await getDb();
-  if (!db) return null;
+  if (!db) throw new Error("Banco de dados indisponivel.");
   await ensurePrevisaoPythonJobsTable();
   const result = await db.select().from(previsaoPythonJobs).where(eq(previsaoPythonJobs.id, id)).limit(1);
   return result[0] || null;
@@ -1953,6 +2201,18 @@ export async function createPrevisaoPythonJob(data: InsertPrevisaoPythonJob) {
   await ensurePrevisaoPythonJobsTable();
   const result = await db.insert(previsaoPythonJobs).values(data);
   return { id: result[0].insertId };
+}
+
+export async function recoverPrevisaoPythonJobRow(data: InsertPrevisaoPythonJob & { id: number }) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await ensurePrevisaoPythonJobsTable();
+  const jobId = Math.floor(data.id);
+  if (!Number.isSafeInteger(jobId) || jobId <= 0) {
+    throw new Error("Id de job invalido para recuperacao.");
+  }
+  await db.insert(previsaoPythonJobs).values({ ...data, id: jobId });
+  await db.execute(sql.raw(`ALTER TABLE previsao_python_jobs AUTO_INCREMENT = ${jobId + 1}`));
 }
 
 export async function updatePrevisaoPythonJob(id: number, data: Partial<InsertPrevisaoPythonJob>) {
@@ -2162,6 +2422,14 @@ export async function updateCicloComercial(id: number, data: Partial<InsertCiclo
   await db.update(ciclosComerciais).set(data).where(eq(ciclosComerciais.id, id));
 }
 
+export async function deleteCicloComercial(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db.delete(cicloComercialItens).where(eq(cicloComercialItens.cicloId, id));
+  await db.delete(ciclosComerciais).where(eq(ciclosComerciais.id, id));
+  return { success: true };
+}
+
 export async function listCicloComercialItens(
   cicloId: number,
   planoColab?: "MTS" | "JITO" | "PV_MTO" | "CRM"
@@ -2169,11 +2437,16 @@ export async function listCicloComercialItens(
   const db = await getDb();
   if (!db) return [];
   if (planoColab) {
+    // TI: JITO legado é listado junto com MTS.
+    const planos =
+      planoColab === "MTS" || planoColab === "JITO"
+        ? (["MTS", "JITO"] as const)
+        : ([planoColab] as const);
     return db
       .select()
       .from(cicloComercialItens)
       .where(
-        and(eq(cicloComercialItens.cicloId, cicloId), eq(cicloComercialItens.planoColab, planoColab))
+        and(eq(cicloComercialItens.cicloId, cicloId), inArray(cicloComercialItens.planoColab, [...planos]))
       );
   }
   return db.select().from(cicloComercialItens).where(eq(cicloComercialItens.cicloId, cicloId));
@@ -2185,37 +2458,53 @@ export async function updateCicloComercialItem(
 ) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  await db.update(cicloComercialItens).set(data).where(eq(cicloComercialItens.id, id));
+  const [current] = await db
+    .select()
+    .from(cicloComercialItens)
+    .where(eq(cicloComercialItens.id, id))
+    .limit(1);
+  if (!current) throw new Error("Item do ciclo não encontrado.");
+  const [ciclo] = await db
+    .select({ status: ciclosComerciais.status })
+    .from(ciclosComerciais)
+    .where(eq(ciclosComerciais.id, current.cicloId))
+    .limit(1);
+  if (ciclo?.status === "FECHADO") {
+    throw new Error("Ciclo fechado não pode ser alterado.");
+  }
+  const merged = { ...current, ...data };
+  await db
+    .update(cicloComercialItens)
+    .set({
+      ...data,
+      qtdeColaborada: String(Math.round(sumItemMonths(merged) * 100) / 100),
+    })
+    .where(eq(cicloComercialItens.id, id));
 }
 
-function sumItemMonths(item: {
-  m1?: string | null;
-  m2?: string | null;
-  m3?: string | null;
-  m4?: string | null;
-  m5?: string | null;
-  m6?: string | null;
-  m7?: string | null;
-  m8?: string | null;
-  m9?: string | null;
-  m10?: string | null;
-  m11?: string | null;
-  m12?: string | null;
-}) {
-  return (
-    Number(item.m1 || 0) +
-    Number(item.m2 || 0) +
-    Number(item.m3 || 0) +
-    Number(item.m4 || 0) +
-    Number(item.m5 || 0) +
-    Number(item.m6 || 0) +
-    Number(item.m7 || 0) +
-    Number(item.m8 || 0) +
-    Number(item.m9 || 0) +
-    Number(item.m10 || 0) +
-    Number(item.m11 || 0) +
-    Number(item.m12 || 0)
-  );
+const MES_KEYS_SUM = ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12"] as const;
+const EST_KEYS_SUM = ["e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8", "e9", "e10", "e11", "e12"] as const;
+
+/** Vendedor prevalece quando informou o mês; senão usa estatística e*. */
+export function monthEffectiveQty(
+  item: Record<string, string | number | null | undefined>,
+  monthIndex: number
+): number {
+  const mKey = MES_KEYS_SUM[monthIndex];
+  const eKey = EST_KEYS_SUM[monthIndex];
+  const mRaw = item[mKey];
+  if (mRaw !== null && mRaw !== undefined && String(mRaw).trim() !== "") {
+    const n = Number(mRaw);
+    return Number.isFinite(n) ? n : 0;
+  }
+  const e = Number(item[eKey] || 0);
+  return Number.isFinite(e) ? e : 0;
+}
+
+export function sumItemMonths(item: Record<string, string | number | null | undefined>) {
+  let total = 0;
+  for (let i = 0; i < 12; i++) total += monthEffectiveQty(item, i);
+  return total;
 }
 
 export async function getCicloComercialConsolidado(cicloId: number) {
@@ -2257,7 +2546,7 @@ export async function getCicloComercialConsolidado(cicloId: number) {
     const anoBase = ciclo?.anoInicio ?? new Date().getFullYear();
     const mesBase = ciclo?.mesInicio ?? 1;
     for (let i = 0; i < 12; i++) {
-      const qMes = Number(item[mesKeys[i]] || 0);
+      const qMes = monthEffectiveQty(item as Record<string, string | number | null | undefined>, i);
       if (qMes === 0) continue;
       const mesAbs = mesBase + i;
       const ano = anoBase + Math.floor((mesAbs - 1) / 12);
@@ -2276,8 +2565,8 @@ export async function getCicloComercialConsolidado(cicloId: number) {
   }
 
   const pvMto = byPlano["PV_MTO"]?.qtde ?? 0;
-  const mts = byPlano["MTS"]?.qtde ?? 0;
-  const jito = byPlano["JITO"]?.qtde ?? 0;
+  // JITO legado entra na MTS (doc TI: JIT deixa de existir).
+  const mts = (byPlano["MTS"]?.qtde ?? 0) + (byPlano["JITO"]?.qtde ?? 0);
   const crm = byPlano["CRM"]?.qtde ?? 0;
 
   return {
@@ -2288,11 +2577,11 @@ export async function getCicloComercialConsolidado(cicloId: number) {
     byMarca,
     resumoPlanos: {
       mts,
-      jito,
+      jito: 0,
       pvMto,
       crm,
       pvVsCrm: pvMto - crm,
-      colaboracaoTotal: mts + jito + pvMto + crm,
+      colaboracaoTotal: mts + pvMto + crm,
     },
     baseCiclo: baseCiclo.slice(0, 5000),
     itens: itens.length,

@@ -8,14 +8,16 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { trpc } from "@/lib/trpc";
-import { Plus, Pencil, Trash2, Loader2, Download } from "lucide-react";
+import { Plus, Pencil, Trash2, Loader2, Download, RefreshCw, AlertCircle } from "lucide-react";
 import { exportToCsv } from "@/lib/exportCsv";
 import { toast } from "sonner";
 
 export default function Clientes() {
   const [isOpen, setIsOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [acceptingChave, setAcceptingChave] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     razaoSocial: "",
     nomeFantasia: "",
@@ -27,6 +29,8 @@ export default function Clientes() {
 
   const utils = trpc.useUtils();
   const { data: clientes, isLoading } = trpc.clientes.list.useQuery();
+  const { data: pendingClientes = [] } =
+    trpc.cadastrosSistema.pendingClientesFromFaturamento.useQuery();
   
   const createMutation = trpc.clientes.create.useMutation({
     onSuccess: () => {
@@ -50,6 +54,28 @@ export default function Clientes() {
     onSuccess: () => {
       utils.clientes.list.invalidate();
       toast.success("Cliente excluído com sucesso!");
+    },
+    onError: (error) => toast.error(error.message),
+  });
+
+  const seedFromFaturamentoMutation = trpc.cadastrosSistema.seedFromFaturamento.useMutation({
+    onSuccess: (result) => {
+      toast.success(
+        `Atualizado do Faturamento: +${result.clientes.created} clientes, +${result.produtos.created} produtos`
+      );
+      utils.clientes.list.invalidate();
+      utils.produtos.list.invalidate();
+      utils.cadastrosSistema.pendingClientesFromFaturamento.invalidate();
+      utils.cadastrosSistema.pendingSkusFromFaturamento.invalidate();
+    },
+    onError: (error) => toast.error(`Falha ao atualizar do Faturamento: ${error.message}`),
+  });
+
+  const acceptPendingClienteMutation = trpc.cadastrosSistema.acceptPendingCliente.useMutation({
+    onSuccess: () => {
+      utils.cadastrosSistema.pendingClientesFromFaturamento.invalidate();
+      utils.clientes.list.invalidate();
+      toast.success("Cliente aceito e cadastrado!");
     },
     onError: (error) => toast.error(error.message),
   });
@@ -94,6 +120,18 @@ export default function Clientes() {
           <p className="text-muted-foreground">Gerencie o cadastro de clientes</p>
         </div>
         <div className="flex gap-2">
+          <Button
+            variant="outline"
+            disabled={seedFromFaturamentoMutation.isPending}
+            onClick={() => seedFromFaturamentoMutation.mutate({ dryRun: false })}
+          >
+            {seedFromFaturamentoMutation.isPending ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4 mr-2" />
+            )}
+            Atualizar do Faturamento/ERP
+          </Button>
           <Button variant="outline" onClick={() => {
             if (clientes && clientes.length > 0) {
               exportToCsv(clientes, "clientes", [
@@ -151,6 +189,62 @@ export default function Clientes() {
         </Dialog>
         </div>
       </div>
+
+      {pendingClientes.length > 0 && (
+        <Alert className="border-amber-300 bg-amber-50 text-amber-950">
+          <AlertCircle className="h-4 w-4 text-amber-700" />
+          <AlertTitle className="flex items-center gap-2">
+            Clientes pendentes do Faturamento
+            <Badge variant="secondary" className="bg-amber-200 text-amber-900">
+              {pendingClientes.length}
+            </Badge>
+          </AlertTitle>
+          <AlertDescription className="mt-2">
+            <div className="rounded-md border border-amber-200 bg-white/70 max-h-48 overflow-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Chave</TableHead>
+                    <TableHead>Código</TableHead>
+                    <TableHead>CNPJ</TableHead>
+                    <TableHead className="w-[110px]">Ação</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {pendingClientes.slice(0, 15).map((cliente) => (
+                    <TableRow key={cliente.chave}>
+                      <TableCell className="font-mono text-xs">{cliente.chave}</TableCell>
+                      <TableCell className="font-mono text-sm">{cliente.codCliente || "-"}</TableCell>
+                      <TableCell className="font-mono text-sm">{cliente.cnpj || "-"}</TableCell>
+                      <TableCell>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={acceptPendingClienteMutation.isPending}
+                          onClick={async () => {
+                            setAcceptingChave(cliente.chave);
+                            try {
+                              await acceptPendingClienteMutation.mutateAsync({ chave: cliente.chave });
+                            } finally {
+                              setAcceptingChave(null);
+                            }
+                          }}
+                        >
+                          {acceptingChave === cliente.chave ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            "Aceitar"
+                          )}
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </AlertDescription>
+        </Alert>
+      )}
 
       <Card>
         <CardHeader><CardTitle>Lista de Clientes</CardTitle></CardHeader>

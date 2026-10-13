@@ -125,6 +125,8 @@ export default function Produtos() {
 
   const utils = trpc.useUtils();
   const { data: produtos, isLoading } = trpc.produtos.list.useQuery();
+  const { data: pendingSkus = [], isLoading: loadingPendingSkus } =
+    trpc.cadastrosSistema.pendingSkusFromFaturamento.useQuery();
   
   // Carregar dados das tabelas auxiliares
   const { data: statusList } = trpc.statusCadastro.list.useQuery();
@@ -135,6 +137,15 @@ export default function Produtos() {
   const { data: tamanhosList } = trpc.tamanhos.list.useQuery();
   const { data: marcasList } = trpc.marcas.list.useQuery();
   const { data: fluxosComRecursos } = trpc.fluxos.listComRecursos.useQuery();
+
+  const acceptPendingSkuMutation = trpc.cadastrosSistema.acceptPendingSku.useMutation({
+    onSuccess: () => {
+      utils.cadastrosSistema.pendingSkusFromFaturamento.invalidate();
+      utils.produtos.list.invalidate();
+      toast.success("SKU aceito e cadastrado!");
+    },
+    onError: (error) => toast.error(error.message),
+  });
 
   // Filtrar produtos por busca e fluxo
   const filteredProdutos = produtos?.filter((produto) => {
@@ -468,6 +479,11 @@ export default function Produtos() {
 
   const isPending = createMutation.isPending || updateMutation.isPending;
 
+  const pendingSkusPreview = pendingSkus.slice(0, 50);
+  const acceptingCod = acceptPendingSkuMutation.isPending
+    ? acceptPendingSkuMutation.variables?.codMaterial
+    : null;
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -476,6 +492,74 @@ export default function Produtos() {
           <p className="text-muted-foreground">Gerencie o cadastro de produtos</p>
         </div>
       </div>
+
+      {(loadingPendingSkus || pendingSkus.length > 0) && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-lg">
+              SKUs pendentes do Faturamento
+              {!loadingPendingSkus && (
+                <Badge variant="secondary">{pendingSkus.length}</Badge>
+              )}
+            </CardTitle>
+            <CardDescription>
+              SKUs presentes no faturamento que ainda não estão no cadastro de produtos
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {loadingPendingSkus ? (
+              <div className="flex justify-center py-6">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              </div>
+            ) : pendingSkus.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-2">Nenhum SKU pendente</p>
+            ) : (
+              <div className="rounded-md border max-h-80 overflow-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Código</TableHead>
+                      <TableHead>Marca</TableHead>
+                      <TableHead>Descrição</TableHead>
+                      <TableHead className="w-[120px]">Ação</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {pendingSkusPreview.map((sku) => (
+                      <TableRow key={sku.codMaterial}>
+                        <TableCell className="font-mono text-sm">{sku.codMaterial}</TableCell>
+                        <TableCell>{sku.marca || "-"}</TableCell>
+                        <TableCell className="max-w-md truncate">{sku.descricaoItem || "-"}</TableCell>
+                        <TableCell>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={acceptPendingSkuMutation.isPending}
+                            onClick={() =>
+                              acceptPendingSkuMutation.mutate({ codMaterial: sku.codMaterial })
+                            }
+                          >
+                            {acceptingCod === sku.codMaterial ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              "Aceitar"
+                            )}
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+                {pendingSkus.length > 50 && (
+                  <p className="text-xs text-muted-foreground px-3 py-2 border-t">
+                    Exibindo 50 de {pendingSkus.length} SKUs pendentes
+                  </p>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <Tabs defaultValue="lista" className="space-y-4">
         <TabsList>

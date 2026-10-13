@@ -13,11 +13,36 @@ import { importSystemCadastros } from "./services/system-cadastros-importer";
 import { gerarBasesPrevisaoPython, PrevisaoEtlUserError } from "./services/previsao-etl";
 import { seedDadosMestresOperacionais } from "./services/seed-mestres";
 import {
+  acceptPendingClienteFromFaturamento,
+  acceptPendingSkuFromFaturamento,
+  listPendingClientesFromFaturamento,
+  listPendingSkusFromFaturamento,
+  seedProdutosClientesFromFaturamento,
+} from "./services/seed-from-faturamento";
+import { seedCapacidadeBaseline } from "./services/seed-capacidade";
+import { invalidateDeParaCache } from "./services/de-para-map";
+import {
   calcularSazonalidadeDoFaturamento,
   desagregarJobParaCicloComercial,
   parseSazonalidadeWorkbook,
   seedSazonalidadeUniformeSeVazia,
 } from "./services/desagregacao";
+import {
+  getAaPrevReal,
+  getBaseCicloFull,
+  getMtoVariacao,
+  getPvVsCrmDetalhado,
+  getRealizadoAnualPorSku,
+  getRelatorioRfs,
+  getResumoProd,
+  getResumoRs,
+  getSazonalidadeInvalidas,
+  importCarteiraBySku,
+  importCrmParaCiclo,
+  syncPvFromCarteira,
+} from "./services/ciclo-colab-extras";
+import { syncCarteiraFromErp } from "./services/carteira-sql-sync";
+import { syncEstatisticaIaCadastros } from "./services/sync-estatistica-ia";
 
 function resolveDadosSistemaDir(explicit?: string): string {
   if (explicit?.trim()) return path.resolve(explicit.trim());
@@ -229,6 +254,17 @@ export const appRouter = router({
         pista: z.number().optional(),
       })))
       .mutation(({ input }) => db.createProdutosBatch(input)),
+
+    /** Skus Projetar — só estes entram no script de demanda. */
+    setProjetarBatch: protectedProcedure
+      .input(
+        z.object({
+          codigos: z.array(z.string()),
+          projetar: z.boolean().default(true),
+          somenteEstes: z.boolean().default(false),
+        })
+      )
+      .mutation(({ input }) => db.setProjetarEstatisticaBatch(input)),
   }),
 
   // ==================== CLIENTES ====================
@@ -657,6 +693,29 @@ export const appRouter = router({
         }));
         return db.createCarteiraPedidosBatch(data);
       }),
+
+    /** PV Aberto: Excel com coluna SKU (resolve produto via cadastro + De-Para). */
+    importBySku: protectedProcedure
+      .input(
+        z.array(
+          z.object({
+            codigo: z.string().min(1),
+            sequencia: z.number().optional(),
+            competencia: z.string(),
+            sku: z.string().min(1),
+            quantidade: z.union([z.string(), z.number()]),
+            receitaBruta: z.union([z.string(), z.number()]).optional(),
+            faturado: z.boolean().optional(),
+          })
+        )
+      )
+      .mutation(({ input }) => importCarteiraBySku(input)),
+
+    /**
+     * PV Aberto direto do ERP (MetricsPROD): Status Liberado + tipo PRG,
+     * uma linha por pedido × SKU × mês de entrega.
+     */
+    syncFromErp: protectedProcedure.mutation(() => syncCarteiraFromErp()),
   }),
 
   // ==================== FORECAST ====================
@@ -868,22 +927,27 @@ export const appRouter = router({
       .input(z.object({ cicloId: z.number() }))
       .query(({ input }) => db.getCicloComercialConsolidado(input.cicloId)),
 
+    /** Realizado mensal 2025/2026 (e outros anos) para grade MTS. */
+    realizadoAnual: protectedProcedure
+      .input(z.object({ anos: z.array(z.number()).default([2025, 2026]) }))
+      .query(({ input }) => getRealizadoAnualPorSku(input.anos)),
+
     updateItem: protectedProcedure
       .input(
         z.object({
           id: z.number(),
-          m1: z.string().optional(),
-          m2: z.string().optional(),
-          m3: z.string().optional(),
-          m4: z.string().optional(),
-          m5: z.string().optional(),
-          m6: z.string().optional(),
-          m7: z.string().optional(),
-          m8: z.string().optional(),
-          m9: z.string().optional(),
-          m10: z.string().optional(),
-          m11: z.string().optional(),
-          m12: z.string().optional(),
+          m1: z.string().nullable().optional(),
+          m2: z.string().nullable().optional(),
+          m3: z.string().nullable().optional(),
+          m4: z.string().nullable().optional(),
+          m5: z.string().nullable().optional(),
+          m6: z.string().nullable().optional(),
+          m7: z.string().nullable().optional(),
+          m8: z.string().nullable().optional(),
+          m9: z.string().nullable().optional(),
+          m10: z.string().nullable().optional(),
+          m11: z.string().nullable().optional(),
+          m12: z.string().nullable().optional(),
           qtdeColaborada: z.string().optional(),
           projetar: z.boolean().optional(),
           planoColab: z.enum(["MTS", "JITO", "PV_MTO", "CRM"]).optional(),
@@ -901,7 +965,60 @@ export const appRouter = router({
           status: z.enum(["ABERTO", "EM_COLABORACAO", "CONSOLIDADO", "FECHADO"]),
         })
       )
-      .mutation(({ input }) => db.updateCicloComercial(input.id, { status: input.status })),
+      .mutation(async ({ input }) => {
+        if (input.status === "CONSOLIDADO" || input.status === "FECHADO") {
+          const [pvCrm, resumoRs, itens] = await Promise.all([
+            getPvVsCrmDetalhado(input.id),
+            getResumoRs(input.id),
+            db.listCicloComercialItens(input.id),
+          ]);
+          if (itens.length === 0) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: "O ciclo não possui itens para consolidar.",
+            });
+          }
+          if (pvCrm.sobrepostos > 0) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: `Corrija ${pvCrm.sobrepostos} sobreposições PV x CRM antes de consolidar.`,
+            });
+          }
+          if (resumoRs.skusSemPreco.length > 0) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message:
+                "Existem SKUs sem preço de venda: " +
+                resumoRs.skusSemPreco.slice(0, 20).join(", "),
+            });
+          }
+          const crmIncompletos = itens.filter(
+            item =>
+              item.planoColab === "CRM" &&
+              (!item.crmTipo || !item.crmTemperatura)
+          );
+          if (crmIncompletos.length > 0) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: `Reimporte ${crmIncompletos.length} itens CRM sem tipo/temperatura.`,
+            });
+          }
+        }
+        return db.updateCicloComercial(input.id, { status: input.status });
+      }),
+
+    delete: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        const ciclo = await db.getCicloComercial(input.id);
+        if (ciclo?.status === "FECHADO") {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "Ciclo fechado faz parte do histórico e não pode ser excluído.",
+          });
+        }
+        return db.deleteCicloComercial(input.id);
+      }),
 
     desagregarDoJob: protectedProcedure
       .input(
@@ -922,12 +1039,83 @@ export const appRouter = router({
           createdBy: ctx.user?.email || ctx.user?.name || "usuario",
         });
       }),
+
+    syncPvFromCarteira: protectedProcedure
+      .input(z.object({ cicloId: z.number() }))
+      .mutation(({ input }) => syncPvFromCarteira(input.cicloId)),
+
+    importCrm: protectedProcedure
+      .input(
+        z.object({
+          cicloId: z.number(),
+          rows: z.array(
+            z.object({
+              sku: z.string(),
+              descricao: z.string().optional(),
+              marca: z.string().optional(),
+              card: z.string().optional(),
+              cliente: z.string().optional(),
+              gestor: z.string().optional(),
+              temperatura: z.string().optional(),
+              tipo: z.string().optional(),
+              orcamento: z.number().optional(),
+              dataFaturamento: z.string().optional(),
+              qtdMes: z.number().optional(),
+              valorVenda: z.number().optional(),
+              modalidade: z.string().optional(),
+              m1: z.number().optional(),
+              m2: z.number().optional(),
+              m3: z.number().optional(),
+              m4: z.number().optional(),
+              m5: z.number().optional(),
+              m6: z.number().optional(),
+              m7: z.number().optional(),
+              m8: z.number().optional(),
+              m9: z.number().optional(),
+              m10: z.number().optional(),
+              m11: z.number().optional(),
+              m12: z.number().optional(),
+            })
+          ),
+        })
+      )
+      .mutation(({ input }) => importCrmParaCiclo(input.cicloId, input.rows)),
+
+    pvVsCrm: protectedProcedure
+      .input(z.object({ cicloId: z.number() }))
+      .query(({ input }) => getPvVsCrmDetalhado(input.cicloId)),
+
+    resumoRs: protectedProcedure
+      .input(z.object({ cicloId: z.number() }))
+      .query(({ input }) => getResumoRs(input.cicloId)),
+
+    baseCicloFull: protectedProcedure
+      .input(z.object({ cicloId: z.number() }))
+      .query(({ input }) => getBaseCicloFull(input.cicloId)),
+
+    resumoProd: protectedProcedure
+      .input(z.object({ cicloId: z.number() }))
+      .query(({ input }) => getResumoProd(input.cicloId)),
+
+    mtoVariacao: protectedProcedure
+      .input(z.object({ cicloId: z.number() }))
+      .query(({ input }) => getMtoVariacao(input.cicloId)),
+
+    relatorioRfs: protectedProcedure
+      .input(z.object({ cicloId: z.number() }))
+      .query(({ input }) => getRelatorioRfs(input.cicloId)),
+
+    aaComparativo: protectedProcedure
+      .input(z.object({ cicloId: z.number() }))
+      .query(({ input }) => getAaPrevReal(input.cicloId)),
   }),
 
   sazonalidadeMarca: router({
     list: protectedProcedure
       .input(z.object({ marcaNome: z.string().optional() }).optional())
       .query(({ input }) => db.listSazonalidadeMarca(input?.marcaNome)),
+
+    invalidas: protectedProcedure.query(() => getSazonalidadeInvalidas()),
 
     seedUniforme: protectedProcedure.mutation(() => seedSazonalidadeUniformeSeVazia()),
 
@@ -1062,14 +1250,42 @@ export const appRouter = router({
   // ==================== FATURAMENTO ====================
   faturamento: router({
     list: protectedProcedure
-      .input(z.object({ limit: z.number().default(100) }).optional())
-      .query(({ input }) => db.listFaturamento(input?.limit)),
+      .input(
+        z
+          .object({
+            limit: z.number().min(1).max(5000).default(100),
+            offset: z.number().min(0).default(0),
+            year: z.number().int().optional(),
+            month: z.number().int().min(1).max(12).optional(),
+          })
+          .optional(),
+      )
+      .query(({ input }) =>
+        db.listFaturamento({
+          limit: input?.limit ?? 100,
+          offset: input?.offset ?? 0,
+          year: input?.year,
+          month: input?.month,
+        }),
+      ),
     
-    stats: protectedProcedure.query(() => db.getFaturamentoStats()),
+    stats: protectedProcedure
+      .input(
+        z
+          .object({
+            year: z.number().int().optional(),
+            month: z.number().int().min(1).max(12).optional(),
+          })
+          .optional(),
+      )
+      .query(({ input }) => db.getFaturamentoStats({ year: input?.year, month: input?.month })),
     
     porMes: protectedProcedure
       .input(z.object({ ano: z.number() }))
       .query(({ input }) => db.getFaturamentoPorMes(input.ano)),
+
+    /** Pré-check: mês fechado (anterior ao vigente) tem faturamento? */
+    mesFechadoCheck: protectedProcedure.query(() => db.getFaturamentoMesFechadoCheck()),
     
     importBatch: protectedProcedure
       .input(z.array(z.object({
@@ -1093,15 +1309,34 @@ export const appRouter = router({
         descCfop: z.string().optional(),
         tipoFaturamento: z.enum(["DEVOLUCAO", "SAIDA"]).optional(),
       })))
-      .mutation(({ input }) => {
+      .mutation(async ({ input }) => {
         const data = input.map(item => ({
           ...item,
           dataEmissao: new Date(item.dataEmissao),
         }));
-        return db.createFaturamentoBatch(data);
+        const result = await db.createFaturamentoBatch(data);
+        await db.rebuildFaturamentoResumo();
+        return result;
       }),
     
     clear: protectedProcedure.mutation(() => db.clearFaturamento()),
+
+    /** Testa conexão com MetricsPROD (SQL Server ERP). */
+    testSqlConnection: protectedProcedure.query(async () => {
+      const { testErpConnection } = await import("./services/faturamento-sql-sync");
+      return testErpConnection();
+    }),
+
+    /**
+     * Sincroniza faturamento a partir da query SQL do ERP (substitui planilha).
+     * Limpa a base local e recarrega os itens faturados de MetricsPROD.
+     */
+    syncFromSql: protectedProcedure
+      .input(z.object({ clearBefore: z.boolean().default(true) }).optional())
+      .mutation(async ({ input }) => {
+        const { syncFaturamentoFromSql } = await import("./services/faturamento-sql-sync");
+        return syncFaturamentoFromSql({ clearBefore: input?.clearBefore ?? true });
+      }),
     
     delete: protectedProcedure
       .input(z.object({ id: z.number() }))
@@ -1258,24 +1493,38 @@ export const appRouter = router({
         skuAntigo: z.string().min(1), 
         skuNovo: z.string().min(1), 
       }))
-      .mutation(({ input }) => db.createDeParaCodigo(input)),
+      .mutation(async ({ input }) => {
+        const result = await db.createDeParaCodigo(input);
+        invalidateDeParaCache();
+        return result;
+      }),
     update: protectedProcedure
       .input(z.object({ 
         id: z.number(), 
         skuAntigo: z.string().optional(), 
         skuNovo: z.string().optional(), 
       }))
-      .mutation(({ input }) => {
+      .mutation(async ({ input }) => {
         const { id, ...rest } = input;
-        return db.updateDeParaCodigo(id, rest);
+        const result = await db.updateDeParaCodigo(id, rest);
+        invalidateDeParaCache();
+        return result;
       }),
-    delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(({ input }) => db.deleteDeParaCodigo(input.id)),
+    delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ input }) => {
+      const result = await db.deleteDeParaCodigo(input.id);
+      invalidateDeParaCache();
+      return result;
+    }),
     importBatch: protectedProcedure
       .input(z.array(z.object({ 
         skuAntigo: z.string(), 
         skuNovo: z.string(), 
       })))
-      .mutation(({ input }) => db.createDeParaCodigosBatch(input)),
+      .mutation(async ({ input }) => {
+        const result = await db.createDeParaCodigosBatch(input);
+        invalidateDeParaCache();
+        return result;
+      }),
     getCodigoAtual: protectedProcedure
       .input(z.object({ codigo: z.string() }))
       .query(({ input }) => db.getCodigoAtual(input.codigo)),
@@ -1320,11 +1569,11 @@ export const appRouter = router({
   previsaoPython: router({
     list: protectedProcedure
       .input(z.object({ limit: z.number().default(20) }).optional())
-      .query(({ input }) => db.listPrevisaoPythonJobs(input?.limit ?? 20)),
+      .query(({ input }) => previsaoPythonService.listPrevisaoJobs(input?.limit ?? 20)),
 
     getById: protectedProcedure
       .input(z.object({ id: z.number() }))
-      .query(({ input }) => db.getPrevisaoPythonJobById(input.id)),
+      .query(({ input }) => previsaoPythonService.getPrevisaoJobById(input.id)),
 
     create: protectedProcedure
       .input(
@@ -1369,6 +1618,7 @@ export const appRouter = router({
           .optional()
       )
       .mutation(async ({ input, ctx }) => {
+        const sourceSync = await syncEstatisticaIaCadastros();
         const bases = await runGerarBasesOrThrow({
           dataInicio: input?.dataInicio,
           dataFim: input?.dataFim,
@@ -1376,6 +1626,11 @@ export const appRouter = router({
         const createdBy = ctx.user?.email || ctx.user?.name || "usuario";
         const job = await previsaoPythonService.createAndQueuePrevisaoJob({
           createdBy,
+          origin: "SYSTEM",
+          sourceMetadata: {
+            cadastro: sourceSync.fontes,
+            previstoOrigem: bases.stats.previstoOrigem,
+          },
           vendas: {
             fileName: "1- Base de Dados Vendas.xlsx",
             contentBase64: bases.vendasBase64,
@@ -1393,8 +1648,15 @@ export const appRouter = router({
               }
             : null,
         });
-        return { job, stats: bases.stats };
+        return { job, stats: bases.stats, sourceSync };
       }),
+
+    /** Sincroniza Cadastros + Skus Projetar + Desconsiderar (Estatística IA → produtos). */
+    syncEstatisticaIaCadastros: protectedProcedure
+      .input(z.object({ dirPath: z.string().optional() }).optional())
+      .mutation(({ input }) =>
+        syncEstatisticaIaCadastros({ dir: input?.dirPath })
+      ),
 
     gerarBasesPreview: protectedProcedure
       .input(
@@ -1864,6 +2126,62 @@ export const appRouter = router({
           dryRun: input?.dryRun ?? false,
         });
       }),
+
+    /**
+     * Cria produtos e clientes a partir dos códigos distintos do faturamento local.
+     * Idempotente — não duplica codItem / codigo / CNPJ já existentes.
+     */
+    seedFromFaturamento: protectedProcedure
+      .input(z.object({ dryRun: z.boolean().default(false) }).optional())
+      .mutation(({ input }) =>
+        seedProdutosClientesFromFaturamento({ dryRun: input?.dryRun ?? false }),
+      ),
+
+    /** SKUs no faturamento que ainda não estão em Produtos. */
+    pendingSkusFromFaturamento: protectedProcedure.query(() =>
+      listPendingSkusFromFaturamento()
+    ),
+
+    acceptPendingSku: protectedProcedure
+      .input(z.object({ codMaterial: z.string().min(1) }))
+      .mutation(({ input }) => acceptPendingSkuFromFaturamento(input.codMaterial)),
+
+    /** Clientes no faturamento ainda não cadastrados. */
+    pendingClientesFromFaturamento: protectedProcedure.query(() =>
+      listPendingClientesFromFaturamento()
+    ),
+
+    acceptPendingCliente: protectedProcedure
+      .input(z.object({ chave: z.string().min(1) }))
+      .mutation(({ input }) => acceptPendingClienteFromFaturamento(input.chave)),
+
+    /**
+     * Baseline de capacidade: velocidade calibrada, config mensal (turno),
+     * fluxos por linha e fluxoId nos produtos.
+     */
+    seedCapacidade: protectedProcedure
+      .input(
+        z
+          .object({
+            ano: z.number().int().optional(),
+            cicloId: z.number().int().optional(),
+            turnoHora: z.string().optional(),
+            utilizacaoAlvo: z.number().min(0.3).max(0.95).optional(),
+            dryRun: z.boolean().default(false),
+            forceVelocidade: z.boolean().default(true),
+          })
+          .optional()
+      )
+      .mutation(({ input }) =>
+        seedCapacidadeBaseline({
+          ano: input?.ano,
+          cicloId: input?.cicloId,
+          turnoHora: input?.turnoHora,
+          utilizacaoAlvo: input?.utilizacaoAlvo,
+          dryRun: input?.dryRun ?? false,
+          forceVelocidade: input?.forceVelocidade ?? true,
+        })
+      ),
   }),
 
   // ==================== DASHBOARD ====================

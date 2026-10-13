@@ -45,6 +45,15 @@ export default function GerenciamentoUsuarios() {
   const [editDataDialogOpen, setEditDataDialogOpen] = useState(false);
   const [editUserData, setEditUserData] = useState({ name: "", email: "" });
   const [filterNivel, setFilterNivel] = useState<string>("all");
+  const [novoNivelDialogOpen, setNovoNivelDialogOpen] = useState(false);
+  const [novoNivelData, setNovoNivelData] = useState({
+    nivel: 4,
+    nome: "",
+    descricao: "",
+    podeEditarCadastros: false,
+    podeVerTodasMarcas: false,
+    podeGerenciarUsuarios: false,
+  });
 
   // Queries
   const { data: usuarios = [], isLoading: loadingUsuarios, refetch: refetchUsuarios } = trpc.usuarios.list.useQuery();
@@ -90,6 +99,25 @@ export default function GerenciamentoUsuarios() {
     },
     onError: (error) => {
       toast.error("Erro ao inicializar níveis: " + error.message);
+    }
+  });
+
+  const createNivelMutation = trpc.niveisAcesso.create.useMutation({
+    onSuccess: () => {
+      toast.success("Nível de acesso criado!");
+      refetchNiveis();
+      setNovoNivelDialogOpen(false);
+      setNovoNivelData({
+        nivel: 4,
+        nome: "",
+        descricao: "",
+        podeEditarCadastros: false,
+        podeVerTodasMarcas: false,
+        podeGerenciarUsuarios: false,
+      });
+    },
+    onError: (error) => {
+      toast.error("Erro ao criar nível: " + error.message);
     }
   });
 
@@ -452,12 +480,18 @@ export default function GerenciamentoUsuarios() {
                   Configuração dos níveis de permissão do sistema
                 </CardDescription>
               </div>
-              {niveisAcesso.length === 0 && (
-                <Button onClick={() => initNiveisMutation.mutate()}>
-                  <Settings className="h-4 w-4 mr-2" />
-                  Inicializar Níveis Padrão
+              <div className="flex gap-2">
+                <Button variant="outline" onClick={() => setNovoNivelDialogOpen(true)}>
+                  <UserPlus className="h-4 w-4 mr-2" />
+                  Novo nível
                 </Button>
-              )}
+                {niveisAcesso.length === 0 && (
+                  <Button onClick={() => initNiveisMutation.mutate()}>
+                    <Settings className="h-4 w-4 mr-2" />
+                    Inicializar Níveis Padrão
+                  </Button>
+                )}
+              </div>
             </CardHeader>
             <CardContent>
               {loadingNiveis ? (
@@ -801,6 +835,113 @@ export default function GerenciamentoUsuarios() {
             </Button>
             <Button onClick={handleSaveData} disabled={updateDataMutation.isPending}>
               {updateDataMutation.isPending ? "Salvando..." : "Salvar"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog: Novo Nível de Acesso */}
+      <Dialog open={novoNivelDialogOpen} onOpenChange={setNovoNivelDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Shield className="h-5 w-5" />
+              Novo nível
+            </DialogTitle>
+            <DialogDescription>
+              Crie um nível de acesso personalizado com permissões específicas
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="novo-nivel-numero">Nível (número)</Label>
+                <Input
+                  id="novo-nivel-numero"
+                  type="number"
+                  min={1}
+                  value={novoNivelData.nivel}
+                  onChange={(e) =>
+                    setNovoNivelData({ ...novoNivelData, nivel: parseInt(e.target.value, 10) || 1 })
+                  }
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="novo-nivel-nome">Nome *</Label>
+                <Input
+                  id="novo-nivel-nome"
+                  placeholder="Ex: Analista"
+                  value={novoNivelData.nome}
+                  onChange={(e) => setNovoNivelData({ ...novoNivelData, nome: e.target.value })}
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="novo-nivel-descricao">Descrição</Label>
+              <Input
+                id="novo-nivel-descricao"
+                placeholder="Breve descrição do nível"
+                value={novoNivelData.descricao}
+                onChange={(e) => setNovoNivelData({ ...novoNivelData, descricao: e.target.value })}
+              />
+            </div>
+            <div className="space-y-3 rounded-lg border p-3">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="perm-editar-cadastros" className="cursor-pointer">
+                  Pode editar cadastros
+                </Label>
+                <Switch
+                  id="perm-editar-cadastros"
+                  checked={novoNivelData.podeEditarCadastros}
+                  onCheckedChange={(checked) =>
+                    setNovoNivelData({ ...novoNivelData, podeEditarCadastros: checked })
+                  }
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="perm-ver-marcas" className="cursor-pointer">
+                  Pode ver todas as marcas
+                </Label>
+                <Switch
+                  id="perm-ver-marcas"
+                  checked={novoNivelData.podeVerTodasMarcas}
+                  onCheckedChange={(checked) =>
+                    setNovoNivelData({ ...novoNivelData, podeVerTodasMarcas: checked })
+                  }
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="perm-gerenciar-usuarios" className="cursor-pointer">
+                  Pode gerenciar usuários
+                </Label>
+                <Switch
+                  id="perm-gerenciar-usuarios"
+                  checked={novoNivelData.podeGerenciarUsuarios}
+                  onCheckedChange={(checked) =>
+                    setNovoNivelData({ ...novoNivelData, podeGerenciarUsuarios: checked })
+                  }
+                />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setNovoNivelDialogOpen(false)}>
+              Cancelar
+            </Button>
+            <Button
+              disabled={!novoNivelData.nome.trim() || createNivelMutation.isPending}
+              onClick={() =>
+                createNivelMutation.mutate({
+                  nivel: novoNivelData.nivel,
+                  nome: novoNivelData.nome.trim(),
+                  descricao: novoNivelData.descricao.trim() || undefined,
+                  podeEditarCadastros: novoNivelData.podeEditarCadastros,
+                  podeVerTodasMarcas: novoNivelData.podeVerTodasMarcas,
+                  podeGerenciarUsuarios: novoNivelData.podeGerenciarUsuarios,
+                })
+              }
+            >
+              {createNivelMutation.isPending ? "Criando..." : "Criar nível"}
             </Button>
           </DialogFooter>
         </DialogContent>

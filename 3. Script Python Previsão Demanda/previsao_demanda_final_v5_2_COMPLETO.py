@@ -70,6 +70,36 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.model_selection import TimeSeriesSplit
 import re
+import traceback
+import glob
+from collections import Counter
+
+try:
+    from previsao_meses import (
+        MESES_PT,
+        MESES_PT_NUM,
+        extrair_marca_codigo,
+        normalizar_rotulo_mes,
+        rotulo_mes_pt,
+    )
+except ImportError:
+    # Execução dentro do workdir do job (script copiado sem o módulo auxiliar).
+    from pathlib import Path
+    import importlib.util as _importlib_util
+
+    _meses_path = Path(__file__).resolve().with_name("previsao_meses.py")
+    if _meses_path.exists():
+        _spec = _importlib_util.spec_from_file_location("previsao_meses", _meses_path)
+        _mod = _importlib_util.module_from_spec(_spec)
+        assert _spec and _spec.loader
+        _spec.loader.exec_module(_mod)
+        MESES_PT = _mod.MESES_PT
+        MESES_PT_NUM = _mod.MESES_PT_NUM
+        rotulo_mes_pt = _mod.rotulo_mes_pt
+        normalizar_rotulo_mes = _mod.normalizar_rotulo_mes
+        extrair_marca_codigo = _mod.extrair_marca_codigo
+    else:
+        raise
 
 # Importar modelos estatisticos avancados
 try:
@@ -141,6 +171,7 @@ except:
     except:
         locale.setlocale(locale.LC_ALL, '')  # Fallback para o locale padrão
 
+
 class PrevisaoDemanda:
     """
     Classe para previsão de demanda com métodos estatísticos.
@@ -168,6 +199,46 @@ class PrevisaoDemanda:
         self.resultados_backtest = {}
         self.melhor_modelo_por_item = {}
         
+    def _extrair_marca(self, codigo):
+        """
+        Extrai a marca de um código no formato 'XX.XX.XXXXXX-Marca' ou 'MTS-Marca-...'.
+        Método centralizado para evitar duplicação.
+        
+        Args:
+            codigo: Código do produto (string)
+            
+        Returns:
+            str: Nome da marca extraída ou 'INDEFINIDA'
+        """
+        return extrair_marca_codigo(codigo)
+    
+    def _normalizar_colunas_meses_dataframe(self, df, colunas_chave):
+        """
+        Renomeia colunas de competência para o formato canônico pt-BR (jan-20).
+        Evita perda de meses quando o Excel entrega datetime / locale EN.
+        """
+        from collections import defaultdict
+
+        grupos = defaultdict(list)
+        for col in list(df.columns):
+            if col in colunas_chave:
+                continue
+            rotulo = normalizar_rotulo_mes(col)
+            if rotulo:
+                grupos[rotulo].append(col)
+
+        for rotulo, cols in grupos.items():
+            primario = cols[0]
+            for extra in cols[1:]:
+                df[primario] = (
+                    pd.to_numeric(df[primario], errors="coerce").fillna(0)
+                    + pd.to_numeric(df[extra], errors="coerce").fillna(0)
+                )
+                df = df.drop(columns=[extra])
+            if primario != rotulo:
+                df = df.rename(columns={primario: rotulo})
+        return df
+
     def carregar_dados(self, caminho_arquivo):
         """
         Carrega dados históricos de vendas de um arquivo Excel.
@@ -193,32 +264,26 @@ class PrevisaoDemanda:
             
             # Renomear a primeira coluna para 'Codigo' (padronizar)
             primeira_coluna = df.columns[0]
-            if primeira_coluna in ['Codificação', 'Codigo']:
+            if primeira_coluna in ['Codificação', 'Codigo', 'Código']:
                 df = df.rename(columns={primeira_coluna: 'Codigo'})
             else:
                 df.columns = ['Codigo'] + list(df.columns[1:])
+
+            df = self._normalizar_colunas_meses_dataframe(df, colunas_chave=['Codigo'])
             
-            # Identificar colunas de meses (formato mmm-yy, mmm/yyyy ou datetime)
+            # Identificar colunas de meses (formato canônico mmm-yy)
             colunas_meses = []
             print("Debug - Analisando colunas:")
             for col in df.columns[1:]:  # Pular a primeira coluna (Codigo)
-                print(f"  Coluna: {col} | Tipo: {type(col)} | É datetime: {isinstance(col, datetime)}")
-                
-                if isinstance(col, str):
-                    # Verificar se é formato de data string
-                    if re.match(r'^[A-Za-z]{3}[-/]\d{2,4}$', str(col)):
-                        colunas_meses.append(col)
-                        print(f"    ✅ Adicionada como string de data: {col}")
-                elif isinstance(col, datetime):
-                    # Coluna é um objeto datetime (Excel converteu automaticamente)
+                rotulo = normalizar_rotulo_mes(col)
+                print(f"  Coluna: {col} | Tipo: {type(col)} | Rótulo: {rotulo}")
+                if rotulo and col == rotulo:
                     colunas_meses.append(col)
-                    print(f"    ✅ Adicionada como datetime: {col}")
-                elif pd.api.types.is_datetime64_any_dtype(df[col]):
-                    # Verificar se a coluna contém dados datetime
-                    colunas_meses.append(col)
-                    print(f"    ✅ Adicionada como coluna datetime: {col}")
+                    print(f"    ✅ Adicionada como mês: {col}")
                 else:
                     print(f"    ❌ Ignorada: {col}")
+
+            colunas_meses = self._ordenar_meses_cronologicamente(colunas_meses)
             
             self.colunas_meses = colunas_meses
             print(f"Colunas de meses identificadas: {len(colunas_meses)}")
@@ -250,8 +315,6 @@ class PrevisaoDemanda:
         Returns:
             pd.DataFrame: DataFrame com dados de previsão ou None se erro.
         """
-    def carregar_dados_previsto(self, caminho_base):
-        """Carrega dados de previsão do arquivo 1-BasedeDadosPrevisto.xlsx."""
         try:
             # Construir caminho do arquivo de previsão
             diretorio_base = os.path.dirname(caminho_base)
@@ -301,7 +364,6 @@ class PrevisaoDemanda:
             
             # Tentar encontrar arquivos com padrão similar no diretório de entrada
             if not caminho_previsto:
-                import glob
                 print("   Procurando arquivos com padrão similar...")
                 
                 # Procurar no diretório base primeiro
@@ -395,14 +457,13 @@ class PrevisaoDemanda:
                 # Tentar usar a primeira coluna mesmo assim
                 print(f"Aviso: Coluna de código '{primeira_coluna}' não é padrão. Usando mesmo assim.")
                 df_previsto = df_previsto.rename(columns={primeira_coluna: 'Codigo'})
-            
-            # ✅ CORREÇÃO: NÃO converter hífen para barra - manter formato original
-            # O mapeamento na função analisar_acuracidade_previsao já trata diferentes formatos
-            print(f"Mantendo formato original das colunas de meses")
+
+            df_previsto = self._normalizar_colunas_meses_dataframe(df_previsto, colunas_chave=['Codigo'])
+            print(f"Colunas após normalização: {list(df_previsto.columns)}")
             
             # ✅ CORREÇÃO: Converter valores de meses para numérico
             # Tratar valores como ' -   ', '-', 'nan', strings vazias, etc.
-            colunas_meses_prev = [col for col in df_previsto.columns if col != 'Codigo']
+            colunas_meses_prev = [col for col in df_previsto.columns if col != 'Codigo' and normalizar_rotulo_mes(col)]
             
             def converter_para_numerico(valor):
                 """Converte valor para numérico, tratando casos especiais."""
@@ -436,46 +497,6 @@ class PrevisaoDemanda:
         except Exception as e:
             print(f"Erro ao carregar dados de previsão: {str(e)}")
             return None
-    
-    def gerar_dados_exemplo(self):
-        """
-        Gera dados de exemplo para demonstração.
-        
-        Returns:
-            pd.DataFrame: DataFrame com dados de exemplo.
-        """
-        print("Gerando dados de exemplo...")
-        
-        # Criar lista de códigos de produtos
-        codigos = [f"PROD_{i:03d}" for i in range(1, 101)]
-        
-        # Criar lista de meses (últimos 24 meses)
-        meses = []
-        data_base = datetime(2023, 1, 1)
-        for i in range(24):
-            data_mes = data_base + relativedelta(months=i)
-            meses.append(data_mes.strftime("%b/%Y"))
-        
-        self.colunas_meses = meses
-        
-        # Criar DataFrame
-        data = {'Codigo': codigos}
-        
-        # Gerar dados de vendas com sazonalidade
-        np.random.seed(42)
-        for i, mes in enumerate(meses):
-            # Adicionar sazonalidade (maior venda no final do ano)
-            sazonalidade = 1.0 + 0.3 * np.sin(2 * np.pi * i / 12)
-            vendas = np.random.poisson(100 * sazonalidade, len(codigos))
-            # Adicionar alguns zeros para simular produtos sem venda
-            vendas[np.random.choice(len(codigos), size=int(len(codigos) * 0.1), replace=False)] = 0
-            data[mes] = vendas
-        
-        df = pd.DataFrame(data)
-        self.df_historico = df
-        
-        print(f"Dados de exemplo gerados: {df.shape[0]} produtos, {len(meses)} meses")
-        return df
     
     def contar_meses_zero_consecutivos(self, row):
         """Conta quantos meses consecutivos desde o início têm vendas = 0"""
@@ -573,7 +594,6 @@ class PrevisaoDemanda:
             
             # Função para calcular variação mantendo valores reais
             def calcular_variacao(row):
-                import numpy as np  # Importar numpy localmente
                 atual = row[f'TOTAL_{periodo}M_ATUAL']
                 anterior = row[f'TOTAL_{periodo}M_ANTERIOR']
                 
@@ -593,7 +613,6 @@ class PrevisaoDemanda:
             
             # Função para calcular flags informativos (sem alterar o valor da variação)
             def calcular_flag_variacao(row):
-                import pandas as pd  # Importar pandas localmente
                 atual = row[f'TOTAL_{periodo}M_ATUAL']
                 anterior = row[f'TOTAL_{periodo}M_ANTERIOR']
                 variacao = row[f'VAR_{periodo}M_PCT']
@@ -654,7 +673,6 @@ class PrevisaoDemanda:
             volumes_medios.append(volume_medio_mensal)
         
         # Calcular percentis
-        import numpy as np
         percentil_80 = np.percentile(volumes_medios, 80)  # Top 20% = Categoria A
         percentil_30 = np.percentile(volumes_medios, 30)  # Bottom 30% = Categoria C
         
@@ -697,7 +715,6 @@ class PrevisaoDemanda:
         # Com detecção de produtos novos
         # Retorna tupla (ajuste, premissa)
         def calcular_sugestao_ajuste_tratada(row):
-            import pandas as pd  # Importar pandas localmente
             var_6m = row['VAR_6M_PCT']
             var_12m = row['VAR_12M_PCT']
             flag_6m = row.get('FLAG_VAR_6M', 'NORMAL')
@@ -869,7 +886,9 @@ class PrevisaoDemanda:
         datas_projecao = []
         for i in range(1, self.meses_projecao + 1):
             data_proj = ultimo_mes_dt + relativedelta(months=i)
-            datas_projecao.append(data_proj.strftime("%b/%Y"))
+            datas_projecao.append(
+                f"{MESES_PT[data_proj.month - 1]}/{data_proj.year}"
+            )
         
         self.colunas_projecao = datas_projecao
         
@@ -1297,7 +1316,7 @@ class PrevisaoDemanda:
                 max_depth=5,
                 min_samples_split=3,
                 random_state=42,
-                n_jobs=-1
+                n_jobs=max(1, int(os.environ.get("PREVISAO_PYTHON_THREADS", "2")))
             )
             model.fit(X, y)
             
@@ -1384,6 +1403,7 @@ class PrevisaoDemanda:
                         subsample=0.8,
                         colsample_bytree=0.8,
                         random_state=42,
+                        n_jobs=max(1, int(os.environ.get("PREVISAO_PYTHON_THREADS", "2"))),
                         verbosity=0
                     )
                     model.fit(X, y)
@@ -2445,7 +2465,6 @@ class PrevisaoDemanda:
         print(f"Total de itens analisados: {len(resultados_backtest)}")
         
         if periodos_utilizados:
-            from collections import Counter
             distribuicao = Counter(periodos_utilizados)
             print("Distribuição por período de teste (VERSÃO 5.2 - ROBUSTA):")
             for periodo in sorted(distribuicao.keys()):
@@ -2551,9 +2570,6 @@ class PrevisaoDemanda:
         df['TOTAL_CENARIO_AJUSTADO'] = df.apply(calcular_cenario_ajustado, axis=1)
         
         # Adicionar coluna de meses de backtest ao DataFrame principal
-        # (histórico curto / 0 itens no backtest pode nunca popular o dict)
-        if not hasattr(self, "meses_backtest_por_item") or self.meses_backtest_por_item is None:
-            self.meses_backtest_por_item = {}
         meses_backtest_lista = []
         for _, row in df.iterrows():
             codigo = row['Codigo']
@@ -2716,6 +2732,16 @@ class PrevisaoDemanda:
                 else:
                     print("⚠️ Aba de Comportamento de Clientes Por Marca não gerada - dados não disponíveis ou vazios.")
                 
+                # Aba Clientes_Analise (análise detalhada por marca/item mês a mês)
+                if self.df_clientes is not None:
+                    try:
+                        print("Gerando aba Clientes_Analise...")
+                        self._gerar_aba_clientes_analise(writer)
+                        print("✅ Aba Clientes_Analise gerada com sucesso")
+                    except Exception as e:
+                        print(f"❌ Erro na aba Clientes_Analise: {str(e)}")
+                        traceback.print_exc()
+                
                 # Aba Metodologia
                 try:
                     self._gerar_aba_metodologia(writer)
@@ -2736,14 +2762,12 @@ class PrevisaoDemanda:
                         workbook.move_sheet('Visao_Executiva', offset=-idx)
                 except Exception as e:
                     print(f"❌ Erro na aba Visao_Executiva: {str(e)}")
-                    import traceback
                     traceback.print_exc()
             
             print(f"\n✅ Relatório Excel gerado com sucesso: {caminho_saida}")
             
         except Exception as e:
             print(f"❌ Erro crítico ao gerar relatório Excel: {str(e)}")
-            import traceback
             traceback.print_exc()
     def _gerar_aba_visao_executiva(self, writer):
         """
@@ -2753,7 +2777,6 @@ class PrevisaoDemanda:
         print("Gerando aba: Visao Executiva (Consolidada)")
         
         try:
-            import pandas as pd
             from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
             from openpyxl.utils import get_column_letter
             
@@ -2953,18 +2976,6 @@ class PrevisaoDemanda:
             if hasattr(self, 'df_comportamento_por_marca') and self.df_comportamento_por_marca is not None and not self.df_comportamento_por_marca.empty:
                 df_clientes = self.df_comportamento_por_marca.copy()
                 
-                def extrair_marca(codigo):
-                    if pd.isna(codigo):
-                        return None
-                    codigo_str = str(codigo).strip()
-                    partes = codigo_str.split('-')
-                    if len(partes) >= 2:
-                        if partes[0] in ['MTO', 'MTS']:
-                            if len(partes) >= 3 and partes[1].lower() == "calvin" and partes[2].lower() == "klein":
-                                return "Calvin Klein"
-                            return partes[1]
-                    return None
-                
                 col_marca = None
                 for possivel in ['Marca', 'MARCA', 'marca']:
                     if possivel in df_clientes.columns:
@@ -2980,8 +2991,8 @@ class PrevisaoDemanda:
                     for col_origem, col_destino in colunas_clientes:
                         valores = []
                         for codigo in codigos:
-                            marca = extrair_marca(codigo)
-                            if marca and marca in clientes_dict:
+                            marca = self._extrair_marca(codigo)
+                            if marca and marca != 'INDEFINIDA' and marca in clientes_dict:
                                 row_cli = clientes_dict[marca]
                                 if col_origem in row_cli.index:
                                     valores.append(row_cli[col_origem])
@@ -3270,7 +3281,6 @@ class PrevisaoDemanda:
             
         except Exception as e:
             print(f"Erro ao gerar aba Visao Executiva: {str(e)}")
-            import traceback
             traceback.print_exc()
 
 
@@ -3440,7 +3450,6 @@ class PrevisaoDemanda:
         # ✅ NOVA: Adicionar coluna STATUS_ATIVIDADE
         def calcular_status_atividade(row):
             """Determina se o item é FREQUENTE, REATIVADO, NOVO ou ESPORÁDICO."""
-            import pandas as pd
             
             # Analisar últimos 24 meses
             ultimos_24_meses = self.colunas_meses[-24:] if len(self.colunas_meses) >= 24 else self.colunas_meses
@@ -4275,7 +4284,6 @@ class PrevisaoDemanda:
     
     def _calcular_mape(self, realizados, previstos):
         """Calcula Mean Absolute Percentage Error usando a fórmula correta: |Realizado - Previsto| / Realizado."""
-        import numpy as np
         
         if not realizados or not previstos:
             return np.nan
@@ -4300,7 +4308,6 @@ class PrevisaoDemanda:
     
     def _calcular_wmape(self, realizados, previstos):
         """Calcula Weighted Mean Absolute Percentage Error."""
-        import numpy as np
         
         if not realizados or not previstos:
             return np.nan
@@ -4312,7 +4319,6 @@ class PrevisaoDemanda:
     
     def _calcular_bias(self, realizados, previstos):
         """Calcula BIAS (tendência de super/subestimação)."""
-        import numpy as np
         
         if not realizados or not previstos:
             return np.nan
@@ -4324,7 +4330,6 @@ class PrevisaoDemanda:
     
     def _calcular_mae(self, realizados, previstos):
         """Calcula Mean Absolute Error."""
-        import numpy as np
         
         if not realizados or not previstos:
             return np.nan
@@ -4341,8 +4346,6 @@ class PrevisaoDemanda:
         - BIAS indica se o modelo tende a super ou subestimar
         - Volume influencia a agressividade do ajuste
         """
-        import pandas as pd
-        import numpy as np
         
         if pd.isna(mape) or pd.isna(bias):
             return 0
@@ -4412,7 +4415,6 @@ class PrevisaoDemanda:
     
     def _gerar_observacao_ajuste_inteligente(self, mape, bias, volume_medio, ajuste_sugerido):
         """Gera observação explicativa para o ajuste sugerido."""
-        import pandas as pd
         
         if pd.isna(mape) or pd.isna(bias):
             return "Dados insuficientes para sugestão"
@@ -4459,7 +4461,6 @@ class PrevisaoDemanda:
     
     def _classificar_erro(self, mape):
         """Classifica o erro baseado no MAPE."""
-        import pandas as pd
         
         if pd.isna(mape):
             return "SEM DADOS"
@@ -4476,7 +4477,6 @@ class PrevisaoDemanda:
     
     def _classificar_bias(self, bias):
         """Classifica a tendência baseada no BIAS."""
-        import pandas as pd
         
         if pd.isna(bias):
             return "SEM DADOS"
@@ -4490,67 +4490,6 @@ class PrevisaoDemanda:
             return "SUBESTIMA"
         else:
             return "EQUILIBRADO"
-
-    def _gerar_observacao_erro(self, mape, bias, volume_medio):
-        """
-        Gera observação explicativa sobre o motivo do erro.
-        
-        Args:
-            mape: Mean Absolute Percentage Error
-            bias: Tendência de super/subestimação
-            volume_medio: Volume médio de vendas
-            
-        Returns:
-            str: Observação explicativa
-        """
-        import pandas as pd
-        
-        if pd.isna(mape) or pd.isna(bias):
-            return "Dados insuficientes para análise"
-        
-        observacoes = []
-        
-        # Análise do MAPE
-        if mape > 60:
-            observacoes.append("Erro muito alto (>60%)")
-            if volume_medio < 10:
-                observacoes.append("produto de baixo volume")
-            if abs(bias) > 20:
-                observacoes.append("tendência forte de super/subestimação")
-        elif mape > 40:
-            observacoes.append("Erro alto (40-60%)")
-            if abs(bias) > 15:
-                observacoes.append("tendência moderada de super/subestimação")
-        elif mape > 20:
-            observacoes.append("Erro moderado (20-40%)")
-        
-        # Análise do BIAS
-        if bias > 20:
-            observacoes.append("superestima consistentemente")
-        elif bias < -20:
-            observacoes.append("subestima consistentemente")
-        elif abs(bias) > 10:
-            if bias > 0:
-                observacoes.append("leve tendência de superestimação")
-            else:
-                observacoes.append("leve tendência de subestimação")
-        
-        # Análise do volume
-        if volume_medio < 5:
-            observacoes.append("demanda muito baixa dificulta previsão")
-        elif volume_medio < 20:
-            observacoes.append("demanda baixa aumenta volatilidade")
-        
-        # Sugestões específicas
-        if mape > 40 and abs(bias) > 15:
-            observacoes.append("revisar método de previsão")
-        elif mape > 60:
-            observacoes.append("considerar análise manual")
-        
-        if not observacoes:
-            return "Performance dentro do esperado"
-        
-        return "; ".join(observacoes).capitalize()
 
     def _gerar_acuracidade_detalhada(self, df_merged, colunas_comparacao):
         """
@@ -4596,11 +4535,12 @@ class PrevisaoDemanda:
                 except (ValueError, TypeError):
                     realizado = 0.0
                 
-                # Determinar nome do mês para as colunas
+                # Determinar nome do mês para as colunas (sempre pt-BR)
                 if isinstance(col_real, str):
-                    nome_mes = col_real.replace('-', '/').upper()
-                elif hasattr(col_real, 'strftime'):
-                    nome_mes = col_real.strftime('%b/%y').upper()
+                    rotulo = normalizar_rotulo_mes(col_real) or col_real
+                    nome_mes = rotulo.replace('-', '/').upper()
+                elif hasattr(col_real, 'month') and hasattr(col_real, 'year'):
+                    nome_mes = rotulo_mes_pt(col_real.year, col_real.month).replace('-', '/').upper()
                 else:
                     nome_mes = str(col_real)
                 
@@ -5450,7 +5390,6 @@ class PrevisaoDemanda:
             
         except Exception as e:
             print(f"❌ Erro na aba Análise de Cenários: {str(e)}")
-            import traceback
             traceback.print_exc()
     
     def _aplicar_formatacao_analise_cenarios(self, worksheet, df):
@@ -5798,7 +5737,6 @@ class PrevisaoDemanda:
             print(f"  - Histórico: {self.df_historico.shape[0]} linhas, {self.df_historico.shape[1]} colunas")
             
             # Fazer merge entre dados previstos e históricos
-            import pandas as pd
             df_merged = pd.merge(
                 self.df_previsto, 
                 self.df_historico, 
@@ -5830,7 +5768,6 @@ class PrevisaoDemanda:
             
         except Exception as e:
             print(f"Erro ao gerar aba de análise de acuracidade detalhada: {str(e)}")
-            import traceback
             traceback.print_exc()
             
             # Criar aba de erro com mais detalhes
@@ -5845,7 +5782,6 @@ class PrevisaoDemanda:
                 print(f"Erro ao criar aba de erro: {str(e2)}")
                 # Criar aba mínima
                 try:
-                    import pandas as pd
                     df_minimo = pd.DataFrame({'Erro': ['Falha na geração da aba']})
                     df_minimo.to_excel(writer, sheet_name='Acuracidade_Detalhada', index=False)
                 except:
@@ -5862,7 +5798,6 @@ class PrevisaoDemanda:
             DataFrame com análise detalhada mês a mês
         """
         try:
-            import pandas as pd
             print("Calculando acuracidade mês a mês...")
             
             # Verificações de segurança
@@ -6153,7 +6088,6 @@ class PrevisaoDemanda:
             
         except Exception as e:
             print(f"ERRO na função _calcular_acuracidade_mes_a_mes_melhorada: {str(e)}")
-            import traceback
             traceback.print_exc()
             return pd.DataFrame({'Codigo': ['ERRO'], 'Mensagem': [f'Erro no cálculo: {str(e)}']})
 
@@ -6167,27 +6101,31 @@ class PrevisaoDemanda:
         Returns:
             Lista ordenada cronologicamente
         """
-        def chave_ordenacao(mes_str):
+        def chave_ordenacao(mes_valor):
             """Função para gerar chave de ordenação cronológica."""
             try:
-                # Mapear nomes de meses para números
-                meses_map = {
-                    'jan': 1, 'fev': 2, 'mar': 3, 'abr': 4, 'mai': 5, 'jun': 6,
-                    'jul': 7, 'ago': 8, 'set': 9, 'out': 10, 'nov': 11, 'dez': 12
-                }
-                
-                # Extrair mês e ano
-                if '-' in mes_str:
-                    mes_nome, ano_str = mes_str.split('-')
-                    ano_num = int('20' + ano_str if len(ano_str) == 2 else ano_str)
-                    mes_num = meses_map.get(mes_nome.lower(), 0)
-                    return (ano_num, mes_num)
-                else:
-                    return (9999, 0)  # Fallback para ordenação
-            except:
+                rotulo = normalizar_rotulo_mes(mes_valor)
+                if not rotulo or '-' not in str(rotulo):
+                    return (9999, 0)
+                mes_nome, ano_str = str(rotulo).split('-')
+                ano_num = int('20' + ano_str if len(ano_str) == 2 else ano_str)
+                mes_num = MESES_PT_NUM.get(mes_nome.lower(), 0)
+                return (ano_num, mes_num)
+            except Exception:
                 return (9999, 0)
+
+        normalizados = []
+        vistos = set()
+        for item in lista_meses:
+            rotulo = normalizar_rotulo_mes(item)
+            if not rotulo:
+                continue
+            if rotulo in vistos:
+                continue
+            vistos.add(rotulo)
+            normalizados.append(rotulo)
         
-        return sorted(lista_meses, key=chave_ordenacao)
+        return sorted(normalizados, key=chave_ordenacao)
 
     def _classificar_erro_detalhado_melhorado(self, mape_percentual):
         """
@@ -6381,57 +6319,6 @@ class PrevisaoDemanda:
         except Exception as e:
             print(f"Aviso: Erro na formatação visual: {e}")
 
-    def _aplicar_formatacao_acuracidade_detalhada(self, worksheet, df):
-        """Aplica formatação específica para a aba de acuracidade detalhada."""
-        try:
-            from openpyxl.styles import PatternFill, Font, Alignment
-            from openpyxl.formatting.rule import CellIsRule
-            
-            # Definir cores para classificação
-            cores_classificacao = {
-                'EXCELENTE': PatternFill(start_color="00FF00", end_color="00FF00", fill_type="solid"),  # Verde
-                'BOM': PatternFill(start_color="90EE90", end_color="90EE90", fill_type="solid"),        # Verde claro
-                'ACEITÁVEL': PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid"),  # Amarelo
-                'RUIM': PatternFill(start_color="FFA500", end_color="FFA500", fill_type="solid"),       # Laranja
-                'MUITO RUIM': PatternFill(start_color="FF0000", end_color="FF0000", fill_type="solid"), # Vermelho
-                'SEM DADOS': PatternFill(start_color="D3D3D3", end_color="D3D3D3", fill_type="solid")  # Cinza
-            }
-            
-            # Formatação do cabeçalho
-            for cell in worksheet[1]:
-                cell.font = Font(bold=True, color="FFFFFF")
-                cell.fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
-                cell.alignment = Alignment(horizontal="center")
-            
-            # Aplicar formatação condicional para colunas de classificação
-            for col_idx, col_name in enumerate(df.columns, 1):
-                col_letter = worksheet.cell(row=1, column=col_idx).column_letter
-                
-                if '_CLASSIFICACAO' in col_name:
-                    # Aplicar cores baseadas na classificação
-                    for classificacao, cor in cores_classificacao.items():
-                        worksheet.conditional_formatting.add(
-                            f"{col_letter}2:{col_letter}{len(df) + 1}",
-                            CellIsRule(operator="equal", formula=[f'"{classificacao}"'], fill=cor)
-                        )
-                
-                # Ajustar largura das colunas
-                if col_name == 'Codigo':
-                    worksheet.column_dimensions[col_letter].width = 15
-                elif '_PREVISTO' in col_name or '_REALIZADO' in col_name:
-                    worksheet.column_dimensions[col_letter].width = 12
-                elif '_MAPE' in col_name or '_BIAS' in col_name:
-                    worksheet.column_dimensions[col_letter].width = 10
-                elif '_CLASSIFICACAO' in col_name:
-                    worksheet.column_dimensions[col_letter].width = 15
-                else:
-                    worksheet.column_dimensions[col_letter].width = 12
-            
-            print("Formatação da aba de acuracidade detalhada aplicada com sucesso.")
-            
-        except Exception as e:
-            print(f"Aviso: Erro na formatação da aba de acuracidade detalhada: {e}")
-    
     def carregar_dados_clientes(self, caminho_arquivo):
         """
         Carrega dados de clientes do arquivo Excel.
@@ -6459,10 +6346,19 @@ class PrevisaoDemanda:
                 print("Erro: Estrutura do arquivo de clientes inválida. Colunas 'Código' e 'Cod. Cliente' são obrigatórias.")
                 self.df_clientes = None
                 return
+
+            # Normaliza competências para jan-20 (evita datetime do Excel e locale EN)
+            df_clientes = self._normalizar_colunas_meses_dataframe(
+                df_clientes, colunas_chave=['Código', 'Cod. Cliente', 'Codigo', 'Cod Cliente']
+            )
             
             # Atribuir ao atributo da classe
             self.df_clientes = df_clientes
             print("Dados de clientes atribuídos com sucesso à classe.")
+            print(
+                "Colunas de mês clientes: "
+                f"{[c for c in df_clientes.columns if normalizar_rotulo_mes(c)][:5]} ..."
+            )
             
         except Exception as e:
             print(f"Erro ao carregar dados de clientes: {str(e)}")
@@ -6485,16 +6381,65 @@ class PrevisaoDemanda:
         
         # FILTRO: Apenas produtos que estão na base de vendas/previsão
         produtos_previsao = self.df_historico['Codigo'].unique()
-        df_clientes_filtrado = self.df_clientes[self.df_clientes['Código'].isin(produtos_previsao)].copy()
+        
+        # Extrair código puro da coluna Código do arquivo de clientes
+        # Formatos: "80.01.000372-Outlet Lingerie" OU "MTS-Adidas-Automática"
+        def extrair_codigo_puro(codigo):
+            if pd.isna(codigo) or not isinstance(codigo, str):
+                return str(codigo) if not pd.isna(codigo) else ''
+            # Separar pelo primeiro hífen que vem após o código numérico
+            # Padrão: código numérico (com pontos) seguido de hífen e marca
+            match = re.match(r'^([\d\.]+)-(.*)', codigo)
+            if match:
+                return match.group(1)
+            # Tipo-marca-linha: a chave completa é o código de previsão
+            return codigo
+        
+        # Criar coluna auxiliar com código puro para filtro
+        self.df_clientes['Codigo_Puro'] = self.df_clientes['Código'].apply(extrair_codigo_puro)
+        
+        # Extrair marca (SKU-Marca ou MTS/MTO-Marca-Linha)
+        self.df_clientes['Marca'] = self.df_clientes['Código'].apply(self._extrair_marca)
+        
+        # ========== CONSOLIDAR DUPLICATAS ==========
+        # A base original pode ter múltiplas linhas para o mesmo Código + Cliente
+        # (ex: períodos diferentes exportados separadamente pelo ERP)
+        # Consolidar somando as quantidades mês a mês
+        colunas_agrupamento = ['Código', 'Cod. Cliente', 'Codigo_Puro', 'Marca']
+        colunas_meses_consolidar = [col for col in self.df_clientes.columns if col not in colunas_agrupamento]
+        
+        # Verificar se há duplicatas
+        duplicatas = self.df_clientes.duplicated(subset=['Código', 'Cod. Cliente'], keep=False)
+        n_duplicatas = duplicatas.sum()
+        
+        if n_duplicatas > 0:
+            n_antes = len(self.df_clientes)
+            # Consolidar: agrupar por Código + Cliente e somar meses
+            # Para colunas numéricas (meses), somar; para texto, manter primeiro
+            self.df_clientes = self.df_clientes.groupby(['Código', 'Cod. Cliente', 'Codigo_Puro', 'Marca'], 
+                                                        as_index=False, dropna=False)[colunas_meses_consolidar].sum()
+            n_depois = len(self.df_clientes)
+            print(f"Consolidação de duplicatas: {n_antes} -> {n_depois} registros ({n_antes - n_depois} linhas duplicadas removidas)")
+        
+        # Filtrar usando código puro
+        # Converter produtos_previsao para string para garantir match
+        produtos_previsao_str = [str(p) for p in produtos_previsao]
+        df_clientes_filtrado = self.df_clientes[self.df_clientes['Codigo_Puro'].isin(produtos_previsao_str)].copy()
+        
+        # Se não encontrou com código puro, tentar com código original (compatibilidade)
+        if len(df_clientes_filtrado) == 0:
+            df_clientes_filtrado = self.df_clientes[self.df_clientes['Código'].isin(produtos_previsao)].copy()
         
         print(f"Produtos na base de vendas: {len(produtos_previsao)}")
         print(f"Registros de clientes (antes do filtro): {len(self.df_clientes)}")
         print(f"Registros de clientes (após filtro): {len(df_clientes_filtrado)}")
+        print(f"Marcas identificadas: {df_clientes_filtrado['Marca'].nunique() if len(df_clientes_filtrado) > 0 else 0}")
         
         if len(df_clientes_filtrado) == 0:
             print("Nenhum produto da base de clientes corresponde aos produtos da base de vendas.")
-            print(f"Exemplos de códigos na base de vendas: {produtos_previsao[:5]}")
-            print(f"Exemplos de códigos na base de clientes: {self.df_clientes['Código'].unique()[:5]}")
+            print(f"Exemplos de códigos na base de vendas: {list(produtos_previsao[:5])}")
+            print(f"Exemplos de códigos na base de clientes: {list(self.df_clientes['Código'].unique()[:5])}")
+            print(f"Exemplos de códigos puros extraídos: {list(self.df_clientes['Codigo_Puro'].unique()[:5])}")
             return
         
         # Executar análise e atribuir resultados aos atributos da classe
@@ -6509,178 +6454,213 @@ class PrevisaoDemanda:
     
     def _processar_comportamento_clientes(self, df_clientes_filtrado):
         """
-        Processa os dados de comportamento de clientes.
+        Processa os dados de comportamento de clientes (versão otimizada/vetorizada).
         
         Returns:
-            tuple: (df_consolidado, df_detalhado) - DataFrames com análises consolidadas e detalhadas
+            tuple: (df_consolidado, df_detalhado, df_por_marca) - DataFrames com análises
         """
         # Identificar colunas de meses e ordená-las cronologicamente
-        colunas_meses_raw = [col for col in df_clientes_filtrado.columns if col not in ['Código', 'Cod. Cliente']]
+        colunas_excluir = ['Código', 'Cod. Cliente', 'Codigo_Puro', 'Marca']
+        colunas_meses_raw = [col for col in df_clientes_filtrado.columns if col not in colunas_excluir]
         colunas_meses = self._ordenar_meses_cronologicamente(colunas_meses_raw)
         
-        resultados_consolidado = []
-        resultados_detalhado = []
+        if not colunas_meses:
+            print("⚠️ Nenhuma coluna de meses encontrada")
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
         
-        for produto in df_clientes_filtrado['Código'].unique():
-            if pd.isna(produto):
-                continue
-                
-            # Filtrar dados do produto
-            df_produto = df_clientes_filtrado[df_clientes_filtrado['Código'] == produto].copy()
+        # Pré-calcular slices de meses
+        ultimos_12_meses = colunas_meses[-12:] if len(colunas_meses) >= 12 else colunas_meses
+        ultimos_6_meses = colunas_meses[-6:] if len(colunas_meses) >= 6 else colunas_meses
+        ultimos_3_meses = colunas_meses[-3:] if len(colunas_meses) >= 3 else colunas_meses
+        meses_4_a_12 = colunas_meses[-12:-3] if len(colunas_meses) >= 12 else colunas_meses[:-3] if len(colunas_meses) > 3 else []
+        
+        # ===== VETORIZAÇÃO: Calcular métricas por cliente de uma vez =====
+        df = df_clientes_filtrado.copy()
+        
+        # Converter colunas de meses para numérico (tratar NaN como 0 para comparações)
+        df_meses = df[colunas_meses].fillna(0)
+        
+        # Matriz booleana: onde houve venda > 0
+        vendas_mask = df_meses > 0
+        
+        # Total de meses com compras (todo o histórico)
+        df['_meses_com_compras'] = vendas_mask.sum(axis=1)
+        
+        # Total de unidades
+        df['_total_unidades'] = df_meses.sum(axis=1).astype(int)
+        
+        # Meses com compras nos últimos 12 meses
+        if ultimos_12_meses:
+            df['_meses_12m'] = vendas_mask[ultimos_12_meses].sum(axis=1)
+        else:
+            df['_meses_12m'] = 0
+        
+        # Ativo nos últimos 3 meses
+        if ultimos_3_meses:
+            df['_ativo_3m'] = vendas_mask[ultimos_3_meses].any(axis=1)
+        else:
+            df['_ativo_3m'] = False
+        
+        # Ativo nos últimos 6 meses
+        if ultimos_6_meses:
+            df['_ativo_6m'] = vendas_mask[ultimos_6_meses].any(axis=1)
+        else:
+            df['_ativo_6m'] = False
+        
+        # Inativo entre 4-12 meses atrás
+        if meses_4_a_12:
+            df['_ativo_4_12m'] = vendas_mask[meses_4_a_12].any(axis=1)
+        else:
+            df['_ativo_4_12m'] = False
+        
+        # Classificar comportamento (baseado nos últimos 12 meses)
+        conditions_comp = [
+            df['_meses_12m'] >= 10,
+            df['_meses_12m'] >= 6,
+            df['_meses_12m'] >= 4,
+            df['_meses_12m'] >= 2,
+            df['_meses_12m'] == 1,
+        ]
+        choices_comp = ['MENSAL', 'BIMESTRAL', 'TRIMESTRAL', 'SEMESTRAL', 'ANUAL']
+        df['_comportamento'] = np.select(conditions_comp, choices_comp, default='NÃO RECORRENTE')
+        
+        # Classificar fidelidade
+        conditions_fid = [
+            (df['_meses_12m'] >= 6) & (df['_ativo_3m']),
+            (df['_meses_12m'] >= 2) & (df['_ativo_6m']),
+            (df['_meses_12m'] >= 1) | (df['_ativo_6m']),
+        ]
+        choices_fid = ['FIEL', 'REGULAR', 'EM RISCO']
+        df['_fidelidade'] = np.select(conditions_fid, choices_fid, default='INATIVO')
+        
+        # Detectar clientes reativados
+        df['_eh_reativado'] = (
+            df['_ativo_3m'] & 
+            ~df['_ativo_4_12m'] & 
+            (df['_meses_com_compras'] > df['_meses_12m'])
+        )
+        # Adicionar flag ao texto de fidelidade
+        df.loc[df['_eh_reativado'], '_fidelidade'] = df.loc[df['_eh_reativado'], '_fidelidade'] + ' (REATIVADO)'
+        
+        # Calcular tempo entre compras vetorizado
+        # Para cada linha, encontrar primeiro e último mês com venda
+        def calcular_tempo_entre_compras(row):
+            meses_venda = [i for i, mes in enumerate(colunas_meses) if row[mes] > 0]
+            if len(meses_venda) <= 1:
+                return 0.0
+            periodo_ativo = meses_venda[-1] - meses_venda[0] + 1
+            return periodo_ativo / (len(meses_venda) - 1)
+        
+        df['_tempo_entre_compras'] = df_meses.apply(
+            lambda row: calcular_tempo_entre_compras(row), axis=1
+        ).round(1)
+        
+        # Encontrar primeiro e último mês com venda
+        def encontrar_primeiro_ultimo_mes(row):
+            meses_venda = [mes for mes in colunas_meses if row[mes] > 0]
+            if not meses_venda:
+                return '', ''
+            return meses_venda[0], meses_venda[-1]
+        
+        primeiro_ultimo = df_meses.apply(encontrar_primeiro_ultimo_mes, axis=1, result_type='expand')
+        df['_primeiro_mes'] = primeiro_ultimo[0]
+        df['_ultimo_mes'] = primeiro_ultimo[1]
+        
+        # Top 3 meses preferidos
+        def top_3_meses(row):
+            vendas = [(mes, row[mes]) for mes in colunas_meses if row[mes] > 0]
+            top = sorted(vendas, key=lambda x: x[1], reverse=True)[:3]
+            return ', '.join([mes for mes, _ in top])
+        
+        df['_top_3_meses'] = df_meses.apply(top_3_meses, axis=1)
+        
+        # Filtrar apenas clientes com vendas
+        df_com_vendas = df[df['_meses_com_compras'] > 0].copy()
+        
+        # Remover clientes com Cod. Cliente NaN
+        df_com_vendas = df_com_vendas[df_com_vendas['Cod. Cliente'].notna()]
+        
+        print(f"Processando {len(df_com_vendas)} registros cliente-produto com vendas...")
+        
+        # ===== GERAR DETALHADO (vetorizado) =====
+        resultados_detalhado = []
+        for _, row in df_com_vendas.iterrows():
+            resultado = {
+                'Codigo': row.get('Codigo_Puro', row['Código']),
+                'Marca': row.get('Marca', ''),
+                'Cod_Cliente': row['Cod. Cliente'],
+                'COMPORTAMENTO': row['_comportamento'],
+                'FIDELIDADE': row['_fidelidade'],
+                'TOTAL_UNIDADES': row['_total_unidades'],
+                'MESES_COM_COMPRAS': row['_meses_com_compras'],
+                'MESES_COM_COMPRAS_12M': row['_meses_12m'],
+                'TEMPO_ENTRE_COMPRAS_MESES': row['_tempo_entre_compras'],
+                'PRIMEIRO_MES': row['_primeiro_mes'],
+                'ULTIMO_MES': row['_ultimo_mes'],
+                'TOP_3_MESES_PREFERIDOS': row['_top_3_meses'],
+            }
+            # Adicionar vendas mês a mês
+            for mes in colunas_meses:
+                resultado[mes] = row[mes] if pd.notna(row[mes]) and row[mes] > 0 else 0
+            resultados_detalhado.append(resultado)
+        
+        df_detalhado = pd.DataFrame(resultados_detalhado)
+        
+        # ===== GERAR CONSOLIDADO (vetorizado por groupby) =====
+        resultados_consolidado = []
+        
+        for produto in df_com_vendas['Código'].unique():
+            df_produto = df_com_vendas[df_com_vendas['Código'] == produto]
             
-            # Análise por mês - quantidade de clientes únicos
+            # Clientes por mês (vetorizado)
             clientes_por_mes = {}
             for mes in colunas_meses:
-                clientes_com_venda = df_produto[df_produto[mes].notna() & (df_produto[mes] > 0)]['Cod. Cliente'].nunique()
-                clientes_por_mes[mes] = clientes_com_venda
+                clientes_por_mes[mes] = df_produto[df_produto[mes].notna() & (df_produto[mes] > 0)]['Cod. Cliente'].nunique()
             
-            # Análise de comportamento de cada cliente
-            comportamentos = {'MENSAL': 0, 'BIMESTRAL': 0, 'TRIMESTRAL': 0, 'SEMESTRAL': 0, 'ANUAL': 0, 'NÃO RECORRENTE': 0}
+            # Contagem de comportamentos
+            comportamentos = df_produto['_comportamento'].value_counts().to_dict()
             
-            # Análise de fidelidade (nova lógica)
-            clientes_fieis = 0
-            clientes_regulares = 0
-            clientes_em_risco = 0
-            clientes_inativos = 0
-            clientes_reativados = 0
-            clientes_ativos_12m = 0
+            # Contagem de fidelidade (sem o sufixo REATIVADO)
+            fidelidade_base = df_produto['_fidelidade'].str.replace(' (REATIVADO)', '', regex=False)
+            clientes_fieis = (fidelidade_base == 'FIEL').sum()
+            clientes_regulares = (fidelidade_base == 'REGULAR').sum()
+            clientes_em_risco = (fidelidade_base == 'EM RISCO').sum()
+            clientes_inativos = (fidelidade_base == 'INATIVO').sum()
+            clientes_reativados = df_produto['_eh_reativado'].sum()
             
-            # Calcular métricas consolidadas baseadas nos dados detalhados
-            total_clientes_com_vendas = 0
-            soma_tempos_entre_compras = 0  # ✅ CORRIGIDO: somar tempos entre compras, não meses
+            # Ativos 12M
+            clientes_ativos_12m = (df_produto['_meses_12m'] > 0).sum()
             
-            for _, cliente_row in df_produto.iterrows():
-                cod_cliente = cliente_row['Cod. Cliente']
-                if pd.isna(cod_cliente):
-                    continue
-                
-                # Calcular métricas do cliente
-                vendas_cliente = cliente_row[colunas_meses]
-                vendas_cliente = vendas_cliente[vendas_cliente.notna() & (vendas_cliente > 0)]
-                
-                if len(vendas_cliente) == 0:
-                    continue  # Cliente sem vendas
-                
-                total_clientes_com_vendas += 1
-                meses_com_compras = len(vendas_cliente)
-                
-                # ✅ CÁLCULO CORRETO: tempo entre compras baseado no período ATIVO do cliente
-                if meses_com_compras > 0:
-                    # Encontrar primeiro e último mês com vendas
-                    meses_com_venda = [mes for mes in colunas_meses if cliente_row[mes] > 0]
-                    if len(meses_com_venda) >= 1:
-                        primeiro_mes_idx = colunas_meses.index(meses_com_venda[0])
-                        ultimo_mes_idx = colunas_meses.index(meses_com_venda[-1])
-                        periodo_ativo_meses = ultimo_mes_idx - primeiro_mes_idx + 1
-                        
-                        # Se cliente comprou apenas 1 mês, tempo entre compras = 0
-                        if meses_com_compras == 1:
-                            tempo_entre_compras_cliente = 0
-                        else:
-                            # Tempo entre compras = período ativo / (número de compras - 1)
-                            # Subtrai 1 porque entre N compras há N-1 intervalos
-                            tempo_entre_compras_cliente = periodo_ativo_meses / (meses_com_compras - 1)
-                        
-                        soma_tempos_entre_compras += tempo_entre_compras_cliente
-                
-                # ✅ NOVA LÓGICA CORRIGIDA: Determinar comportamento baseado nos últimos 12 meses
-                # Analisar apenas os últimos 12 meses para categorização
-                ultimos_12_meses = colunas_meses[-12:] if len(colunas_meses) >= 12 else colunas_meses
-                vendas_12m = cliente_row[ultimos_12_meses]
-                vendas_12m_validas = vendas_12m[vendas_12m.notna() & (vendas_12m > 0)]
-                meses_com_compras_12m = len(vendas_12m_validas)
-                
-                # Categorização baseada na frequência real nos últimos 12 meses
-                if meses_com_compras_12m >= 10:  # 10+ meses = MENSAL (83%+)
-                    comportamentos['MENSAL'] += 1
-                elif meses_com_compras_12m >= 6:  # 6-9 meses = BIMESTRAL (50-75%)
-                    comportamentos['BIMESTRAL'] += 1
-                elif meses_com_compras_12m >= 4:  # 4-5 meses = TRIMESTRAL (33-42%)
-                    comportamentos['TRIMESTRAL'] += 1
-                elif meses_com_compras_12m >= 2:  # 2-3 meses = SEMESTRAL (17-25%)
-                    comportamentos['SEMESTRAL'] += 1
-                elif meses_com_compras_12m == 1:  # 1 mês = ANUAL (8%)
-                    comportamentos['ANUAL'] += 1
-                else:  # 0 meses = NÃO RECORRENTE
-                    comportamentos['NÃO RECORRENTE'] += 1
-                
-                # ✅ NOVA LÓGICA DE FIDELIDADE: Baseada nos últimos 12-24 meses + recência
-                # Analisar atividade nos últimos 12 meses
-                ultimos_12_meses = colunas_meses[-12:] if len(colunas_meses) >= 12 else colunas_meses
-                vendas_12m = cliente_row[ultimos_12_meses]
-                vendas_12m_validas = vendas_12m[vendas_12m.notna() & (vendas_12m > 0)]
-                compras_12m = len(vendas_12m_validas)
-                
-                # Verificar atividade nos últimos 3 meses
-                ultimos_3_meses = colunas_meses[-3:] if len(colunas_meses) >= 3 else colunas_meses
-                vendas_3m = cliente_row[ultimos_3_meses]
-                vendas_3m_validas = vendas_3m[vendas_3m.notna() & (vendas_3m > 0)]
-                ativo_3m = len(vendas_3m_validas) > 0
-                
-                # Verificar atividade nos últimos 6 meses
-                ultimos_6_meses = colunas_meses[-6:] if len(colunas_meses) >= 6 else colunas_meses
-                vendas_6m = cliente_row[ultimos_6_meses]
-                vendas_6m_validas = vendas_6m[vendas_6m.notna() & (vendas_6m > 0)]
-                ativo_6m = len(vendas_6m_validas) > 0
-                
-                # ✅ LÓGICA DE CLIENTE REATIVADO: Cliente que voltou a comprar após período inativo
-                # Verificar se é cliente reativado (comprou nos últimos 3 meses após período sem compras)
-                eh_reativado = False
-                if ativo_3m:  # Se está ativo nos últimos 3 meses
-                    # Verificar se ficou inativo entre 4-12 meses atrás
-                    meses_4_a_12 = colunas_meses[-12:-3] if len(colunas_meses) >= 12 else colunas_meses[:-3] if len(colunas_meses) > 3 else []
-                    if meses_4_a_12:
-                        vendas_4_a_12 = cliente_row[meses_4_a_12]
-                        vendas_4_a_12_validas = vendas_4_a_12[vendas_4_a_12.notna() & (vendas_4_a_12 > 0)]
-                        # Se não comprou entre 4-12 meses atrás, mas tem histórico anterior, é reativado
-                        if len(vendas_4_a_12_validas) == 0 and meses_com_compras > meses_com_compras_12m:
-                            eh_reativado = True
-                            clientes_reativados += 1
-                
-                # Determinar fidelidade com novo critério
-                if compras_12m >= 6 and ativo_3m:  # 6+ compras nos últimos 12 meses + ativo nos últimos 3 meses
-                    clientes_fieis += 1
-                elif compras_12m >= 2 and ativo_6m:  # 2-5 compras nos últimos 12 meses + ativo nos últimos 6 meses
-                    clientes_regulares += 1
-                elif compras_12m >= 1 or ativo_6m:  # 1 compra nos últimos 12 meses OU ativo nos últimos 6 meses
-                    clientes_em_risco += 1
-                else:  # INATIVO (sem compras nos últimos 12 meses)
-                    clientes_inativos += 1
-                
-                # Cliente ativo nos últimos 12 meses (simplificado)
-                ultimos_12_meses = colunas_meses[-12:] if len(colunas_meses) >= 12 else colunas_meses
-                vendas_12m = cliente_row[ultimos_12_meses]
-                vendas_12m = vendas_12m[vendas_12m.notna() & (vendas_12m > 0)]
-                if len(vendas_12m) > 0:
-                    clientes_ativos_12m += 1
+            # Tempo médio entre compras
+            tempo_medio = df_produto['_tempo_entre_compras'].mean()
             
-            # ✅ CALCULAR TEMPO MÉDIO ENTRE COMPRAS CORRETO
-            tempo_medio_entre_compras = soma_tempos_entre_compras / total_clientes_com_vendas if total_clientes_com_vendas > 0 else 0
+            # Média de clientes últimos 12 meses
+            total_clientes_12m = sum(clientes_por_mes.get(mes, 0) for mes in ultimos_12_meses)
+            media_clientes_12m = total_clientes_12m / len(ultimos_12_meses) if ultimos_12_meses else 0
             
-            # Calcular média de clientes dos últimos 12 meses
-            ultimos_12_meses_para_media = colunas_meses[-12:] if len(colunas_meses) >= 12 else colunas_meses
-            total_clientes_12m = sum(clientes_por_mes[mes] for mes in ultimos_12_meses_para_media)
-            media_clientes_12m = total_clientes_12m / len(ultimos_12_meses_para_media) if ultimos_12_meses_para_media else 0
+            # Extrair marca e código puro
+            marca_produto = df_produto['Marca'].iloc[0] if 'Marca' in df_produto.columns and not pd.isna(df_produto['Marca'].iloc[0]) else ''
+            codigo_puro = df_produto['Codigo_Puro'].iloc[0] if 'Codigo_Puro' in df_produto.columns and not pd.isna(df_produto['Codigo_Puro'].iloc[0]) else produto
             
-            # Criar resultado consolidado para este produto
             resultado_consolidado = {
-                'Codigo': produto,
+                'Codigo': codigo_puro,
+                'Marca': marca_produto,
                 'TOTAL_CLIENTES_UNICOS': df_produto['Cod. Cliente'].nunique(),
-                'CLIENTES_ATIVOS_12M': clientes_ativos_12m,
+                'CLIENTES_ATIVOS_12M': int(clientes_ativos_12m),
                 'MEDIA_CLIENTES_12M': round(media_clientes_12m, 1),
                 'CLIENTES_ATIVOS_ULTIMO_MES': clientes_por_mes.get(colunas_meses[-1], 0) if colunas_meses else 0,
-                'CLIENTES_MENSAIS': comportamentos['MENSAL'],
-                'CLIENTES_BIMESTRAIS': comportamentos['BIMESTRAL'],
-                'CLIENTES_TRIMESTRAIS': comportamentos['TRIMESTRAL'],
-                'CLIENTES_SEMESTRAIS': comportamentos['SEMESTRAL'],
-                'CLIENTES_ANUAIS': comportamentos['ANUAL'],
-                'CLIENTES_NAO_RECORRENTES': comportamentos['NÃO RECORRENTE'],
-                'CLIENTES_FIEIS': clientes_fieis,
-                'CLIENTES_REGULARES': clientes_regulares,
-                'CLIENTES_EM_RISCO': clientes_em_risco,
-                'CLIENTES_INATIVOS': clientes_inativos,
-                'CLIENTES_REATIVADOS': clientes_reativados,
-                'TEMPO_MEDIO_ENTRE_COMPRAS_MESES': round(tempo_medio_entre_compras, 1),
+                'CLIENTES_MENSAIS': comportamentos.get('MENSAL', 0),
+                'CLIENTES_BIMESTRAIS': comportamentos.get('BIMESTRAL', 0),
+                'CLIENTES_TRIMESTRAIS': comportamentos.get('TRIMESTRAL', 0),
+                'CLIENTES_SEMESTRAIS': comportamentos.get('SEMESTRAL', 0),
+                'CLIENTES_ANUAIS': comportamentos.get('ANUAL', 0),
+                'CLIENTES_NAO_RECORRENTES': comportamentos.get('NÃO RECORRENTE', 0),
+                'CLIENTES_FIEIS': int(clientes_fieis),
+                'CLIENTES_REGULARES': int(clientes_regulares),
+                'CLIENTES_EM_RISCO': int(clientes_em_risco),
+                'CLIENTES_INATIVOS': int(clientes_inativos),
+                'CLIENTES_REATIVADOS': int(clientes_reativados),
+                'TEMPO_MEDIO_ENTRE_COMPRAS_MESES': round(tempo_medio, 1),
             }
             
             # Adicionar colunas de clientes por mês
@@ -6688,216 +6668,49 @@ class PrevisaoDemanda:
                 resultado_consolidado[f'CLIENTES_{mes.upper().replace("-", "_")}'] = clientes_por_mes[mes]
             
             resultados_consolidado.append(resultado_consolidado)
-            
-            # Processar dados detalhados cliente por cliente (otimizado)
-            print(f"Processando {len(df_produto)} clientes para produto {produto}...")
-            
-            # Otimização: processar em lotes para melhor performance
-            clientes_processados = 0
-            for idx, (_, cliente_row) in enumerate(df_produto.iterrows()):
-                if idx % 500 == 0 and idx > 0:
-                    print(f"  Processados {idx} clientes...")
-                
-                cod_cliente = cliente_row['Cod. Cliente']
-                if pd.isna(cod_cliente):
-                    continue
-                
-                # Calcular métricas do cliente (otimizado)
-                vendas_cliente = cliente_row[colunas_meses]
-                vendas_cliente = vendas_cliente[vendas_cliente.notna() & (vendas_cliente > 0)]
-                
-                if len(vendas_cliente) == 0:
-                    continue  # Cliente sem vendas
-                
-                clientes_processados += 1
-                total_unidades = int(vendas_cliente.sum())
-                meses_com_compras = len(vendas_cliente)
-                
-                # ✅ NOVA LÓGICA CORRIGIDA: Determinar comportamento baseado nos últimos 12 meses
-                ultimos_12_meses = colunas_meses[-12:] if len(colunas_meses) >= 12 else colunas_meses
-                vendas_12m = cliente_row[ultimos_12_meses]
-                vendas_12m_validas = vendas_12m[vendas_12m.notna() & (vendas_12m > 0)]
-                meses_com_compras_12m = len(vendas_12m_validas)
-                
-                # Categorização baseada na frequência real nos últimos 12 meses
-                if meses_com_compras_12m >= 10:  # 10+ meses = MENSAL (83%+)
-                    comportamento = 'MENSAL'
-                elif meses_com_compras_12m >= 6:  # 6-9 meses = BIMESTRAL (50-75%)
-                    comportamento = 'BIMESTRAL'
-                elif meses_com_compras_12m >= 4:  # 4-5 meses = TRIMESTRAL (33-42%)
-                    comportamento = 'TRIMESTRAL'
-                elif meses_com_compras_12m >= 2:  # 2-3 meses = SEMESTRAL (17-25%)
-                    comportamento = 'SEMESTRAL'
-                elif meses_com_compras_12m == 1:  # 1 mês = ANUAL (8%)
-                    comportamento = 'ANUAL'
-                else:  # 0 meses = NÃO RECORRENTE
-                    comportamento = 'NÃO RECORRENTE'
-                
-                # ✅ NOVA LÓGICA DE FIDELIDADE: Baseada nos últimos 12 meses + recência
-                # Analisar atividade nos últimos 12 meses (já calculado acima)
-                # meses_com_compras_12m já está disponível
-                
-                # Verificar atividade nos últimos 3 meses
-                ultimos_3_meses_det = colunas_meses[-3:] if len(colunas_meses) >= 3 else colunas_meses
-                vendas_3m_det = cliente_row[ultimos_3_meses_det]
-                vendas_3m_validas_det = vendas_3m_det[vendas_3m_det.notna() & (vendas_3m_det > 0)]
-                ativo_3m_det = len(vendas_3m_validas_det) > 0
-                
-                # Verificar atividade nos últimos 6 meses
-                ultimos_6_meses_det = colunas_meses[-6:] if len(colunas_meses) >= 6 else colunas_meses
-                vendas_6m_det = cliente_row[ultimos_6_meses_det]
-                vendas_6m_validas_det = vendas_6m_det[vendas_6m_det.notna() & (vendas_6m_det > 0)]
-                ativo_6m_det = len(vendas_6m_validas_det) > 0
-                
-                # ✅ VERIFICAR SE É CLIENTE REATIVADO
-                eh_reativado_det = False
-                if ativo_3m_det:  # Se está ativo nos últimos 3 meses
-                    # Verificar se ficou inativo entre 4-12 meses atrás
-                    meses_4_a_12_det = colunas_meses[-12:-3] if len(colunas_meses) >= 12 else colunas_meses[:-3] if len(colunas_meses) > 3 else []
-                    if meses_4_a_12_det:
-                        vendas_4_a_12_det = cliente_row[meses_4_a_12_det]
-                        vendas_4_a_12_validas_det = vendas_4_a_12_det[vendas_4_a_12_det.notna() & (vendas_4_a_12_det > 0)]
-                        # Se não comprou entre 4-12 meses atrás, mas tem histórico anterior, é reativado
-                        if len(vendas_4_a_12_validas_det) == 0 and meses_com_compras > meses_com_compras_12m:
-                            eh_reativado_det = True
-                
-                # Determinar fidelidade individual
-                if meses_com_compras_12m >= 6 and ativo_3m_det:
-                    fidelidade = 'FIEL'
-                elif meses_com_compras_12m >= 2 and ativo_6m_det:
-                    fidelidade = 'REGULAR'
-                elif meses_com_compras_12m >= 1 or ativo_6m_det:
-                    fidelidade = 'EM RISCO'
-                else:
-                    fidelidade = 'INATIVO'
-                
-                # Adicionar flag de reativado se aplicável
-                if eh_reativado_det:
-                    fidelidade += ' (REATIVADO)'
-                
-                # Encontrar primeiro e último mês (otimizado)
-                meses_com_venda = [mes for mes in colunas_meses if cliente_row[mes] > 0]
-                primeiro_mes = meses_com_venda[0] if meses_com_venda else ''
-                ultimo_mes = meses_com_venda[-1] if meses_com_venda else ''
-                
-                # Top 3 meses preferidos (otimizado)
-                vendas_por_mes = [(mes, cliente_row[mes]) for mes in colunas_meses if cliente_row[mes] > 0]
-                top_meses = sorted(vendas_por_mes, key=lambda x: x[1], reverse=True)[:3]
-                top_3_meses = ', '.join([mes for mes, _ in top_meses])
-                
-                # ✅ CALCULAR TEMPO ENTRE COMPRAS INDIVIDUAL (baseado no período ativo)
-                if meses_com_compras > 0:
-                    # Encontrar primeiro e último mês com vendas (já calculado acima)
-                    if len(meses_com_venda) >= 1:
-                        primeiro_mes_idx_det = colunas_meses.index(meses_com_venda[0])
-                        ultimo_mes_idx_det = colunas_meses.index(meses_com_venda[-1])
-                        periodo_ativo_meses_det = ultimo_mes_idx_det - primeiro_mes_idx_det + 1
-                        
-                        # Se cliente comprou apenas 1 mês, tempo entre compras = 0
-                        if meses_com_compras == 1:
-                            tempo_entre_compras_individual = 0
-                        else:
-                            # Tempo entre compras = período ativo / (número de compras - 1)
-                            tempo_entre_compras_individual = periodo_ativo_meses_det / (meses_com_compras - 1)
-                    else:
-                        tempo_entre_compras_individual = 0
-                else:
-                    tempo_entre_compras_individual = 0
-                
-                # Criar resultado detalhado
-                resultado_detalhado = {
-                    'Codigo': produto,
-                    'Cod_Cliente': cod_cliente,
-                    'COMPORTAMENTO': comportamento,
-                    'FIDELIDADE': fidelidade,
-                    'TOTAL_UNIDADES': total_unidades,
-                    'MESES_COM_COMPRAS': meses_com_compras,
-                    'MESES_COM_COMPRAS_12M': meses_com_compras_12m,  # ✅ NOVA COLUNA
-                    'TEMPO_ENTRE_COMPRAS_MESES': round(tempo_entre_compras_individual, 1),  # ✅ NOVA COLUNA
-                    'PRIMEIRO_MES': primeiro_mes,
-                    'ULTIMO_MES': ultimo_mes,
-                    'TOP_3_MESES_PREFERIDOS': top_3_meses,
-                }
-                
-                # ✅ Adicionar vendas mês a mês (mantendo nome original para ordenação cronológica)
-                for mes in colunas_meses:
-                    valor = cliente_row[mes] if pd.notna(cliente_row[mes]) else 0
-                    resultado_detalhado[mes] = valor
-                
-                resultados_detalhado.append(resultado_detalhado)
-            
-            print(f"  Produto {produto}: {clientes_processados} clientes com vendas processados.")
         
         df_consolidado = pd.DataFrame(resultados_consolidado)
-        df_detalhado = pd.DataFrame(resultados_detalhado)
         
         # ✅ ORDENAR COLUNAS DO CONSOLIDADO CRONOLOGICAMENTE
         if not df_consolidado.empty:
-            # ✅ COLUNAS FIXAS (apenas as que existem no DataFrame)
-            todas_colunas_fixas_possiveis = ['Codigo', 'TOTAL_CLIENTES_UNICOS', 'CLIENTES_ATIVOS_12M', 'MEDIA_CLIENTES_12M',
+            todas_colunas_fixas_possiveis = ['Codigo', 'Marca', 'TOTAL_CLIENTES_UNICOS', 'CLIENTES_ATIVOS_12M', 'MEDIA_CLIENTES_12M',
                                            'CLIENTES_ATIVOS_ULTIMO_MES', 'CLIENTES_MENSAIS', 'CLIENTES_BIMESTRAIS', 
                                            'CLIENTES_TRIMESTRAIS', 'CLIENTES_SEMESTRAIS', 'CLIENTES_ANUAIS', 
                                            'CLIENTES_NAO_RECORRENTES', 'CLIENTES_FIEIS', 'CLIENTES_REGULARES',
                                            'CLIENTES_EM_RISCO', 'CLIENTES_INATIVOS', 'CLIENTES_REATIVADOS', 'TEMPO_MEDIO_ENTRE_COMPRAS_MESES']
             
-            # Filtrar apenas colunas que existem no DataFrame
             colunas_fixas_consolidado = [col for col in todas_colunas_fixas_possiveis if col in df_consolidado.columns]
-            
-            # ✅ COLUNAS DE MESES EM ORDEM CRONOLÓGICA (formato CLIENTES_JAN_20, etc.)
             colunas_meses_consolidado = [col for col in df_consolidado.columns if col.startswith('CLIENTES_') and col not in colunas_fixas_consolidado]
             
-            # Extrair nomes de meses e criar mapeamento
             meses_para_ordenar = []
             mapeamento_colunas = {}
             for col in colunas_meses_consolidado:
-                # Extrair parte do mês: CLIENTES_JAN_20 -> jan-20
                 mes_parte = col.replace('CLIENTES_', '').replace('_', '-').lower()
                 meses_para_ordenar.append(mes_parte)
                 mapeamento_colunas[mes_parte] = col
             
-            # Ordenar cronologicamente
             meses_ordenados = self._ordenar_meses_cronologicamente(meses_para_ordenar)
-            
-            # Reconstruir lista de colunas ordenadas
             colunas_meses_ordenadas_consolidado = [mapeamento_colunas[mes] for mes in meses_ordenados if mes in mapeamento_colunas]
             
-            # Reorganizar DataFrame consolidado
             colunas_ordenadas_consolidado = colunas_fixas_consolidado + colunas_meses_ordenadas_consolidado
             colunas_existentes_consolidado = [col for col in colunas_ordenadas_consolidado if col in df_consolidado.columns]
             
-            # ✅ DEBUG: Verificar ordenação
             print(f"Debug ordenação consolidado - Total colunas: {len(colunas_existentes_consolidado)}")
-            print(f"Colunas fixas: {len(colunas_fixas_consolidado)}")
-            print(f"Colunas de meses ordenadas: {len(colunas_meses_ordenadas_consolidado)}")
-            if len(colunas_meses_ordenadas_consolidado) > 0:
-                print(f"Primeiras 5 colunas de meses: {colunas_meses_ordenadas_consolidado[:5]}")
-                print(f"Últimas 5 colunas de meses: {colunas_meses_ordenadas_consolidado[-5:]}")
-            
             df_consolidado = df_consolidado[colunas_existentes_consolidado]
         
         # ✅ ORDENAR COLUNAS DO DETALHADO CRONOLOGICAMENTE
         if not df_detalhado.empty:
-            # Colunas fixas primeiro
-            colunas_fixas = ['Codigo', 'Cod_Cliente', 'COMPORTAMENTO', 'FIDELIDADE', 'TOTAL_UNIDADES', 
+            colunas_fixas = ['Codigo', 'Marca', 'Cod_Cliente', 'COMPORTAMENTO', 'FIDELIDADE', 'TOTAL_UNIDADES', 
                            'MESES_COM_COMPRAS', 'MESES_COM_COMPRAS_12M', 'TEMPO_ENTRE_COMPRAS_MESES', 
                            'PRIMEIRO_MES', 'ULTIMO_MES', 'TOP_3_MESES_PREFERIDOS']
             
-            # Colunas de meses em ordem cronológica
             colunas_meses_detalhado = [col for col in df_detalhado.columns if col in colunas_meses]
             colunas_meses_ordenadas = self._ordenar_meses_cronologicamente(colunas_meses_detalhado)
             
-            # Reorganizar DataFrame com colunas ordenadas
             colunas_ordenadas = colunas_fixas + colunas_meses_ordenadas
             colunas_existentes = [col for col in colunas_ordenadas if col in df_detalhado.columns]
             
-            # ✅ DEBUG: Verificar ordenação detalhado
             print(f"Debug ordenação detalhado - Total colunas: {len(colunas_existentes)}")
-            print(f"Colunas fixas: {len(colunas_fixas)}")
-            print(f"Colunas de meses ordenadas: {len(colunas_meses_ordenadas)}")
-            if len(colunas_meses_ordenadas) > 0:
-                print(f"Primeiras 5 colunas de meses: {colunas_meses_ordenadas[:5]}")
-                print(f"Últimas 5 colunas de meses: {colunas_meses_ordenadas[-5:]}")
-            
             df_detalhado = df_detalhado[colunas_existentes]
         
         print(f"Análise de comportamento concluída (APENAS produtos da base de vendas):")
@@ -6909,38 +6722,16 @@ class PrevisaoDemanda:
         
         return df_consolidado, df_detalhado, df_por_marca
     
-    def _aplicar_formatacao_porcentagem_corrigida(self, worksheet, df, nome_coluna):
-        """
-        Aplica formatação percentual corrigindo valores que estão multiplicados por 100.
-        Para colunas como CONCENTRACAO_VENDAS_TOP_20_PCT e TENDENCIA_CRESCIMENTO_PCT.
-        """
-        if nome_coluna not in df.columns:
-            return
-        
-        try:
-            col_index = list(df.columns).index(nome_coluna) + 1  # +1 porque Excel é 1-indexed
-            col_letter = chr(64 + col_index)  # Converter para letra (A, B, C, etc.)
-            
-            # Aplicar formatação percentual e dividir valores por 100
-            for row in range(2, len(df) + 2):  # +2 porque começamos da linha 2 (após header)
-                cell = worksheet[f'{col_letter}{row}']
-                if cell.value is not None and isinstance(cell.value, (int, float)):
-                    # Dividir por 100 para corrigir a formatação
-                    cell.value = cell.value / 100
-                cell.number_format = '0.00%'
-                
-        except Exception as e:
-            print(f"Erro ao aplicar formatação percentual corrigida para {nome_coluna}: {e}")
-
     def _gerar_aba_comportamento_clientes_consolidado(self, writer):
         """Gera a aba Comportamento de Clientes Consolidado."""
         if not hasattr(self, 'df_comportamento_consolidado') or self.df_comportamento_consolidado is None:
             print("Dados consolidados de comportamento de clientes não disponíveis.")
             return
             
-        # Organizar colunas conforme especificação para aba CONSOLIDADA
+        # Adicionar colunas de clientes por mês em ordem cronológica
         colunas_ordenadas = [
             'Codigo',
+            'Marca',
             'TOTAL_CLIENTES_UNICOS',
             'CLIENTES_ATIVOS_12M',
             'MEDIA_CLIENTES_12M',
@@ -6952,15 +6743,19 @@ class PrevisaoDemanda:
             'CLIENTES_ANUAIS',
             'CLIENTES_NAO_RECORRENTES',
             'CLIENTES_FIEIS',
+            'CLIENTES_REGULARES',
             'CLIENTES_REATIVADOS',
             'CLIENTES_EM_RISCO',
+            'CLIENTES_INATIVOS',
             'TEMPO_MEDIO_ENTRE_COMPRAS_MESES',
         ]
         
-        # Adicionar colunas de clientes por mês em ordem cronológica
-        colunas_clientes_ordenadas = sorted([col for col in self.df_comportamento_consolidado.columns 
-                                           if col.startswith('CLIENTES_') and col not in colunas_ordenadas])
-        colunas_ordenadas.extend(colunas_clientes_ordenadas)
+        # Preservar ordem cronológica já aplicada no DataFrame (não usar sorted alfabético)
+        colunas_clientes_meses = [
+            col for col in self.df_comportamento_consolidado.columns
+            if col.startswith('CLIENTES_') and col not in colunas_ordenadas
+        ]
+        colunas_ordenadas.extend(colunas_clientes_meses)
         
         # Filtrar apenas colunas existentes
         colunas_existentes = [col for col in colunas_ordenadas if col in self.df_comportamento_consolidado.columns]
@@ -6984,20 +6779,31 @@ class PrevisaoDemanda:
         # Organizar colunas conforme especificação para aba DETALHADA
         colunas_ordenadas = [
             'Codigo',
+            'Marca',
             'Cod_Cliente',
             'COMPORTAMENTO',
             'FIDELIDADE',
             'TOTAL_UNIDADES',
             'MESES_COM_COMPRAS',
+            'MESES_COM_COMPRAS_12M',
+            'TEMPO_ENTRE_COMPRAS_MESES',
             'PRIMEIRO_MES',
             'ULTIMO_MES',
             'TOP_3_MESES_PREFERIDOS',
         ]
         
         # Adicionar colunas de vendas mês a mês em ordem cronológica
-        colunas_vendas_ordenadas = sorted([col for col in self.df_comportamento_detalhado.columns 
-                                         if col.startswith('VENDAS_')])
-        colunas_ordenadas.extend(colunas_vendas_ordenadas)
+        # As colunas de meses têm formato canônico (jan-20, fev-20, etc.)
+        colunas_meses_det = [col for col in self.df_comportamento_detalhado.columns 
+                            if col not in colunas_ordenadas and col not in ['Codigo_Puro']]
+        # Aceitar rótulos já normalizados ou normalizáveis
+        colunas_meses_validas = []
+        for col in colunas_meses_det:
+            rotulo = normalizar_rotulo_mes(col)
+            if rotulo and (col == rotulo or re.match(r'^[a-z]{3}-\d{2}$', str(col))):
+                colunas_meses_validas.append(col)
+        colunas_meses_validas = self._ordenar_meses_cronologicamente(colunas_meses_validas)
+        colunas_ordenadas.extend(colunas_meses_validas)
         
         # Filtrar apenas colunas existentes
         colunas_existentes = [col for col in colunas_ordenadas if col in self.df_comportamento_detalhado.columns]
@@ -7017,8 +6823,6 @@ class PrevisaoDemanda:
         """
         Calcula análise ano a ano: novos clientes, clientes perdidos, médias e variações
         """
-        import pandas as pd
-        import numpy as np
         
         # Identificar anos disponíveis nos dados
         anos_disponiveis = set()
@@ -7126,24 +6930,11 @@ class PrevisaoDemanda:
         """
         print("Iniciando análise de comportamento por marca...")
         
-        # Extrair marca do código do produto
-        def extrair_marca(codigo):
-            """Extrai a marca do código: MTS-Adidas-Automática -> Adidas"""
-            if pd.isna(codigo) or not isinstance(codigo, str):
-                return 'INDEFINIDA'
-            
-            partes = codigo.split('-')
-            if len(partes) >= 2 and partes[0] in ['MTS', 'MTO']:
-                # Tratar marcas compostas como Calvin Klein
-                if len(partes) >= 3 and partes[1].lower() == "calvin" and partes[2].lower() == "klein":
-                    return "Calvin Klein"
-                return partes[1]
-            return 'INDEFINIDA'
-            return 'INDEFINIDA'
-        
-        # Adicionar coluna de marca
+        # Adicionar coluna de marca (usar a já existente se disponível)
         df_clientes_filtrado = df_clientes_filtrado.copy()
-        df_clientes_filtrado['Marca'] = df_clientes_filtrado['Código'].apply(extrair_marca)
+        if 'Marca' not in df_clientes_filtrado.columns:
+            df_clientes_filtrado['Marca'] = df_clientes_filtrado['Código'].apply(self._extrair_marca)
+        # Se Marca já existe (criada em analisar_comportamento_clientes), manter
         
         resultados_por_marca = []
         
@@ -7152,13 +6943,13 @@ class PrevisaoDemanda:
             if pd.isna(marca):
                 continue
                 
-            print(f"  Processando marca: {marca}")
+            print(f"  Processando marca: {marca}", flush=True)
             
             # Filtrar dados da marca
             df_marca = df_clientes_filtrado[df_clientes_filtrado['Marca'] == marca]
             
             # Consolidar dados por cliente (somar vendas de todos os produtos da marca)
-            df_marca_consolidado = df_marca.groupby('Cod. Cliente')[colunas_meses].sum().reset_index()
+            df_marca_consolidado = df_marca.groupby('Cod. Cliente', sort=False)[colunas_meses].sum().reset_index()
             
             # Análise de comportamento de cada cliente da marca
             comportamentos = {'MENSAL': 0, 'BIMESTRAL': 0, 'TRIMESTRAL': 0, 'SEMESTRAL': 0, 'ANUAL': 0, 'NÃO RECORRENTE': 0}
@@ -7174,96 +6965,95 @@ class PrevisaoDemanda:
             # Métricas consolidadas
             total_clientes_com_vendas = 0
             soma_tempos_entre_compras = 0
+            n_meses = len(colunas_meses)
             clientes_por_mes = {mes: 0 for mes in colunas_meses}
-            
-            for _, cliente_row in df_marca_consolidado.iterrows():
-                cod_cliente = cliente_row['Cod. Cliente']
-                if pd.isna(cod_cliente):
-                    continue
-                
-                # Calcular métricas do cliente
-                vendas_cliente = cliente_row[colunas_meses]
-                vendas_cliente = vendas_cliente[vendas_cliente.notna() & (vendas_cliente > 0)]
-                
-                if len(vendas_cliente) == 0:
-                    continue  # Cliente sem vendas
-                
-                total_clientes_com_vendas += 1
-                meses_com_compras = len(vendas_cliente)
-                
-                # Calcular tempo entre compras baseado no período ativo
-                meses_com_venda = [mes for mes in colunas_meses if cliente_row[mes] > 0]
-                if len(meses_com_venda) >= 1:
-                    primeiro_mes_idx = colunas_meses.index(meses_com_venda[0])
-                    ultimo_mes_idx = colunas_meses.index(meses_com_venda[-1])
-                    periodo_ativo_meses = ultimo_mes_idx - primeiro_mes_idx + 1
-                    
-                    if meses_com_compras == 1:
-                        tempo_entre_compras_cliente = 0
-                    else:
-                        tempo_entre_compras_cliente = periodo_ativo_meses / (meses_com_compras - 1)
-                    
-                    soma_tempos_entre_compras += tempo_entre_compras_cliente
-                
-                # Determinar comportamento baseado nos últimos 12 meses
-                ultimos_12_meses = colunas_meses[-12:] if len(colunas_meses) >= 12 else colunas_meses
-                vendas_12m_cliente = cliente_row[ultimos_12_meses]
-                vendas_12m_validas = vendas_12m_cliente[vendas_12m_cliente.notna() & (vendas_12m_cliente > 0)]
-                meses_com_compras_12m = len(vendas_12m_validas)
-                
-                # Categorizar comportamento
-                if meses_com_compras_12m >= 10:
-                    comportamentos['MENSAL'] += 1
-                elif meses_com_compras_12m >= 6:
-                    comportamentos['BIMESTRAL'] += 1
-                elif meses_com_compras_12m >= 4:
-                    comportamentos['TRIMESTRAL'] += 1
-                elif meses_com_compras_12m >= 2:
-                    comportamentos['SEMESTRAL'] += 1
-                elif meses_com_compras_12m == 1:
-                    comportamentos['ANUAL'] += 1
-                else:
-                    comportamentos['NÃO RECORRENTE'] += 1
-                
-                # Análise de fidelidade e reativação
-                ultimos_3_meses = colunas_meses[-3:] if len(colunas_meses) >= 3 else colunas_meses
-                vendas_3m = cliente_row[ultimos_3_meses]
-                vendas_3m_validas = vendas_3m[vendas_3m.notna() & (vendas_3m > 0)]
-                ativo_3m = len(vendas_3m_validas) > 0
-                
-                ultimos_6_meses = colunas_meses[-6:] if len(colunas_meses) >= 6 else colunas_meses
-                vendas_6m = cliente_row[ultimos_6_meses]
-                vendas_6m_validas = vendas_6m[vendas_6m.notna() & (vendas_6m > 0)]
-                ativo_6m = len(vendas_6m_validas) > 0
-                
-                # Verificar se é cliente reativado
-                if ativo_3m:
-                    meses_4_a_12 = colunas_meses[-12:-3] if len(colunas_meses) >= 12 else colunas_meses[:-3] if len(colunas_meses) > 3 else []
-                    if meses_4_a_12:
-                        vendas_4_a_12 = cliente_row[meses_4_a_12]
-                        vendas_4_a_12_validas = vendas_4_a_12[vendas_4_a_12.notna() & (vendas_4_a_12 > 0)]
-                        if len(vendas_4_a_12_validas) == 0 and meses_com_compras > meses_com_compras_12m:
-                            clientes_reativados += 1
-                
-                # Determinar fidelidade
-                compras_12m = meses_com_compras_12m
-                if compras_12m >= 6 and ativo_3m:
-                    clientes_fieis += 1
-                elif compras_12m >= 2 and ativo_6m:
-                    clientes_regulares += 1
-                elif compras_12m >= 1 or ativo_6m:
-                    clientes_em_risco += 1
-                else:
-                    clientes_inativos += 1
-                
-                # Cliente ativo nos últimos 12 meses
-                if len(vendas_12m_validas) > 0:
-                    clientes_ativos_12m += 1
-                
-                # Contar clientes por mês
-                for mes in colunas_meses:
-                    if cliente_row[mes] > 0:
-                        clientes_por_mes[mes] += 1
+            if n_meses == 0 or df_marca_consolidado.empty:
+                resultados_por_marca.append({
+                    'Marca': marca,
+                    'TOTAL_CLIENTES_UNICOS': 0,
+                    'CLIENTES_ATIVOS_12M': 0,
+                    'MEDIA_CLIENTES_12M': 0,
+                    'CLIENTES_ATIVOS_ULTIMO_MES': 0,
+                    'CLIENTES_MENSAIS': 0,
+                    'CLIENTES_BIMESTRAIS': 0,
+                    'CLIENTES_TRIMESTRAIS': 0,
+                    'CLIENTES_SEMESTRAIS': 0,
+                    'CLIENTES_ANUAIS': 0,
+                    'CLIENTES_NAO_RECORRENTES': 0,
+                    'CLIENTES_FIEIS': 0,
+                    'CLIENTES_REGULARES': 0,
+                    'CLIENTES_EM_RISCO': 0,
+                    'CLIENTES_INATIVOS': 0,
+                    'CLIENTES_REATIVADOS': 0,
+                    'TEMPO_MEDIO_ENTRE_COMPRAS_MESES': 0,
+                })
+                print(f"    Marca {marca}: 0 clientes únicos processados.", flush=True)
+                continue
+
+            # Matriz numérica (clientes x meses) — evita iterrows lento + thrashing.
+            mat = df_marca_consolidado[colunas_meses].to_numpy(dtype=float, copy=False)
+            mat = np.nan_to_num(mat, nan=0.0)
+            positive = mat > 0
+            clientes_por_mes_counts = positive.sum(axis=0)
+            for i, mes in enumerate(colunas_meses):
+                clientes_por_mes[mes] = int(clientes_por_mes_counts[i])
+
+            meses_com_compras_all = positive.sum(axis=1)
+            ativos = meses_com_compras_all > 0
+            total_clientes_com_vendas = int(ativos.sum())
+            if total_clientes_com_vendas == 0:
+                print(f"    Marca {marca}: 0 clientes únicos processados.", flush=True)
+                continue
+
+            mat_a = mat[ativos]
+            pos_a = positive[ativos]
+            n_cli = mat_a.shape[0]
+
+            # Primeiro/último mês com compra por cliente
+            first_idx = pos_a.argmax(axis=1)
+            last_idx = n_meses - 1 - pos_a[:, ::-1].argmax(axis=1)
+            meses_compras = pos_a.sum(axis=1)
+            periodo = last_idx - first_idx + 1
+            tempo = np.zeros(n_cli, dtype=float)
+            multi = meses_compras > 1
+            tempo[multi] = periodo[multi] / (meses_compras[multi] - 1)
+            soma_tempos_entre_compras = float(tempo.sum())
+
+            ultimos_12 = slice(max(0, n_meses - 12), n_meses)
+            ultimos_3 = slice(max(0, n_meses - 3), n_meses)
+            ultimos_6 = slice(max(0, n_meses - 6), n_meses)
+            compras_12m = pos_a[:, ultimos_12].sum(axis=1)
+            ativo_3m = pos_a[:, ultimos_3].any(axis=1)
+            ativo_6m = pos_a[:, ultimos_6].any(axis=1)
+            clientes_ativos_12m = int((compras_12m > 0).sum())
+
+            # Comportamento 12M
+            comportamentos['MENSAL'] = int((compras_12m >= 10).sum())
+            comportamentos['BIMESTRAL'] = int(((compras_12m >= 6) & (compras_12m < 10)).sum())
+            comportamentos['TRIMESTRAL'] = int(((compras_12m >= 4) & (compras_12m < 6)).sum())
+            comportamentos['SEMESTRAL'] = int(((compras_12m >= 2) & (compras_12m < 4)).sum())
+            comportamentos['ANUAL'] = int((compras_12m == 1).sum())
+            comportamentos['NÃO RECORRENTE'] = int((compras_12m == 0).sum())
+
+            # Reativados: ativo 3M, sem compra em meses 4..12 do fim, mas com histórico anterior
+            if n_meses >= 12:
+                janela_4_12 = pos_a[:, -12:-3]
+            elif n_meses > 3:
+                janela_4_12 = pos_a[:, :-3]
+            else:
+                janela_4_12 = None
+            if janela_4_12 is not None and janela_4_12.size:
+                reativ = ativo_3m & (~janela_4_12.any(axis=1)) & (meses_compras > compras_12m)
+                clientes_reativados = int(reativ.sum())
+
+            fieis = (compras_12m >= 6) & ativo_3m
+            regulares = (~fieis) & (compras_12m >= 2) & ativo_6m
+            risco = (~fieis) & (~regulares) & ((compras_12m >= 1) | ativo_6m)
+            inativos_m = (~fieis) & (~regulares) & (~risco)
+            clientes_fieis = int(fieis.sum())
+            clientes_regulares = int(regulares.sum())
+            clientes_em_risco = int(risco.sum())
+            clientes_inativos = int(inativos_m.sum())
             
             # Calcular métricas finais
             tempo_medio_entre_compras = soma_tempos_entre_compras / total_clientes_com_vendas if total_clientes_com_vendas > 0 else 0
@@ -7299,7 +7089,7 @@ class PrevisaoDemanda:
                 resultado_marca[f'CLIENTES_{mes.upper().replace("-", "_")}'] = clientes_por_mes[mes]
             
             resultados_por_marca.append(resultado_marca)
-            print(f"    Marca {marca}: {total_clientes_com_vendas} clientes únicos processados.")
+            print(f"    Marca {marca}: {total_clientes_com_vendas} clientes únicos processados.", flush=True)
         
         df_por_marca = pd.DataFrame(resultados_por_marca)
         
@@ -7390,7 +7180,6 @@ class PrevisaoDemanda:
         Gera a aba de comportamento de clientes consolidado por marca.
         """
         try:
-            import pandas as pd
             df = self.df_comportamento_por_marca
             nome_aba = 'Clientes_Por_Marca'
             
@@ -7526,9 +7315,10 @@ class PrevisaoDemanda:
                                'CLIENTES_NAO_RECORRENTES', 'CLIENTES_FIEIS', 'CLIENTES_REGULARES',
                                'CLIENTES_EM_RISCO', 'CLIENTES_INATIVOS', 'CLIENTES_REATIVADOS']
             
-            for coluna in colunas_numericas:
-                if coluna in df.columns:
-                    self._aplicar_formatacao_numerica(worksheet, df, coluna)
+            # Aplicar formatação numérica para colunas de contagem
+            colunas_num_existentes = [col for col in colunas_numericas if col in df.columns]
+            if colunas_num_existentes:
+                self._aplicar_formatacao_numerica(worksheet, colunas_num_existentes, '#,##0')
             
             # Formatação para tempo médio entre compras
             if 'TEMPO_MEDIO_ENTRE_COMPRAS_MESES' in df.columns:
@@ -7537,14 +7327,14 @@ class PrevisaoDemanda:
             # Formatação para colunas de variação em percentual
             colunas_variacao = [col for col in df.columns if 'VARIACAO_' in col and '_PCT' in col]
             if colunas_variacao:
-                self._aplicar_formatacao_percentual(worksheet, colunas_variacao)
+                self._aplicar_formatacao_numerica(worksheet, colunas_variacao, '0.00%')
             
             # Formatação para colunas de meses (clientes por mês)
             colunas_meses = [col for col in df.columns if col.startswith('CLIENTES_') and 
                            col not in colunas_numericas and col != 'TEMPO_MEDIO_ENTRE_COMPRAS_MESES']
             
-            for coluna in colunas_meses:
-                self._aplicar_formatacao_numerica(worksheet, df, coluna)
+            if colunas_meses:
+                self._aplicar_formatacao_numerica(worksheet, colunas_meses, '#,##0')
             
             # Ajustar largura das colunas das explicações
             worksheet.column_dimensions['A'].width = 25  # CRITÉRIO
@@ -7557,8 +7347,455 @@ class PrevisaoDemanda:
             
         except Exception as e:
             print(f"Erro ao gerar aba de comportamento por marca: {str(e)}")
-            import traceback
             traceback.print_exc()
+    def _gerar_aba_clientes_analise(self, writer):
+        """
+        Gera a aba Clientes_Analise com análise detalhada por marca/item mês a mês:
+        - Quantidade de clientes que compraram por item/mês
+        - Unidades vendidas por item/mês
+        - Quantidade média por cliente por mês
+        - Taxa de recompra mês a mês
+        - Clientes novos vs recorrentes
+        - Concentração de vendas (top 20%)
+        - Tendência da base de clientes
+        Com formatação de cores por comportamento.
+        """
+        if self.df_clientes is None:
+            print("Dados de clientes não disponíveis para aba Clientes_Analise.")
+            return
+        
+        print("Gerando aba: Clientes_Analise")
+        
+        try:
+            from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+            from openpyxl.utils import get_column_letter
+            
+            # Usar df_clientes com Marca e Codigo_Puro já extraídos
+            df = self.df_clientes.copy()
+            
+            # Garantir que Marca e Codigo_Puro existem
+            if 'Marca' not in df.columns:
+                df['Marca'] = df['Código'].apply(self._extrair_marca)
+            
+            if 'Codigo_Puro' not in df.columns:
+                def extrair_codigo(codigo):
+                    if pd.isna(codigo) or not isinstance(codigo, str):
+                        return str(codigo) if not pd.isna(codigo) else ''
+                    match = re.match(r'^([\d\.]+)-(.*)', codigo)
+                    if match:
+                        return match.group(1)
+                    return codigo
+                df['Codigo_Puro'] = df['Código'].apply(extrair_codigo)
+            
+            # Filtrar apenas produtos da base de vendas
+            if self.df_historico is not None:
+                produtos_previsao = [str(p) for p in self.df_historico['Codigo'].unique()]
+                df = df[df['Codigo_Puro'].isin(produtos_previsao)].copy()
+            
+            if len(df) == 0:
+                print("Nenhum dado de clientes após filtro para aba Clientes_Analise.")
+                return
+            
+            # Identificar colunas de meses
+            colunas_excluir = ['Código', 'Cod. Cliente', 'Codigo_Puro', 'Marca']
+            colunas_meses_raw = [col for col in df.columns if col not in colunas_excluir]
+            colunas_meses = self._ordenar_meses_cronologicamente(colunas_meses_raw)
+            
+            if not colunas_meses:
+                print("Nenhuma coluna de meses encontrada para aba Clientes_Analise.")
+                return
+            
+            # ========== CALCULAR MÉTRICAS CONSOLIDADAS POR MARCA ==========
+            # Usar self.df_comportamento_por_marca se disponível, senão calcular
+            metricas_marca = {}
+            colunas_marca_16 = ['TOTAL_CLIENTES_UNICOS', 'CLIENTES_ATIVOS_12M', 'MEDIA_CLIENTES_12M',
+                               'CLIENTES_ATIVOS_ULTIMO_MES', 'CLIENTES_MENSAIS', 'CLIENTES_BIMESTRAIS',
+                               'CLIENTES_TRIMESTRAIS', 'CLIENTES_SEMESTRAIS', 'CLIENTES_ANUAIS',
+                               'CLIENTES_NAO_RECORRENTES', 'CLIENTES_FIEIS', 'CLIENTES_REGULARES',
+                               'CLIENTES_EM_RISCO', 'CLIENTES_INATIVOS', 'CLIENTES_REATIVADOS',
+                               'TEMPO_MEDIO_ENTRE_COMPRAS_MESES']
+            
+            if hasattr(self, 'df_comportamento_por_marca') and self.df_comportamento_por_marca is not None and not self.df_comportamento_por_marca.empty:
+                df_marca_ref = self.df_comportamento_por_marca
+                for _, row in df_marca_ref.iterrows():
+                    marca_nome = row.get('Marca', '')
+                    if marca_nome:
+                        metricas_marca[marca_nome] = {col: row.get(col, 0) for col in colunas_marca_16}
+            
+            # ========== PROCESSAR DADOS POR MARCA/ITEM ==========
+            resultados = []
+            
+            for marca in sorted(df['Marca'].unique()):
+                if pd.isna(marca) or marca == 'INDEFINIDA':
+                    continue
+                
+                df_marca = df[df['Marca'] == marca]
+                itens_marca = df_marca['Codigo_Puro'].unique()
+                
+                for item in itens_marca:
+                    df_item = df_marca[df_marca['Codigo_Puro'] == item]
+                    
+                    if len(df_item) == 0:
+                        continue
+                    
+                    # Métricas mês a mês
+                    clientes_por_mes = {}
+                    unidades_por_mes = {}
+                    media_por_cliente_mes = {}
+                    clientes_novos_mes = {}
+                    clientes_recorrentes_mes = {}
+                    taxa_recompra_mes = {}
+                    
+                    clientes_acumulados = set()  # Clientes que já compraram antes
+                    clientes_mes_anterior = set()  # Clientes do mês anterior
+                    
+                    for i, mes in enumerate(colunas_meses):
+                        # Clientes com venda no mês
+                        mask_venda = df_item[mes].notna() & (df_item[mes] > 0)
+                        clientes_mes_atual = set(df_item[mask_venda]['Cod. Cliente'].unique())
+                        
+                        n_clientes = len(clientes_mes_atual)
+                        total_unidades = df_item.loc[mask_venda, mes].sum() if n_clientes > 0 else 0
+                        
+                        clientes_por_mes[mes] = n_clientes
+                        unidades_por_mes[mes] = int(total_unidades) if not pd.isna(total_unidades) else 0
+                        media_por_cliente_mes[mes] = round(total_unidades / n_clientes, 1) if n_clientes > 0 else 0
+                        
+                        # Clientes novos vs recorrentes
+                        novos = clientes_mes_atual - clientes_acumulados
+                        recorrentes = clientes_mes_atual & clientes_acumulados
+                        clientes_novos_mes[mes] = len(novos)
+                        clientes_recorrentes_mes[mes] = len(recorrentes)
+                        
+                        # Taxa de recompra (% de clientes do mês anterior que voltaram)
+                        if len(clientes_mes_anterior) > 0:
+                            recompra = len(clientes_mes_atual & clientes_mes_anterior) / len(clientes_mes_anterior)
+                            taxa_recompra_mes[mes] = round(recompra * 100, 1)
+                        else:
+                            taxa_recompra_mes[mes] = 0
+                        
+                        # Atualizar acumulados
+                        clientes_acumulados.update(clientes_mes_atual)
+                        clientes_mes_anterior = clientes_mes_atual
+                    
+                    # Concentração de vendas (top 20% clientes)
+                    vendas_por_cliente = df_item.groupby('Cod. Cliente')[colunas_meses].sum().sum(axis=1)
+                    vendas_por_cliente = vendas_por_cliente[vendas_por_cliente > 0].sort_values(ascending=False)
+                    total_clientes_item = len(vendas_por_cliente)
+                    if total_clientes_item > 0:
+                        top_20_pct = max(1, int(total_clientes_item * 0.2))
+                        vendas_top_20 = vendas_por_cliente.head(top_20_pct).sum()
+                        vendas_total = vendas_por_cliente.sum()
+                        concentracao = round((vendas_top_20 / vendas_total) * 100, 1) if vendas_total > 0 else 0
+                    else:
+                        concentracao = 0
+                    
+                    # Tendência da base de clientes (últimos 6 meses vs 6 meses anteriores)
+                    ultimos_6 = colunas_meses[-6:] if len(colunas_meses) >= 6 else colunas_meses
+                    anteriores_6 = colunas_meses[-12:-6] if len(colunas_meses) >= 12 else colunas_meses[:len(colunas_meses)//2]
+                    
+                    media_clientes_recente = np.mean([clientes_por_mes[m] for m in ultimos_6]) if ultimos_6 else 0
+                    media_clientes_anterior = np.mean([clientes_por_mes[m] for m in anteriores_6]) if anteriores_6 else 0
+                    
+                    if media_clientes_anterior > 0:
+                        variacao_base = round(((media_clientes_recente - media_clientes_anterior) / media_clientes_anterior) * 100, 1)
+                    else:
+                        variacao_base = 0
+                    
+                    if variacao_base > 10:
+                        tendencia = 'CRESCENDO'
+                    elif variacao_base < -10:
+                        tendencia = 'DIMINUINDO'
+                    else:
+                        tendencia = 'ESTÁVEL'
+                    
+                    # Classificar recorrência do item
+                    meses_com_vendas = sum(1 for m in colunas_meses[-12:] if clientes_por_mes.get(m, 0) > 0)
+                    if meses_com_vendas >= 10:
+                        recorrencia_item = 'ALTA RECORRÊNCIA'
+                    elif meses_com_vendas >= 6:
+                        recorrencia_item = 'MÉDIA RECORRÊNCIA'
+                    elif meses_com_vendas >= 3:
+                        recorrencia_item = 'BAIXA RECORRÊNCIA'
+                    elif meses_com_vendas >= 1:
+                        recorrencia_item = 'ESPORÁDICO'
+                    else:
+                        recorrencia_item = 'SEM VENDAS 12M'
+                    
+                    # Montar linha de resultado
+                    # Buscar métricas consolidadas da marca
+                    dados_marca = metricas_marca.get(marca, {})
+                    
+                    resultado = {
+                        'Marca': marca,
+                        'Marca_Total Clientes Únicos': dados_marca.get('TOTAL_CLIENTES_UNICOS', 0),
+                        'Marca_Clientes Ativos 12M': dados_marca.get('CLIENTES_ATIVOS_12M', 0),
+                        'Marca_Média Clientes 12M': dados_marca.get('MEDIA_CLIENTES_12M', 0),
+                        'Marca_Clientes Ativo Último Mês': dados_marca.get('CLIENTES_ATIVOS_ULTIMO_MES', 0),
+                        'Marca_Clientes Mensais': dados_marca.get('CLIENTES_MENSAIS', 0),
+                        'Marca_Clientes Bimestrais': dados_marca.get('CLIENTES_BIMESTRAIS', 0),
+                        'Marca_Clientes Trimestrais': dados_marca.get('CLIENTES_TRIMESTRAIS', 0),
+                        'Marca_Clientes Semestrais': dados_marca.get('CLIENTES_SEMESTRAIS', 0),
+                        'Marca_Clientes Anuais': dados_marca.get('CLIENTES_ANUAIS', 0),
+                        'Marca_Clientes Não Recorrentes': dados_marca.get('CLIENTES_NAO_RECORRENTES', 0),
+                        'Marca_Clientes Fiéis': dados_marca.get('CLIENTES_FIEIS', 0),
+                        'Marca_Clientes Regulares': dados_marca.get('CLIENTES_REGULARES', 0),
+                        'Marca_Clientes Em Risco': dados_marca.get('CLIENTES_EM_RISCO', 0),
+                        'Marca_Clientes Inativos': dados_marca.get('CLIENTES_INATIVOS', 0),
+                        'Marca_Clientes Reativados': dados_marca.get('CLIENTES_REATIVADOS', 0),
+                        'Marca_Tempo Médio Entre Compras': dados_marca.get('TEMPO_MEDIO_ENTRE_COMPRAS_MESES', 0),
+                        'Codigo': item,
+                        'Total Clientes Únicos': total_clientes_item,
+                        'Concentração Top 20%': concentracao,
+                        'Tendência Base Clientes': tendencia,
+                        'Variação Base 6M (%)': variacao_base,
+                        'Recorrência Item': recorrencia_item,
+                        'Meses com Vendas (12M)': meses_com_vendas,
+                    }
+                    
+                    # Adicionar métricas mês a mês
+                    for mes in colunas_meses:
+                        resultado[f'CLI_{mes}'] = clientes_por_mes[mes]
+                        resultado[f'UNI_{mes}'] = unidades_por_mes[mes]
+                        resultado[f'MED_{mes}'] = media_por_cliente_mes[mes]
+                        resultado[f'NOV_{mes}'] = clientes_novos_mes[mes]
+                        resultado[f'REC_{mes}'] = clientes_recorrentes_mes[mes]
+                        resultado[f'TXR_{mes}'] = taxa_recompra_mes[mes]
+                    
+                    resultados.append(resultado)
+            
+            if not resultados:
+                print("Nenhum resultado gerado para aba Clientes_Analise.")
+                return
+            
+            df_resultado = pd.DataFrame(resultados)
+            
+            # ========== ORGANIZAR EM MÚLTIPLAS SEÇÕES NA ABA ==========
+            nome_aba = 'Clientes_Analise'
+            
+            # Seção 1: Resumo por Item (colunas fixas + tendência)
+            # Colunas consolidadas da marca (entre Marca e Codigo)
+            colunas_marca_resumo = [
+                'Marca_Total Clientes Únicos', 'Marca_Clientes Ativos 12M', 'Marca_Média Clientes 12M',
+                'Marca_Clientes Ativo Último Mês', 'Marca_Clientes Mensais', 'Marca_Clientes Bimestrais',
+                'Marca_Clientes Trimestrais', 'Marca_Clientes Semestrais', 'Marca_Clientes Anuais',
+                'Marca_Clientes Não Recorrentes', 'Marca_Clientes Fiéis', 'Marca_Clientes Regulares',
+                'Marca_Clientes Em Risco', 'Marca_Clientes Inativos', 'Marca_Clientes Reativados',
+                'Marca_Tempo Médio Entre Compras'
+            ]
+            colunas_resumo = ['Marca'] + colunas_marca_resumo + ['Codigo', 'Total Clientes Únicos', 'Concentração Top 20%',
+                             'Tendência Base Clientes', 'Variação Base 6M (%)', 'Recorrência Item', 'Meses com Vendas (12M)']
+            
+            # Seção 2: Clientes por mês
+            colunas_clientes_mes = [f'CLI_{mes}' for mes in colunas_meses]
+            
+            # Seção 3: Unidades por mês
+            colunas_unidades_mes = [f'UNI_{mes}' for mes in colunas_meses]
+            
+            # Seção 4: Média por cliente por mês
+            colunas_media_mes = [f'MED_{mes}' for mes in colunas_meses]
+            
+            # Seção 5: Clientes novos por mês
+            colunas_novos_mes = [f'NOV_{mes}' for mes in colunas_meses]
+            
+            # Seção 6: Clientes recorrentes por mês
+            colunas_recorrentes_mes = [f'REC_{mes}' for mes in colunas_meses]
+            
+            # Seção 7: Taxa de recompra por mês
+            colunas_taxa_mes = [f'TXR_{mes}' for mes in colunas_meses]
+            
+            # Montar DataFrame final com todas as colunas organizadas
+            todas_colunas = colunas_resumo + colunas_clientes_mes + colunas_unidades_mes + colunas_media_mes + colunas_novos_mes + colunas_recorrentes_mes + colunas_taxa_mes
+            colunas_existentes = [col for col in todas_colunas if col in df_resultado.columns]
+            df_final = df_resultado[colunas_existentes]
+            
+            # Renomear colunas para legibilidade
+            renomear = {}
+            for mes in colunas_meses:
+                renomear[f'CLI_{mes}'] = f'Clientes {mes}'
+                renomear[f'UNI_{mes}'] = f'Unidades {mes}'
+                renomear[f'MED_{mes}'] = f'Média/Cli {mes}'
+                renomear[f'NOV_{mes}'] = f'Novos {mes}'
+                renomear[f'REC_{mes}'] = f'Recorrentes {mes}'
+                renomear[f'TXR_{mes}'] = f'Tx Recompra% {mes}'
+            df_final = df_final.rename(columns=renomear)
+            
+            # Escrever no Excel
+            df_final.to_excel(writer, sheet_name=nome_aba, index=False)
+            
+            # ========== APLICAR FORMATAÇÃO COM CORES ==========
+            worksheet = writer.sheets[nome_aba]
+            
+            # Estilos
+            header_font = Font(bold=True, color='FFFFFF', size=10)
+            header_fill = PatternFill(start_color='1F4E79', end_color='1F4E79', fill_type='solid')
+            
+            # Cores para Tendência
+            fill_crescendo = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')  # Verde claro
+            fill_estavel = PatternFill(start_color='FFEB9C', end_color='FFEB9C', fill_type='solid')  # Amarelo claro
+            fill_diminuindo = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid')  # Vermelho claro
+            
+            # Cores para Recorrência
+            fill_alta_rec = PatternFill(start_color='006100', end_color='006100', fill_type='solid')  # Verde escuro
+            font_alta_rec = Font(color='FFFFFF', bold=True)
+            fill_media_rec = PatternFill(start_color='92D050', end_color='92D050', fill_type='solid')  # Verde médio
+            fill_baixa_rec = PatternFill(start_color='FFC000', end_color='FFC000', fill_type='solid')  # Laranja
+            fill_esporadico = PatternFill(start_color='FF6347', end_color='FF6347', fill_type='solid')  # Vermelho
+            font_esporadico = Font(color='FFFFFF', bold=True)
+            fill_sem_vendas = PatternFill(start_color='808080', end_color='808080', fill_type='solid')  # Cinza
+            font_sem_vendas = Font(color='FFFFFF', bold=True)
+            
+            # Cores para clientes mês a mês (heatmap)
+            fill_muitos_clientes = PatternFill(start_color='4472C4', end_color='4472C4', fill_type='solid')  # Azul forte
+            font_muitos = Font(color='FFFFFF')
+            fill_alguns_clientes = PatternFill(start_color='B4C6E7', end_color='B4C6E7', fill_type='solid')  # Azul claro
+            fill_poucos_clientes = PatternFill(start_color='D9E2F3', end_color='D9E2F3', fill_type='solid')  # Azul muito claro
+            fill_zero_clientes = PatternFill(start_color='F2F2F2', end_color='F2F2F2', fill_type='solid')  # Cinza claro
+            
+            # Cores para taxa de recompra
+            fill_recompra_alta = PatternFill(start_color='00B050', end_color='00B050', fill_type='solid')  # Verde
+            font_recompra_alta = Font(color='FFFFFF', bold=True)
+            fill_recompra_media = PatternFill(start_color='92D050', end_color='92D050', fill_type='solid')  # Verde claro
+            fill_recompra_baixa = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid')  # Rosa
+            
+            # Formatar header
+            for col in range(1, worksheet.max_column + 1):
+                cell = worksheet.cell(row=1, column=col)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = Alignment(horizontal='center', wrap_text=True)
+            
+            # Encontrar índices das colunas
+            header_map = {}
+            for col in range(1, worksheet.max_column + 1):
+                header_map[worksheet.cell(row=1, column=col).value] = col
+            
+            # Aplicar cores na coluna Tendência Base Clientes
+            col_tendencia = header_map.get('Tendência Base Clientes')
+            if col_tendencia:
+                for row in range(2, worksheet.max_row + 1):
+                    cell = worksheet.cell(row=row, column=col_tendencia)
+                    if cell.value == 'CRESCENDO':
+                        cell.fill = fill_crescendo
+                    elif cell.value == 'ESTÁVEL':
+                        cell.fill = fill_estavel
+                    elif cell.value == 'DIMINUINDO':
+                        cell.fill = fill_diminuindo
+            
+            # Aplicar cores na coluna Recorrência Item
+            col_recorrencia = header_map.get('Recorrência Item')
+            if col_recorrencia:
+                for row in range(2, worksheet.max_row + 1):
+                    cell = worksheet.cell(row=row, column=col_recorrencia)
+                    if cell.value == 'ALTA RECORRÊNCIA':
+                        cell.fill = fill_alta_rec
+                        cell.font = font_alta_rec
+                    elif cell.value == 'MÉDIA RECORRÊNCIA':
+                        cell.fill = fill_media_rec
+                    elif cell.value == 'BAIXA RECORRÊNCIA':
+                        cell.fill = fill_baixa_rec
+                    elif cell.value == 'ESPORÁDICO':
+                        cell.fill = fill_esporadico
+                        cell.font = font_esporadico
+                    elif cell.value == 'SEM VENDAS 12M':
+                        cell.fill = fill_sem_vendas
+                        cell.font = font_sem_vendas
+            
+            # Aplicar heatmap nas colunas de Clientes por mês
+            for mes in colunas_meses:
+                col_name = f'Clientes {mes}'
+                col_idx = header_map.get(col_name)
+                if col_idx:
+                    # Calcular percentis para este mês
+                    valores = []
+                    for row in range(2, worksheet.max_row + 1):
+                        val = worksheet.cell(row=row, column=col_idx).value
+                        if val is not None and isinstance(val, (int, float)) and val > 0:
+                            valores.append(val)
+                    
+                    if valores:
+                        p75 = np.percentile(valores, 75)
+                        p25 = np.percentile(valores, 25)
+                    else:
+                        p75 = 1
+                        p25 = 0
+                    
+                    for row in range(2, worksheet.max_row + 1):
+                        cell = worksheet.cell(row=row, column=col_idx)
+                        val = cell.value
+                        if val is None or val == 0:
+                            cell.fill = fill_zero_clientes
+                        elif val >= p75:
+                            cell.fill = fill_muitos_clientes
+                            cell.font = font_muitos
+                        elif val >= p25:
+                            cell.fill = fill_alguns_clientes
+                        else:
+                            cell.fill = fill_poucos_clientes
+            
+            # Aplicar cores nas colunas de Taxa de Recompra
+            for mes in colunas_meses:
+                col_name = f'Tx Recompra% {mes}'
+                col_idx = header_map.get(col_name)
+                if col_idx:
+                    for row in range(2, worksheet.max_row + 1):
+                        cell = worksheet.cell(row=row, column=col_idx)
+                        val = cell.value
+                        if val is not None and isinstance(val, (int, float)):
+                            if val >= 50:
+                                cell.fill = fill_recompra_alta
+                                cell.font = font_recompra_alta
+                            elif val >= 25:
+                                cell.fill = fill_recompra_media
+                            elif val > 0:
+                                cell.fill = fill_recompra_baixa
+                            else:
+                                cell.fill = fill_zero_clientes
+            
+            # Aplicar cores nas colunas de Concentração Top 20%
+            col_conc = header_map.get('Concentração Top 20%')
+            if col_conc:
+                for row in range(2, worksheet.max_row + 1):
+                    cell = worksheet.cell(row=row, column=col_conc)
+                    val = cell.value
+                    if val is not None and isinstance(val, (int, float)):
+                        if val >= 80:  # Muito concentrado
+                            cell.fill = PatternFill(start_color='FF0000', end_color='FF0000', fill_type='solid')
+                            cell.font = Font(color='FFFFFF', bold=True)
+                        elif val >= 60:  # Concentrado
+                            cell.fill = PatternFill(start_color='FFC000', end_color='FFC000', fill_type='solid')
+                        elif val >= 40:  # Moderado
+                            cell.fill = fill_estavel
+                        # Abaixo de 40% = distribuído (sem cor especial)
+            
+            # Ajustar largura das colunas
+            worksheet.column_dimensions['A'].width = 18  # Marca
+            # Colunas B a Q: 16 colunas da marca (largura 14)
+            for col_idx in range(2, 18):  # B=2 até Q=17
+                col_letter = get_column_letter(col_idx)
+                worksheet.column_dimensions[col_letter].width = 14
+            worksheet.column_dimensions['R'].width = 16  # Codigo
+            worksheet.column_dimensions['S'].width = 14  # Total Clientes
+            worksheet.column_dimensions['T'].width = 14  # Concentração
+            worksheet.column_dimensions['U'].width = 18  # Tendência
+            worksheet.column_dimensions['V'].width = 14  # Variação
+            worksheet.column_dimensions['W'].width = 20  # Recorrência
+            worksheet.column_dimensions['X'].width = 14  # Meses com Vendas
+            
+            # Colunas de meses - largura menor (a partir da coluna Y = 25)
+            for col in range(25, worksheet.max_column + 1):
+                col_letter = get_column_letter(col)
+                worksheet.column_dimensions[col_letter].width = 10
+            
+            # Congelar painéis (fixar colunas de resumo até Meses com Vendas = coluna X)
+            worksheet.freeze_panes = 'Y2'
+            
+            print(f"Aba '{nome_aba}' gerada com sucesso: {len(df_final)} itens analisados")
+            
+        except Exception as e:
+            print(f"Erro ao gerar aba Clientes_Analise: {str(e)}")
+            traceback.print_exc()
+    
     def _gerar_aba_metodologia(self, writer):
         """
         Gera a aba Metodologia com documentação completa da estratégia do script.
@@ -7815,7 +8052,6 @@ class PrevisaoDemanda:
             
         except Exception as e:
             print(f"Erro ao gerar aba Metodologia: {str(e)}")
-            import traceback
             traceback.print_exc()
 
 def main():

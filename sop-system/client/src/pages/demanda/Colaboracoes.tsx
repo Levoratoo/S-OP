@@ -2,6 +2,14 @@ import { useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -9,13 +17,35 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { normalizeMarcaNome, useAccessControl } from "@/hooks/useAccessControl";
 import { trpc } from "@/lib/trpc";
-import { Loader2, RefreshCw } from "lucide-react";
+import { Loader2, Plus, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
+import { ColaboracaoResumos } from "./ColaboracaoResumos";
 
-type PlanoColab = "MTS" | "JITO" | "PV_MTO" | "CRM";
+type PlanoColab = "MTS" | "PV_MTO" | "CRM";
 
-const PLANOS: PlanoColab[] = ["MTS", "JITO", "PV_MTO", "CRM"];
+const PLANOS: PlanoColab[] = ["MTS", "PV_MTO", "CRM"];
+const PLANO_LABEL: Record<PlanoColab, string> = {
+  MTS: "MTS",
+  PV_MTO: "PV MTO",
+  CRM: "CRM",
+};
 const MES_KEYS = ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12"] as const;
+const EST_KEYS = ["e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8", "e9", "e10", "e11", "e12"] as const;
+const MESES_NOME = [
+  "Janeiro",
+  "Fevereiro",
+  "Março",
+  "Abril",
+  "Maio",
+  "Junho",
+  "Julho",
+  "Agosto",
+  "Setembro",
+  "Outubro",
+  "Novembro",
+  "Dezembro",
+];
+const MESES_CURTO = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
 
 function formatNum(value: string | number | null | undefined) {
   const n = Number(value ?? 0);
@@ -23,14 +53,25 @@ function formatNum(value: string | number | null | undefined) {
   return n.toLocaleString("pt-BR", { maximumFractionDigits: 0 });
 }
 
+/** Próximo mês = início do ciclo (equiv. aba Dias e Data C2). */
+function defaultCicloInicio(now = new Date()) {
+  const next = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  return { mesInicio: next.getMonth() + 1, anoInicio: next.getFullYear() };
+}
+
 export default function Colaboracoes() {
   const utils = trpc.useUtils();
   const { podeVerTodasMarcas, marcasPermitidasNomes, isGestor } = useAccessControl();
   const [cicloId, setCicloId] = useState<number | null>(null);
   const [plano, setPlano] = useState<PlanoColab>("MTS");
-  const [jobIdInput, setJobIdInput] = useState("");
   const [search, setSearch] = useState("");
   const [abaPrincipal, setAbaPrincipal] = useState<"grade" | "consolidado">("grade");
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const defaults = defaultCicloInicio();
+  const [jobIdInput, setJobIdInput] = useState("");
+  const [nomeCiclo, setNomeCiclo] = useState("");
+  const [mesInicio, setMesInicio] = useState(String(defaults.mesInicio));
+  const [anoInicio, setAnoInicio] = useState(String(defaults.anoInicio));
 
   const { data: ciclos, isLoading: loadingCiclos } = trpc.cicloComercial.list.useQuery();
   const selectedCicloId = cicloId ?? ciclos?.[0]?.id ?? null;
@@ -50,6 +91,11 @@ export default function Colaboracoes() {
     { enabled: Boolean(selectedCicloId) }
   );
 
+  const { data: realizadoAnual } = trpc.cicloComercial.realizadoAnual.useQuery(
+    { anos: [2025, 2026] },
+    { enabled: Boolean(selectedCicloId) && plano === "MTS" }
+  );
+
   const { data: jobs } = trpc.previsaoPython.list.useQuery({ limit: 20 });
 
   const desagregarMutation = trpc.cicloComercial.desagregarDoJob.useMutation({
@@ -57,6 +103,7 @@ export default function Colaboracoes() {
       toast.success(`Ciclo #${result.cicloId} criado com ${result.itensCriados} itens.`);
       utils.cicloComercial.list.invalidate();
       setCicloId(result.cicloId);
+      setWizardOpen(false);
     },
     onError: error => toast.error(error.message),
   });
@@ -77,6 +124,18 @@ export default function Colaboracoes() {
     },
     onError: error => toast.error(error.message),
   });
+
+  const successJobs = useMemo(
+    () =>
+      (jobs ?? []).filter(
+        j =>
+          j.status === "SUCCESS" &&
+          !String(j.scriptVersion || "")
+            .toLowerCase()
+            .includes("ciclo13")
+      ),
+    [jobs]
+  );
 
   const filteredItens = useMemo(() => {
     let list = itens ?? [];
@@ -102,19 +161,49 @@ export default function Colaboracoes() {
     return filtered.sort((a, b) => b[1].qtde - a[1].qtde);
   }, [consolidado, podeVerTodasMarcas, marcasPermitidasNomes]);
 
-  const handleDesagregar = () => {
-    const jobId = Number(jobIdInput) || jobs?.find(j => j.status === "SUCCESS")?.id;
+  const handleAbrirWizard = () => {
+    const latest = successJobs[0];
+    setJobIdInput(latest ? String(latest.id) : "");
+    const d = defaultCicloInicio();
+    setMesInicio(String(d.mesInicio));
+    setAnoInicio(String(d.anoInicio));
+    setNomeCiclo(
+      `Ciclo ${String(d.mesInicio).padStart(2, "0")}/${String(d.anoInicio).slice(-2)}`
+    );
+    setWizardOpen(true);
+  };
+
+  const handleCriarCiclo = () => {
+    const jobId = Number(jobIdInput) || successJobs[0]?.id;
     if (!jobId) {
-      toast.error("Informe o ID de um job Python SUCCESS ou execute a previsão antes.");
+      toast.error("Selecione um job Python SUCCESS.");
       return;
     }
-    desagregarMutation.mutate({ jobId });
+    desagregarMutation.mutate({
+      jobId,
+      nomeCiclo: nomeCiclo.trim() || undefined,
+      mesInicio: Number(mesInicio),
+      anoInicio: Number(anoInicio),
+    });
   };
 
   const handleMonthEdit = (itemId: number, key: (typeof MES_KEYS)[number], raw: string) => {
-    const value = raw.replace(/\./g, "").replace(",", ".");
-    if (raw !== "" && Number.isNaN(Number(value))) return;
-    updateItemMutation.mutate({ id: itemId, [key]: value || "0" });
+    const trimmed = raw.trim();
+    if (trimmed === "") {
+      updateItemMutation.mutate({ id: itemId, [key]: null });
+      return;
+    }
+    const value = trimmed.replace(/\./g, "").replace(",", ".");
+    if (Number.isNaN(Number(value))) return;
+    updateItemMutation.mutate({ id: itemId, [key]: value });
+  };
+
+  const cicloMesLabel = (offset: number) => {
+    if (!ciclo) return `M${offset + 1}`;
+    const abs = ciclo.mesInicio - 1 + offset;
+    const mes = (abs % 12) + 1;
+    const ano = ciclo.anoInicio + Math.floor(abs / 12);
+    return `${MESES_CURTO[mes - 1]}/${String(ano).slice(-2)}`;
   };
 
   return (
@@ -123,29 +212,84 @@ export default function Colaboracoes() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Colaboração Comercial</h1>
           <p className="text-muted-foreground">
-            Ciclo S&OP com desagregação estatística e edição MTS / JITO / PV-MTO / CRM
+            Ciclo S&OP: MTS · PV MTO · CRM · Consolidado
             {isGestor ? " · filtrado pelas suas marcas" : ""}
           </p>
         </div>
-        <div className="flex flex-wrap items-end gap-2" data-tour="page-colab-desagregar">
-          <div className="space-y-1">
-            <Label>Job Python (SUCCESS)</Label>
-            <Input
-              className="w-40"
-              placeholder="ID do job"
-              value={jobIdInput}
-              onChange={e => setJobIdInput(e.target.value)}
-            />
-          </div>
-          <Button onClick={handleDesagregar} disabled={desagregarMutation.isPending}>
-            {desagregarMutation.isPending ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <RefreshCw className="mr-2 h-4 w-4" />
-            )}
-            Desagregar do job
+        <Dialog open={wizardOpen} onOpenChange={setWizardOpen}>
+          <Button onClick={handleAbrirWizard} data-tour="page-colab-desagregar">
+            <Plus className="mr-2 h-4 w-4" />
+            + Adicionar ciclo
           </Button>
-        </div>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Novo ciclo S&OP</DialogTitle>
+              <DialogDescription>
+                Equivalente a copiar o “0 - Novo Modelo Colaboração Comercial”. Desagrega a Visão
+                Executiva do job Python (aba Dias e Data = 1º dia do mês de início).
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3 py-2">
+              <div className="space-y-1">
+                <Label>Job Python (SUCCESS)</Label>
+                <Select value={jobIdInput || undefined} onValueChange={setJobIdInput}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Selecione o job" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {successJobs.map(j => (
+                      <SelectItem key={j.id} value={String(j.id)}>
+                        #{j.id} — {j.createdAt ? new Date(j.createdAt).toLocaleString("pt-BR") : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label>Nome do ciclo</Label>
+                <Input value={nomeCiclo} onChange={e => setNomeCiclo(e.target.value)} />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label>Mês início</Label>
+                  <Select value={mesInicio} onValueChange={setMesInicio}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {MESES_NOME.map((nome, i) => (
+                        <SelectItem key={nome} value={String(i + 1)}>
+                          {nome}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label>Ano início</Label>
+                  <Input
+                    type="number"
+                    value={anoInicio}
+                    onChange={e => setAnoInicio(e.target.value)}
+                  />
+                </div>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setWizardOpen(false)}>
+                Cancelar
+              </Button>
+              <Button onClick={handleCriarCiclo} disabled={desagregarMutation.isPending}>
+                {desagregarMutation.isPending ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                )}
+                Criar e desagregar
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">
@@ -207,15 +351,27 @@ export default function Colaboracoes() {
           <CardContent>
             <div className="text-2xl font-semibold">{formatNum(consolidado?.totalQtde)}</div>
             <div className="mt-2 space-y-1 text-sm text-muted-foreground">
-              {PLANOS.map(p => (
-                <div key={p} className="flex justify-between">
-                  <span>{p}</span>
-                  <span>
-                    {formatNum(consolidado?.byPlano?.[p]?.qtde)} ({consolidado?.byPlano?.[p]?.itens ?? 0}{" "}
-                    itens)
-                  </span>
-                </div>
-              ))}
+              {PLANOS.map(p => {
+                const qtde =
+                  p === "MTS"
+                    ? consolidado?.resumoPlanos?.mts
+                    : p === "PV_MTO"
+                      ? consolidado?.resumoPlanos?.pvMto
+                      : consolidado?.resumoPlanos?.crm;
+                const itensCount =
+                  p === "MTS"
+                    ? (consolidado?.byPlano?.MTS?.itens ?? 0) +
+                      (consolidado?.byPlano?.JITO?.itens ?? 0)
+                    : (consolidado?.byPlano?.[p]?.itens ?? 0);
+                return (
+                  <div key={p} className="flex justify-between">
+                    <span>{PLANO_LABEL[p]}</span>
+                    <span>
+                      {formatNum(qtde)} ({itensCount} itens)
+                    </span>
+                  </div>
+                );
+              })}
               <div className="flex justify-between border-t pt-1">
                 <span>Estatística</span>
                 <span>{formatNum(consolidado?.totalEstatistica)}</span>
@@ -277,7 +433,10 @@ export default function Colaboracoes() {
                 <div className="flex flex-wrap items-end justify-between gap-3">
                   <div>
                     <CardTitle>Grade de colaboração</CardTitle>
-                    <CardDescription>Edite as quantidades mensais por plano</CardDescription>
+                    <CardDescription>
+                      MTS: realizado 2025/2026 · previsão estatística · coluna Colab do vendedor (em
+                      branco = usa a previsão)
+                    </CardDescription>
                   </div>
                   <div className="w-64 space-y-1">
                     <Label>Buscar</Label>
@@ -294,7 +453,7 @@ export default function Colaboracoes() {
                   <TabsList>
                     {PLANOS.map(p => (
                       <TabsTrigger key={p} value={p}>
-                        {p}
+                        {PLANO_LABEL[p]}
                       </TabsTrigger>
                     ))}
                   </TabsList>
@@ -304,6 +463,113 @@ export default function Colaboracoes() {
                         <div className="flex justify-center py-8">
                           <Loader2 className="h-5 w-5 animate-spin" />
                         </div>
+                      ) : p === "MTS" ? (
+                        <div className="max-h-[70vh] overflow-auto rounded-md border">
+                          <Table>
+                            <TableHeader className="sticky top-0 z-10 bg-background shadow-sm">
+                              <TableRow>
+                                <TableHead className="sticky left-0 z-20 bg-background min-w-[120px]">
+                                  SKU
+                                </TableHead>
+                                <TableHead>Marca</TableHead>
+                                {MESES_CURTO.map((m, i) => (
+                                  <TableHead key={`r25-${i}`} className="text-right text-xs text-muted-foreground">
+                                    {m}/25
+                                  </TableHead>
+                                ))}
+                                {MESES_CURTO.map((m, i) => (
+                                  <TableHead key={`r26-${i}`} className="text-right text-xs text-muted-foreground">
+                                    {m}/26
+                                  </TableHead>
+                                ))}
+                                {MES_KEYS.map((_, i) => (
+                                  <TableHead key={`prev-${i}`} className="text-right text-xs bg-blue-50/50">
+                                    {cicloMesLabel(i)} Prev
+                                  </TableHead>
+                                ))}
+                                {MES_KEYS.map((key, i) => (
+                                  <TableHead key={`colab-${key}`} className="text-right text-xs bg-amber-50/60">
+                                    {cicloMesLabel(i)} Colab
+                                  </TableHead>
+                                ))}
+                                <TableHead className="text-right">Total</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {filteredItens.length === 0 ? (
+                                <TableRow>
+                                  <TableCell colSpan={52} className="text-center text-muted-foreground">
+                                    Sem itens neste plano.
+                                  </TableCell>
+                                </TableRow>
+                              ) : (
+                                filteredItens.map(item => {
+                                  const skuKey = String(item.sku || "").trim().toUpperCase();
+                                  const r25 = realizadoAnual?.[skuKey]?.[2025] ?? Array(12).fill(0);
+                                  const r26 = realizadoAnual?.[skuKey]?.[2026] ?? Array(12).fill(0);
+                                  let total = 0;
+                                  for (let i = 0; i < 12; i++) {
+                                    const mRaw = item[MES_KEYS[i]];
+                                    const eRaw = (item as Record<string, unknown>)[EST_KEYS[i]];
+                                    const hasColab =
+                                      mRaw !== null && mRaw !== undefined && String(mRaw).trim() !== "";
+                                    total += hasColab ? Number(mRaw || 0) : Number(eRaw || 0);
+                                  }
+                                  return (
+                                    <TableRow key={item.id} className="text-sm">
+                                      <TableCell className="sticky left-0 z-10 bg-background max-w-[140px] truncate font-medium">
+                                        {item.sku}
+                                      </TableCell>
+                                      <TableCell className="max-w-[100px] truncate">{item.marca}</TableCell>
+                                      {r25.map((q, i) => (
+                                        <TableCell key={`r25-${i}`} className="p-1 text-right text-muted-foreground tabular-nums">
+                                          {q ? formatNum(q) : "·"}
+                                        </TableCell>
+                                      ))}
+                                      {r26.map((q, i) => (
+                                        <TableCell key={`r26-${i}`} className="p-1 text-right text-muted-foreground tabular-nums">
+                                          {q ? formatNum(q) : "·"}
+                                        </TableCell>
+                                      ))}
+                                      {EST_KEYS.map(key => {
+                                        const v = (item as Record<string, unknown>)[key];
+                                        return (
+                                          <TableCell
+                                            key={key}
+                                            className="p-1 text-right tabular-nums bg-blue-50/30"
+                                          >
+                                            {formatNum(Number(v || 0))}
+                                          </TableCell>
+                                        );
+                                      })}
+                                      {MES_KEYS.map(key => {
+                                        const raw = item[key];
+                                        const empty =
+                                          raw === null || raw === undefined || String(raw).trim() === "";
+                                        return (
+                                          <TableCell key={key} className="p-0.5 bg-amber-50/40">
+                                            <Input
+                                              className="h-8 w-[4.5rem] px-1 text-right"
+                                              placeholder="—"
+                                              defaultValue={empty ? "" : String(Math.round(Number(raw || 0)))}
+                                              disabled={ciclo?.status === "FECHADO"}
+                                              onBlur={e =>
+                                                handleMonthEdit(item.id, key, e.target.value)
+                                              }
+                                            />
+                                          </TableCell>
+                                        );
+                                      })}
+                                      <TableCell className="font-medium text-right tabular-nums">
+                                        {formatNum(total)}
+                                      </TableCell>
+                                    </TableRow>
+                                  );
+                                })
+                              )}
+                            </TableBody>
+                          </Table>
+                        </div>
                       ) : (
                         <div className="overflow-auto rounded-md border">
                           <Table>
@@ -312,9 +578,8 @@ export default function Colaboracoes() {
                                 <TableHead>SKU</TableHead>
                                 <TableHead>Marca</TableHead>
                                 <TableHead>Linha</TableHead>
-                                <TableHead>Rateio</TableHead>
-                                {MES_KEYS.map((m, i) => (
-                                  <TableHead key={m}>M{i + 1}</TableHead>
+                                {MES_KEYS.map((_, i) => (
+                                  <TableHead key={i}>{cicloMesLabel(i)}</TableHead>
                                 ))}
                                 <TableHead>Total</TableHead>
                               </TableRow>
@@ -322,16 +587,20 @@ export default function Colaboracoes() {
                             <TableBody>
                               {filteredItens.length === 0 ? (
                                 <TableRow>
-                                  <TableCell colSpan={17} className="text-center text-muted-foreground">
+                                  <TableCell colSpan={16} className="text-center text-muted-foreground">
                                     Sem itens neste plano.
                                   </TableCell>
                                 </TableRow>
                               ) : (
                                 filteredItens.map(item => {
-                                  const total = MES_KEYS.reduce(
-                                    (acc, key) => acc + Number(item[key] || 0),
-                                    0
-                                  );
+                                  let total = 0;
+                                  for (let i = 0; i < 12; i++) {
+                                    const mRaw = item[MES_KEYS[i]];
+                                    const eRaw = (item as Record<string, unknown>)[EST_KEYS[i]];
+                                    const hasColab =
+                                      mRaw !== null && mRaw !== undefined && String(mRaw).trim() !== "";
+                                    total += hasColab ? Number(mRaw || 0) : Number(eRaw || item[MES_KEYS[i]] || 0);
+                                  }
                                   return (
                                     <TableRow key={item.id}>
                                       <TableCell className="max-w-[140px] truncate font-medium">
@@ -339,14 +608,16 @@ export default function Colaboracoes() {
                                       </TableCell>
                                       <TableCell>{item.marca}</TableCell>
                                       <TableCell>{item.linha}</TableCell>
-                                      <TableCell>
-                                        {(Number(item.rateioConsiderar || 0) * 100).toFixed(1)}%
-                                      </TableCell>
                                       {MES_KEYS.map(key => (
                                         <TableCell key={key} className="p-1">
                                           <Input
                                             className="h-8 w-20 px-1 text-right"
-                                            defaultValue={String(Math.round(Number(item[key] || 0)))}
+                                            defaultValue={
+                                              item[key] == null || String(item[key]).trim() === ""
+                                                ? ""
+                                                : String(Math.round(Number(item[key] || 0)))
+                                            }
+                                            disabled={ciclo?.status === "FECHADO"}
                                             onBlur={e => handleMonthEdit(item.id, key, e.target.value)}
                                           />
                                         </TableCell>
@@ -367,106 +638,12 @@ export default function Colaboracoes() {
             </Card>
           </TabsContent>
 
-          <TabsContent value="consolidado" className="mt-4 space-y-4">
-            <div className="grid gap-4 md:grid-cols-2">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Resumo planos</CardTitle>
-                  <CardDescription>PV-MTO vs CRM e totais</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-1 text-sm">
-                  <div className="flex justify-between">
-                    <span>MTS</span>
-                    <span>{formatNum(consolidado?.resumoPlanos?.mts)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>JITO</span>
-                    <span>{formatNum(consolidado?.resumoPlanos?.jito)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>PV-MTO</span>
-                    <span>{formatNum(consolidado?.resumoPlanos?.pvMto)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>CRM</span>
-                    <span>{formatNum(consolidado?.resumoPlanos?.crm)}</span>
-                  </div>
-                  <div className="flex justify-between border-t pt-1 font-medium">
-                    <span>PV − CRM</span>
-                    <span>{formatNum(consolidado?.resumoPlanos?.pvVsCrm)}</span>
-                  </div>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Por marca</CardTitle>
-                  <CardDescription>Colaborado vs estatística</CardDescription>
-                </CardHeader>
-                <CardContent className="max-h-64 overflow-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Marca</TableHead>
-                        <TableHead className="text-right">Colab</TableHead>
-                        <TableHead className="text-right">Estat</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {marcasConsolidado.slice(0, 30).map(([marca, row]) => (
-                        <TableRow key={marca}>
-                          <TableCell>{marca}</TableCell>
-                          <TableCell className="text-right">{formatNum(row.qtde)}</TableCell>
-                          <TableCell className="text-right">{formatNum(row.estatistica)}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </CardContent>
-              </Card>
-            </div>
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Base ciclo (amostra)</CardTitle>
-                <CardDescription>
-                  Linhas mês a mês no horizonte do ciclo (até 5.000 registros)
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="overflow-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Ano/Mês</TableHead>
-                      <TableHead>SKU</TableHead>
-                      <TableHead>Marca</TableHead>
-                      <TableHead>Linha</TableHead>
-                      <TableHead>Plano</TableHead>
-                      <TableHead className="text-right">Qtd</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {(consolidado?.baseCiclo ?? [])
-                      .filter(
-                        row =>
-                          podeVerTodasMarcas ||
-                          marcasPermitidasNomes.includes(normalizeMarcaNome(row.marca))
-                      )
-                      .slice(0, 100)
-                      .map((row, idx) => (
-                        <TableRow key={`${row.sku}-${row.ano}-${row.mes}-${idx}`}>
-                          <TableCell>
-                            {row.ano}/{String(row.mes).padStart(2, "0")}
-                          </TableCell>
-                          <TableCell>{row.sku}</TableCell>
-                          <TableCell>{row.marca}</TableCell>
-                          <TableCell>{row.linha}</TableCell>
-                          <TableCell>{row.planoColab}</TableCell>
-                          <TableCell className="text-right">{formatNum(row.qtd)}</TableCell>
-                        </TableRow>
-                      ))}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
+          <TabsContent value="consolidado" className="mt-4">
+            <ColaboracaoResumos
+              cicloId={selectedCicloId}
+              consolidado={consolidado}
+              marcasConsolidado={marcasConsolidado}
+            />
           </TabsContent>
         </Tabs>
       )}

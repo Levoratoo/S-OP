@@ -29,27 +29,46 @@ import {
 } from "@/components/ui/sidebar";
 import { getLoginUrl } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
-import { 
-  LayoutDashboard, 
-  LogOut, 
-  PanelLeft, 
-  Package, 
-  Users, 
-  Factory, 
+
+const ROUTE_CHUNK_PREFETCH: Record<string, () => Promise<unknown>> = {
+  "/previsao-python": () => import("@/pages/integracao/PrevisaoPython"),
+  "/previsao-python/ciclo-13": () =>
+    import("@/pages/integracao/PrevisaoPythonCiclo13"),
+  "/demanda/colaboracoes": () => import("@/pages/demanda/Colaboracoes"),
+  "/demanda/acuracidade": () => import("@/pages/demanda/Acuracidade"),
+  "/vendas/importar": () => import("@/pages/vendas/ImportarFaturamento"),
+  "/vendas/carteira": () => import("@/pages/vendas/CarteiraPedidos"),
+  "/cadastros/produtos": () => import("@/pages/cadastros/Produtos"),
+  "/cadastros/skus-projetar": () => import("@/pages/cadastros/SkusProjetar"),
+  "/cadastros/clientes": () => import("@/pages/cadastros/Clientes"),
+  "/cadastros/gestor-marca": () => import("@/pages/cadastros/GestorMarca"),
+  "/cadastros/depara": () => import("@/pages/cadastros/DeParaCodigos"),
+  "/cadastros/importacao-base": () =>
+    import("@/pages/cadastros/ImportacaoDadosSistema"),
+  "/admin/usuarios": () => import("@/pages/admin/GerenciamentoUsuarios"),
+  "/ajuda": () => import("@/pages/Ajuda"),
+};
+
+function prefetchRouteChunk(path?: string) {
+  if (!path) return;
+  const loader = ROUTE_CHUNK_PREFETCH[path];
+  if (loader) void loader();
+}
+import {
+  LayoutDashboard,
+  LogOut,
+  PanelLeft,
+  Package,
+  Users,
   TrendingUp,
   Settings,
   ChevronRight,
-  Wrench,
-  Calendar,
   Route,
   UserCog,
   ShoppingCart,
   FileSpreadsheet,
-  BarChart3,
   Target,
-  Gauge,
   TableProperties,
-  Cloud,
   Shield,
   Briefcase,
   Layers,
@@ -58,15 +77,20 @@ import {
   Archive,
   Ruler,
   Shirt,
-  Cog,
-  Clock,
-  Calculator,
   CircleHelp,
+  Play,
+  Sparkles,
 } from "lucide-react";
-import { CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  CSSProperties,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useLocation } from "wouter";
-import { DashboardLayoutSkeleton } from './DashboardLayoutSkeleton';
-import { GlobalSearch } from "./GlobalSearch";
+import { DashboardLayoutSkeleton } from "./DashboardLayoutSkeleton";
 import { HelpTourContext } from "@/help/HelpTourContext";
 import { SopHelpButton, SopTour } from "@/help/SopTour";
 import type { TourStep } from "@/help/sop-tour-content";
@@ -93,54 +117,40 @@ type MenuItem = {
   sections?: SubSection[];
 };
 
+/**
+ * Menu = Passo a Passo Word (Previsão de Demanda).
+ * Itens fora do fluxo vão em Arquivados (rotas continuam acessíveis).
+ */
 const menuItems: MenuItem[] = [
-  {
-    icon: LayoutDashboard,
-    label: "Dashboard",
-    path: "/",
-    tourId: "nav-dashboard",
-  },
   {
     icon: TrendingUp,
     label: "Previsao de Demanda",
     tourId: "nav-demanda",
     children: [
-      { label: "Dashboard Demanda", path: "/demanda/dashboard", icon: BarChart3, tourId: "nav-demanda-dashboard" },
-      { label: "Acuracidade", path: "/demanda/acuracidade", icon: Target, tourId: "nav-demanda-acuracidade" },
-      { label: "Previsoes", path: "/demanda/previsoes", icon: BarChart3, tourId: "nav-demanda-previsoes" },
-      { label: "Colaboracao Comercial", path: "/demanda/colaboracoes", icon: Users, tourId: "nav-demanda-colaboracoes" },
-      { label: "Consensos", path: "/demanda/consensos", icon: CheckCircle, tourId: "nav-demanda-consensos" },
-      { label: "Orcamentos", path: "/demanda/orcamentos", icon: TableProperties, tourId: "nav-demanda-orcamentos" },
-    ],
-  },
-  {
-    icon: Factory,
-    label: "Analise de Capacidade",
-    tourId: "nav-capacidade",
-    children: [
-      { label: "Dashboard Capacidade", path: "/capacidade/dashboard", icon: Gauge, tourId: "nav-capacidade-dashboard" },
-      { label: "Calculo de Capacidade", path: "/capacidade/calculo", icon: Calculator, tourId: "nav-capacidade-calculo" },
-      { label: "Capacidade x Demanda", path: "/capacidade/vs-demanda", icon: TrendingUp, tourId: "nav-capacidade-vs-demanda" },
-    ],
-  },
-  {
-    icon: Target,
-    label: "Gestao de Producao",
-    tourId: "nav-producao",
-    children: [
-      { label: "Metas de Producao", path: "/producao/metas", icon: Target, tourId: "nav-producao-metas" },
-    ],
-  },
-  {
-    icon: ShoppingCart,
-    label: "Gestao de Vendas",
-    tourId: "nav-vendas",
-    children: [
-      { label: "Dashboard Vendas", path: "/vendas/dashboard", icon: BarChart3, tourId: "nav-vendas-dashboard" },
-      { label: "Historico de Vendas", path: "/vendas/historico", icon: FileSpreadsheet, tourId: "nav-vendas-historico" },
-      { label: "Importar Faturamento", path: "/vendas/importar", icon: FileSpreadsheet, tourId: "nav-vendas-importar" },
-      { label: "Carteira de Pedidos", path: "/vendas/carteira", icon: ShoppingCart, tourId: "nav-vendas-carteira" },
-      { label: "Forecast", path: "/vendas/forecast", icon: TrendingUp, tourId: "nav-vendas-forecast" },
+      {
+        label: "Gerar Previsao",
+        path: "/previsao-python",
+        icon: Play,
+        tourId: "nav-previsao-python",
+      },
+      {
+        label: "Bases / Faturamento",
+        path: "/vendas/importar",
+        icon: FileSpreadsheet,
+        tourId: "nav-vendas-importar",
+      },
+      {
+        label: "Colaboracao Comercial",
+        path: "/demanda/colaboracoes",
+        icon: Users,
+        tourId: "nav-demanda-colaboracoes",
+      },
+      {
+        label: "Carteira / PV",
+        path: "/vendas/carteira",
+        icon: ShoppingCart,
+        tourId: "nav-vendas-carteira",
+      },
     ],
   },
   {
@@ -152,70 +162,131 @@ const menuItems: MenuItem[] = [
         label: "Comercial",
         icon: Briefcase,
         items: [
-          { label: "Gestor x Marca", path: "/cadastros/gestor-marca", icon: UserCog, tourId: "nav-cadastros-gestor-marca" },
-          { label: "Sazonalidade Marca", path: "/cadastros/sazonalidade-marca", icon: Calendar, tourId: "nav-cadastros-sazonalidade" },
-          { label: "Clientes", path: "/cadastros/clientes", icon: Users, tourId: "nav-cadastros-clientes" },
+          {
+            label: "Gestor x Marca",
+            path: "/cadastros/gestor-marca",
+            icon: UserCog,
+            tourId: "nav-cadastros-gestor-marca",
+          },
         ],
       },
       {
         label: "Produto",
         icon: Package,
         items: [
-          { label: "Produtos", path: "/cadastros/produtos", icon: Package, tourId: "nav-cadastros-produtos" },
-          { label: "De-Para", path: "/cadastros/depara", icon: Route, tourId: "nav-cadastros-depara" },
-          { label: "Status", path: "/cadastros/status", icon: CheckCircle, tourId: "nav-cadastros-status" },
-          { label: "Tipo Negocio", path: "/cadastros/tipo-negocio", icon: Building, tourId: "nav-cadastros-tipo-negocio" },
-          { label: "Tipo Estoque", path: "/cadastros/tipo-estoque", icon: Archive, tourId: "nav-cadastros-tipo-estoque" },
-          { label: "Linhas", path: "/cadastros/linhas", icon: Layers, tourId: "nav-cadastros-linhas" },
-          { label: "Modelos", path: "/cadastros/modelos", icon: Shirt, tourId: "nav-cadastros-modelos" },
-          { label: "Tamanhos", path: "/cadastros/tamanhos", icon: Ruler, tourId: "nav-cadastros-tamanhos" },
-        ],
-      },
-      {
-        label: "Operacoes",
-        icon: Cog,
-        items: [
-          { label: "Dias Uteis", path: "/cadastros/dias-uteis", icon: Calendar, tourId: "nav-cadastros-dias-uteis" },
-          { label: "Turnos", path: "/cadastros/turnos", icon: Clock, tourId: "nav-cadastros-turnos" },
-          { label: "Recursos", path: "/cadastros/recursos", icon: Wrench, tourId: "nav-cadastros-recursos" },
-          { label: "Fluxo", path: "/cadastros/fluxos", icon: Route, tourId: "nav-cadastros-fluxos" },
-        ],
-      },
-      {
-        label: "Geral",
-        icon: UserCog,
-        items: [
-          { label: "Membros", path: "/cadastros/membros", icon: UserCog, tourId: "nav-cadastros-membros" },
-          { label: "Importacao Base", path: "/cadastros/importacao-base", icon: FileSpreadsheet, tourId: "nav-cadastros-importacao" },
+          {
+            label: "Produtos",
+            path: "/cadastros/produtos",
+            icon: Package,
+            tourId: "nav-cadastros-produtos",
+          },
+          {
+            label: "Skus Projetar",
+            path: "/cadastros/skus-projetar",
+            icon: Target,
+            tourId: "nav-cadastros-skus-projetar",
+          },
+          {
+            label: "De-Para",
+            path: "/cadastros/depara",
+            icon: Route,
+            tourId: "nav-cadastros-depara",
+          },
         ],
       },
     ],
   },
   {
-    icon: FileSpreadsheet,
-    label: "Previsao Python",
-    path: "/previsao-python",
-    tourId: "nav-previsao-python",
-  },
-  {
-    icon: TableProperties,
-    label: "Previsão Demanda Estatística",
-    path: "/previsao-python/ciclo-13",
-    tourId: "nav-previsao-ciclo13",
-  },
-  {
-    icon: Cloud,
-    label: "Integracoes",
-    tourId: "nav-integracoes",
+    icon: Archive,
+    label: "Arquivados",
+    tourId: "nav-arquivados",
     children: [
-      { label: "SharePoint", path: "/integracao/sharepoint", icon: Cloud, tourId: "nav-integracao-sharepoint" },
+      {
+        label: "Dashboard",
+        path: "/dashboard-legado",
+        icon: LayoutDashboard,
+        tourId: "nav-dashboard",
+      },
+      {
+        label: "Relatorio Estatistico",
+        path: "/previsao-python/ciclo-13",
+        icon: TableProperties,
+        tourId: "nav-previsao-ciclo13",
+      },
+      {
+        label: "Acuracidade",
+        path: "/demanda/acuracidade",
+        icon: Target,
+        tourId: "nav-demanda-acuracidade",
+      },
+      {
+        label: "Clientes",
+        path: "/cadastros/clientes",
+        icon: Users,
+        tourId: "nav-cadastros-clientes",
+      },
+      {
+        label: "Status",
+        path: "/cadastros/status",
+        icon: CheckCircle,
+        tourId: "nav-cadastros-status",
+      },
+      {
+        label: "Tipo Negocio",
+        path: "/cadastros/tipo-negocio",
+        icon: Building,
+        tourId: "nav-cadastros-tipo-negocio",
+      },
+      {
+        label: "Tipo Estoque",
+        path: "/cadastros/tipo-estoque",
+        icon: Archive,
+        tourId: "nav-cadastros-tipo-estoque",
+      },
+      {
+        label: "Linhas",
+        path: "/cadastros/linhas",
+        icon: Layers,
+        tourId: "nav-cadastros-linhas",
+      },
+      {
+        label: "Modelos",
+        path: "/cadastros/modelos",
+        icon: Shirt,
+        tourId: "nav-cadastros-modelos",
+      },
+      {
+        label: "Tamanhos",
+        path: "/cadastros/tamanhos",
+        icon: Ruler,
+        tourId: "nav-cadastros-tamanhos",
+      },
+      {
+        label: "Membros",
+        path: "/cadastros/membros",
+        icon: UserCog,
+        tourId: "nav-cadastros-membros",
+      },
+      {
+        label: "Importacao Base",
+        path: "/cadastros/importacao-base",
+        icon: FileSpreadsheet,
+        tourId: "nav-cadastros-importacao",
+      },
     ],
   },
   {
     icon: Shield,
     label: "Administracao",
     tourId: "nav-admin",
-    children: [{ label: "Usuarios", path: "/admin/usuarios", icon: Users, tourId: "nav-admin-usuarios" }],
+    children: [
+      {
+        label: "Usuarios",
+        path: "/admin/usuarios",
+        icon: Users,
+        tourId: "nav-admin-usuarios",
+      },
+    ],
   },
   {
     icon: CircleHelp,
@@ -295,17 +366,22 @@ function DashboardLayoutContent({
   const [helpOpen, setHelpOpen] = useState(false);
   const startTourRef = useRef<((steps: TourStep[]) => void) | null>(null);
 
-  const ensureMenuOpen = useCallback((menuLabel: string, sectionLabel?: string) => {
-    if (isMobile) {
-      setOpenMobile(true);
-    }
-    setOpenMenus(prev => (prev.includes(menuLabel) ? prev : [...prev, menuLabel]));
-    if (sectionLabel) {
-      setOpenSections(prev =>
-        prev.includes(sectionLabel) ? prev : [...prev, sectionLabel]
+  const ensureMenuOpen = useCallback(
+    (menuLabel: string, sectionLabel?: string) => {
+      if (isMobile) {
+        setOpenMobile(true);
+      }
+      setOpenMenus(prev =>
+        prev.includes(menuLabel) ? prev : [...prev, menuLabel]
       );
-    }
-  }, [isMobile, setOpenMobile]);
+      if (sectionLabel) {
+        setOpenSections(prev =>
+          prev.includes(sectionLabel) ? prev : [...prev, sectionLabel]
+        );
+      }
+    },
+    [isMobile, setOpenMobile]
+  );
 
   const helpApi = useMemo(
     () => ({
@@ -317,8 +393,8 @@ function DashboardLayoutContent({
   );
 
   const toggleSection = (sectionLabel: string) => {
-    setOpenSections(prev => 
-      prev.includes(sectionLabel) 
+    setOpenSections(prev =>
+      prev.includes(sectionLabel)
         ? prev.filter(s => s !== sectionLabel)
         : [...prev, sectionLabel]
     );
@@ -334,7 +410,12 @@ function DashboardLayoutContent({
       if (item.sections) {
         for (const section of item.sections) {
           const sectionItem = section.items.find(i => i.path === location);
-          if (sectionItem) return { ...sectionItem, parent: item.label, section: section.label };
+          if (sectionItem)
+            return {
+              ...sectionItem,
+              parent: item.label,
+              section: section.label,
+            };
         }
       }
     }
@@ -342,6 +423,25 @@ function DashboardLayoutContent({
   };
 
   const activeMenuItem = getActiveMenuItem();
+
+  useEffect(() => {
+    const parent =
+      activeMenuItem && "parent" in activeMenuItem
+        ? activeMenuItem.parent
+        : undefined;
+    const section =
+      activeMenuItem && "section" in activeMenuItem
+        ? activeMenuItem.section
+        : undefined;
+    if (parent) {
+      setOpenMenus(prev => (prev.includes(parent) ? prev : [...prev, parent]));
+    }
+    if (section) {
+      setOpenSections(prev =>
+        prev.includes(section) ? prev : [...prev, section]
+      );
+    }
+  }, [location]);
 
   useEffect(() => {
     if (isCollapsed) {
@@ -380,10 +480,8 @@ function DashboardLayoutContent({
   }, [isResizing, setSidebarWidth]);
 
   const toggleMenu = (label: string) => {
-    setOpenMenus(prev => 
-      prev.includes(label) 
-        ? prev.filter(m => m !== label)
-        : [...prev, label]
+    setOpenMenus(prev =>
+      prev.includes(label) ? prev.filter(m => m !== label) : [...prev, label]
     );
   };
 
@@ -392,52 +490,62 @@ function DashboardLayoutContent({
       <div className="relative" ref={sidebarRef} data-tour="nav-sidebar">
         <Sidebar
           collapsible="icon"
-          className="border-r-0"
+          className="border-r-0 shadow-[10px_0_35px_-24px_rgba(3,18,38,0.8)]"
           disableTransition={isResizing}
         >
-          <SidebarHeader className="h-16 justify-center border-b border-sidebar-border">
+          <SidebarHeader className="h-20 justify-center border-b border-sidebar-border/70">
             <div
               className="flex items-center gap-3 px-2 transition-all w-full"
               data-tour="nav-brand"
             >
               <button
                 onClick={toggleSidebar}
-                className="h-8 w-8 flex items-center justify-center hover:bg-accent rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring shrink-0"
+                className="h-9 w-9 flex items-center justify-center hover:bg-sidebar-accent rounded-xl transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring shrink-0"
                 aria-label="Toggle navigation"
               >
-                <PanelLeft className="h-4 w-4 text-muted-foreground" />
+                <PanelLeft className="h-4 w-4 text-sidebar-foreground/65" />
               </button>
               {!isCollapsed ? (
-                <div className="flex items-center gap-2 min-w-0">
-                  <img 
-                    src="/printbag-logo.png" 
-                    alt="Printbag" 
-                    className="h-8 w-auto object-contain"
-                  />
-                  <span className="font-bold tracking-tight truncate text-primary">
-                    S&OP
-                  </span>
+                <div className="flex items-center gap-3 min-w-0">
+                  <div
+                    className="relative flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl bg-white shadow-sm"
+                    aria-label="Printbag"
+                  >
+                    <span className="absolute inset-x-0 bottom-0 h-1.5 bg-emerald-400" />
+                    <span className="text-sm font-black tracking-[-0.08em] text-[#0d4f8b]">
+                      PB
+                    </span>
+                  </div>
+                  <div className="min-w-0">
+                    <span className="block truncate text-sm font-bold tracking-tight text-white">
+                      Printbag S&OP
+                    </span>
+                    <span className="block truncate text-[10px] font-semibold uppercase tracking-[0.16em] text-sidebar-foreground/45">
+                      Planejamento integrado
+                    </span>
+                  </div>
                 </div>
               ) : null}
             </div>
           </SidebarHeader>
 
-          {/* Barra de Pesquisa Global */}
-          {!isCollapsed && (
-            <div className="px-3 py-2" data-tour="nav-search">
-              <GlobalSearch />
-            </div>
-          )}
-
-          <SidebarContent className="gap-0 py-2">
-            <SidebarMenu className="px-2">
+          <SidebarContent className="gap-0 py-4">
+            {!isCollapsed && (
+              <div className="px-4 pb-3 text-[10px] font-bold uppercase tracking-[0.18em] text-sidebar-foreground/35">
+                Espaço de trabalho
+              </div>
+            )}
+            <SidebarMenu className="px-3">
               {menuItems.map(item => {
                 const hasChildren = item.children && item.children.length > 0;
                 const hasSections = item.sections && item.sections.length > 0;
                 const isOpen = openMenus.includes(item.label);
-                const isActive = item.path === location || 
+                const isActive =
+                  item.path === location ||
                   item.children?.some(c => c.path === location) ||
-                  item.sections?.some(s => s.items.some(i => i.path === location));
+                  item.sections?.some(s =>
+                    s.items.some(i => i.path === location)
+                  );
 
                 if (hasSections) {
                   return (
@@ -451,14 +559,18 @@ function DashboardLayoutContent({
                           <SidebarMenuButton
                             tooltip={item.label}
                             data-tour={item.tourId}
-                            className={`h-10 transition-all font-normal ${isActive ? "bg-accent" : ""}`}
+                            className={`h-11 rounded-xl px-3 transition-all font-medium ${
+                              isActive
+                                ? "bg-sidebar-accent text-white shadow-inner"
+                                : "text-sidebar-foreground/72 hover:text-white"
+                            }`}
                           >
                             <item.icon
-                              className={`h-4 w-4 ${isActive ? "text-primary" : ""}`}
+                              className={`h-4 w-4 ${isActive ? "text-sidebar-primary" : ""}`}
                             />
                             <span className="flex-1">{item.label}</span>
-                            <ChevronRight 
-                              className={`h-4 w-4 transition-transform ${isOpen ? "rotate-90" : ""}`} 
+                            <ChevronRight
+                              className={`h-4 w-4 transition-transform ${isOpen ? "rotate-90" : ""}`}
                             />
                           </SidebarMenuButton>
                         </CollapsibleTrigger>
@@ -466,41 +578,63 @@ function DashboardLayoutContent({
                           <div className="pl-2 space-y-0.5">
                             {item.sections?.map(section => {
                               const SectionIcon = section.icon;
-                              const isSectionOpen = openSections.includes(section.label);
-                              const isSectionActive = section.items.some(i => i.path === location);
+                              const isSectionOpen = openSections.includes(
+                                section.label
+                              );
+                              const isSectionActive = section.items.some(
+                                i => i.path === location
+                              );
                               return (
                                 <Collapsible
                                   key={section.label}
                                   open={isSectionOpen}
-                                  onOpenChange={() => toggleSection(section.label)}
+                                  onOpenChange={() =>
+                                    toggleSection(section.label)
+                                  }
                                 >
                                   <CollapsibleTrigger asChild>
-                                    <button 
-                                      className={`flex items-center gap-2 w-full px-2 py-1.5 text-xs font-semibold uppercase tracking-wider rounded-md hover:bg-accent/50 transition-colors ${
-                                        isSectionActive ? "text-primary" : "text-muted-foreground"
+                                    <button
+                                      className={`flex items-center gap-2 w-full px-3 py-2 text-[10px] font-bold uppercase tracking-wider rounded-lg hover:bg-sidebar-accent/70 transition-colors ${
+                                        isSectionActive
+                                          ? "text-sidebar-primary"
+                                          : "text-sidebar-foreground/45"
                                       }`}
                                     >
-                                      {SectionIcon && <SectionIcon className="h-3.5 w-3.5" />}
-                                      <span className="flex-1 text-left">{section.label}</span>
-                                      <ChevronRight 
-                                        className={`h-3.5 w-3.5 transition-transform ${isSectionOpen ? "rotate-90" : ""}`} 
+                                      {SectionIcon && (
+                                        <SectionIcon className="h-3.5 w-3.5" />
+                                      )}
+                                      <span className="flex-1 text-left">
+                                        {section.label}
+                                      </span>
+                                      <ChevronRight
+                                        className={`h-3.5 w-3.5 transition-transform ${isSectionOpen ? "rotate-90" : ""}`}
                                       />
                                     </button>
                                   </CollapsibleTrigger>
                                   <CollapsibleContent>
                                     <SidebarMenuSub className="ml-0 pl-0 border-l-0">
                                       {section.items.map(sectionItem => {
-                                        const isItemActive = location === sectionItem.path;
+                                        const isItemActive =
+                                          location === sectionItem.path;
                                         const ItemIcon = sectionItem.icon;
                                         return (
-                                          <SidebarMenuSubItem key={sectionItem.path}>
+                                          <SidebarMenuSubItem
+                                            key={sectionItem.path}
+                                          >
                                             <SidebarMenuSubButton
-                                              onClick={() => setLocation(sectionItem.path)}
+                                              onMouseEnter={() =>
+                                                prefetchRouteChunk(sectionItem.path)
+                                              }
+                                              onClick={() =>
+                                                setLocation(sectionItem.path)
+                                              }
                                               isActive={isItemActive}
                                               data-tour={sectionItem.tourId}
-                                              className="h-8 pl-6"
+                                              className="h-9 rounded-lg pl-6 text-sidebar-foreground/65 data-[active=true]:bg-sidebar-primary/15 data-[active=true]:text-sidebar-primary"
                                             >
-                                              {ItemIcon && <ItemIcon className="h-3.5 w-3.5 mr-2" />}
+                                              {ItemIcon && (
+                                                <ItemIcon className="h-3.5 w-3.5 mr-2" />
+                                              )}
                                               <span>{sectionItem.label}</span>
                                             </SidebarMenuSubButton>
                                           </SidebarMenuSubItem>
@@ -530,14 +664,18 @@ function DashboardLayoutContent({
                           <SidebarMenuButton
                             tooltip={item.label}
                             data-tour={item.tourId}
-                            className={`h-10 transition-all font-normal ${isActive ? "bg-accent" : ""}`}
+                            className={`h-11 rounded-xl px-3 transition-all font-medium ${
+                              isActive
+                                ? "bg-sidebar-accent text-white shadow-inner"
+                                : "text-sidebar-foreground/72 hover:text-white"
+                            }`}
                           >
                             <item.icon
-                              className={`h-4 w-4 ${isActive ? "text-primary" : ""}`}
+                              className={`h-4 w-4 ${isActive ? "text-sidebar-primary" : ""}`}
                             />
                             <span className="flex-1">{item.label}</span>
-                            <ChevronRight 
-                              className={`h-4 w-4 transition-transform ${isOpen ? "rotate-90" : ""}`} 
+                            <ChevronRight
+                              className={`h-4 w-4 transition-transform ${isOpen ? "rotate-90" : ""}`}
                             />
                           </SidebarMenuButton>
                         </CollapsibleTrigger>
@@ -549,12 +687,17 @@ function DashboardLayoutContent({
                               return (
                                 <SidebarMenuSubItem key={child.path}>
                                   <SidebarMenuSubButton
+                                    onMouseEnter={() =>
+                                      prefetchRouteChunk(child.path)
+                                    }
                                     onClick={() => setLocation(child.path)}
                                     isActive={isChildActive}
                                     data-tour={child.tourId}
-                                    className="h-9"
+                                    className="h-9 rounded-lg text-sidebar-foreground/65 data-[active=true]:bg-sidebar-primary/15 data-[active=true]:text-sidebar-primary"
                                   >
-                                    {ChildIcon && <ChildIcon className="h-3.5 w-3.5 mr-2" />}
+                                    {ChildIcon && (
+                                      <ChildIcon className="h-3.5 w-3.5 mr-2" />
+                                    )}
                                     <span>{child.label}</span>
                                   </SidebarMenuSubButton>
                                 </SidebarMenuSubItem>
@@ -571,13 +714,14 @@ function DashboardLayoutContent({
                   <SidebarMenuItem key={item.path}>
                     <SidebarMenuButton
                       isActive={location === item.path}
+                      onMouseEnter={() => prefetchRouteChunk(item.path)}
                       onClick={() => item.path && setLocation(item.path)}
                       tooltip={item.label}
                       data-tour={item.tourId}
-                      className="h-10 transition-all font-normal"
+                      className="h-11 rounded-xl px-3 font-medium text-sidebar-foreground/72 transition-all hover:text-white data-[active=true]:bg-sidebar-accent data-[active=true]:text-white"
                     >
                       <item.icon
-                        className={`h-4 w-4 ${location === item.path ? "text-primary" : ""}`}
+                        className={`h-4 w-4 ${location === item.path ? "text-sidebar-primary" : ""}`}
                       />
                       <span>{item.label}</span>
                     </SidebarMenuButton>
@@ -587,23 +731,23 @@ function DashboardLayoutContent({
             </SidebarMenu>
           </SidebarContent>
 
-          <SidebarFooter className="p-3 border-t border-sidebar-border space-y-2">
+          <SidebarFooter className="p-3 border-t border-sidebar-border/70 space-y-2">
             {!isCollapsed && (
               <SopHelpButton onClick={() => setHelpOpen(true)} />
             )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button className="flex items-center gap-3 rounded-lg px-1 py-1 hover:bg-accent/50 transition-colors w-full text-left group-data-[collapsible=icon]:justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                  <Avatar className="h-9 w-9 border shrink-0">
-                    <AvatarFallback className="text-xs font-medium bg-primary/10 text-primary">
+                <button className="flex items-center gap-3 rounded-xl p-2 hover:bg-sidebar-accent transition-colors w-full text-left group-data-[collapsible=icon]:justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring">
+                  <Avatar className="h-9 w-9 border border-sidebar-border shrink-0">
+                    <AvatarFallback className="text-xs font-bold bg-sidebar-primary text-sidebar-primary-foreground">
                       {user?.name?.charAt(0).toUpperCase()}
                     </AvatarFallback>
                   </Avatar>
                   <div className="flex-1 min-w-0 group-data-[collapsible=icon]:hidden">
-                    <p className="text-sm font-medium truncate leading-none">
+                    <p className="text-sm font-semibold text-white truncate leading-none">
                       {user?.name || "-"}
                     </p>
-                    <p className="text-xs text-muted-foreground truncate mt-1.5">
+                    <p className="text-xs text-sidebar-foreground/45 truncate mt-1.5">
                       {user?.email || "-"}
                     </p>
                   </div>
@@ -638,7 +782,7 @@ function DashboardLayoutContent({
         />
       </div>
 
-      <SidebarInset>
+      <SidebarInset className="min-w-0 bg-transparent">
         {isMobile && (
           <div className="flex border-b h-14 items-center justify-between bg-background/95 px-2 backdrop-blur supports-[backdrop-filter]:backdrop-blur sticky top-0 z-40">
             <div className="flex items-center gap-2">
@@ -654,12 +798,37 @@ function DashboardLayoutContent({
             <SopHelpButton onClick={() => setHelpOpen(true)} />
           </div>
         )}
-        <main className="flex-1 p-4 md:p-6">{children}</main>
+        {!isMobile && (
+          <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-border/60 bg-background/75 px-6 backdrop-blur-xl">
+            <div className="flex items-center gap-3">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/8 text-primary">
+                <Sparkles className="h-4 w-4" />
+              </div>
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground">
+                  S&OP Printbag
+                </p>
+                <p className="text-sm font-semibold leading-tight">
+                  {activeMenuItem?.label ?? "Visão geral"}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 rounded-full border border-emerald-200/70 bg-emerald-50/80 px-3 py-1.5 text-xs font-semibold text-emerald-700">
+              <span className="h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_0_3px_rgba(16,185,129,0.12)]" />
+              Sistema operacional
+            </div>
+          </header>
+        )}
+        <main className="relative flex-1 p-4 md:p-7 lg:p-9">
+          <div className="mx-auto w-full max-w-[1600px]">{children}</div>
+        </main>
       </SidebarInset>
 
       <SopTour
         ready={Boolean(user)}
-        userId={String((user as { id?: string | number } | null)?.id ?? user?.email ?? "anon")}
+        userId={String(
+          (user as { id?: string | number } | null)?.id ?? user?.email ?? "anon"
+        )}
         helpOpen={helpOpen}
         onHelpOpenChange={setHelpOpen}
         ensureMenuOpen={ensureMenuOpen}
@@ -668,4 +837,3 @@ function DashboardLayoutContent({
     </HelpTourContext.Provider>
   );
 }
-
