@@ -16,27 +16,24 @@ import {
   Download,
   BarChart3,
   X,
-  Lightbulb,
-  History,
-  Save,
-  GitCompare,
-  Printer,
   LayoutDashboard,
   Users,
   BookOpen,
+  Search,
+  Filter,
+  ChevronLeft,
+  ChevronRight,
+  ArrowUpDown,
+  FileSpreadsheet,
 } from "lucide-react";
 import { toast } from "sonner";
+import { downloadPrevisaoJobExcel } from "@/lib/downloadPrevisaoJobExcel";
 import {
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  LineChart,
-  Line,
-} from "recharts";
+  EXCEL_FONT_FAMILY,
+  EXCEL_HEADER_BG,
+  EXCEL_HEADER_FG,
+  excelStyleForCell,
+} from "./excelReportStyles";
 
 type AppliedFilter = {
   id: string;
@@ -77,6 +74,11 @@ const DEFAULT_PAGE_SIZE: 50 | 100 | 250 = 100;
 const SEARCH_DEBOUNCE_MS = 350;
 const FILTER_DEBOUNCE_MS = 300;
 
+function formatSheetLabel(sheetName: string) {
+  // Nomes literais das abas do Excel gerado
+  return sheetName;
+}
+
 function formatDate(value: Date | string | number | null | undefined) {
   if (!value) return "-";
   return new Date(value).toLocaleString("pt-BR");
@@ -100,6 +102,38 @@ function formatCompactCurrency(value: number | null | undefined) {
     notation: "compact",
     maximumFractionDigits: 1,
   });
+}
+
+function formatSheetCell(column: string, value: string) {
+  const raw = String(value ?? "").trim();
+  if (!raw || raw === "None" || raw === "nan" || raw === "NaN") return "";
+  const token = normalizeToken(column);
+  const textColumn =
+    token === "codigo" ||
+    token === "marca" ||
+    token.includes("cliente") && token.includes("cod") ||
+    token.includes("status") ||
+    token.includes("modelo") ||
+    token.includes("opcao") ||
+    token.includes("premissa") ||
+    token.includes("classe") ||
+    token.includes("tipo") ||
+    token.includes("flag") ||
+    token.includes("direcao") ||
+    token.includes("consistencia") ||
+    token.includes("range utilizado") ||
+    token.includes("melhor opcao") ||
+    token.includes("tendencia") ||
+    token.includes("recorrencia");
+  if (textColumn || /[a-zA-ZÀ-ÿ]/.test(raw)) return raw;
+  const numeric = Number(raw.replace(/\s/g, "").replace(",", "."));
+  if (!Number.isFinite(numeric)) return raw;
+  const percentCol = column.includes("%") || token.includes("pct") || token.includes("variacao");
+  if (percentCol) {
+    const ratio = Math.abs(numeric) <= 2 ? numeric : numeric / 100;
+    return ratio.toLocaleString("pt-BR", { style: "percent", minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  }
+  return numeric.toLocaleString("pt-BR", { maximumFractionDigits: 1 });
 }
 
 function formatSignedPercent(value: number | null | undefined) {
@@ -276,13 +310,6 @@ export default function PrevisaoPythonViewer() {
   const [newFilterColumn, setNewFilterColumn] = useState("");
   const [newFilterValue, setNewFilterValue] = useState("");
   const [exportingCsv, setExportingCsv] = useState(false);
-  const [cicloRef, setCicloRef] = useState("");
-  const [horizonteRef, setHorizonteRef] = useState("");
-  const [snapshotTitulo, setSnapshotTitulo] = useState("");
-  const [snapshotObservacoes, setSnapshotObservacoes] = useState("");
-  const [compareBaseSnapshotId, setCompareBaseSnapshotId] = useState<number | null>(null);
-  const [compareTargetSnapshotId, setCompareTargetSnapshotId] = useState<number | null>(null);
-  const [selectedSummarySnapshotId, setSelectedSummarySnapshotId] = useState<number | null>(null);
   const [customerSearch, setCustomerSearch] = useState("");
   const [customerSkuFilter, setCustomerSkuFilter] = useState("");
   const [customerCodClienteFilter, setCustomerCodClienteFilter] = useState("");
@@ -299,8 +326,8 @@ export default function PrevisaoPythonViewer() {
   } | null>(null);
   const [drillHistory, setDrillHistory] = useState<DrillSnapshot[]>([]);
   const [drillBaseSnapshot, setDrillBaseSnapshot] = useState<DrillSnapshot | null>(null);
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const skipPageResetOnFirstRender = useRef(true);
-  const cycleSummaryRef = useRef<HTMLDivElement | null>(null);
   const debouncedGlobalSkuSearch = useDebouncedValue(globalSkuSearch, SEARCH_DEBOUNCE_MS);
   const debouncedSearch = useDebouncedValue(search, SEARCH_DEBOUNCE_MS);
   const debouncedCustomerSearch = useDebouncedValue(customerSearch, SEARCH_DEBOUNCE_MS);
@@ -340,27 +367,39 @@ export default function PrevisaoPythonViewer() {
     }
   }, [debouncedSerializedFilters]);
   const normalizedSkuSearch = debouncedGlobalSkuSearch.trim().toLowerCase();
-  const effectiveSearch = [debouncedSearch.trim(), debouncedGlobalSkuSearch.trim()]
+  const localSearchForQuery = search.trim() ? debouncedSearch.trim() : "";
+  const filtersForQuery = filters.length === 0 ? [] : debouncedFilters;
+  const effectiveSearch = [localSearchForQuery, debouncedGlobalSkuSearch.trim()]
     .filter(Boolean)
     .join(" ");
 
-  const { data: job, isLoading: loadingJob } = trpc.previsaoPython.getById.useQuery(
+  const {
+    data: job,
+    isLoading: loadingJob,
+    isError: jobQueryFailed,
+    error: jobQueryError,
+  } = trpc.previsaoPython.getById.useQuery(
     { id: jobId || 0 },
-    { enabled: isValidJobId, refetchInterval: 4000 }
+    {
+      enabled: isValidJobId,
+      refetchInterval: query => (query.state.data?.status === "SUCCESS" ? false : 4000),
+      staleTime: 30_000,
+    }
   );
 
   const hasOutputAvailable = Boolean(job?.workdir && job?.outputFileName);
   const canVisualizeJob = hasOutputAvailable;
 
-  const { data: workbookSheets, isLoading: loadingSheets } = trpc.previsaoPython.workbookMeta.useQuery(
+  const {
+    data: workbookSheets,
+    isLoading: loadingSheets,
+    isError: sheetsQueryFailed,
+    error: sheetsQueryError,
+  } = trpc.previsaoPython.workbookMeta.useQuery(
     { id: jobId || 0 },
-    { enabled: isValidJobId && canVisualizeJob, staleTime: 30_000 }
+    { enabled: isValidJobId && canVisualizeJob, staleTime: 5 * 60_000 }
   );
 
-  const { data: analytics, isLoading: loadingAnalytics } = trpc.previsaoPython.analytics.useQuery(
-    { id: jobId || 0, monthsLimit: 24 },
-    { enabled: isValidJobId && canVisualizeJob, staleTime: 20_000 }
-  );
 
   const executiveAnalyticsQuery = trpc.previsaoPython.executiveAnalytics.useQuery(
     { id: jobId || 0 },
@@ -400,47 +439,6 @@ export default function PrevisaoPythonViewer() {
     }
   );
 
-  const explainabilityQuery = trpc.previsaoPython.explainability.useQuery(
-    { id: jobId || 0, limit: 40 },
-    { enabled: isValidJobId && canVisualizeJob, staleTime: 20_000 }
-  );
-
-  const scenarioSnapshotsQuery = trpc.previsaoPython.scenarioSnapshots.useQuery(
-    { id: jobId || 0 },
-    { enabled: isValidJobId && canVisualizeJob, staleTime: 10_000 }
-  );
-  const scenarioSnapshots = scenarioSnapshotsQuery.data ?? [];
-
-  const compareSnapshotsEnabled =
-    isValidJobId &&
-    canVisualizeJob &&
-    Boolean(compareBaseSnapshotId) &&
-    Boolean(compareTargetSnapshotId) &&
-    compareBaseSnapshotId !== compareTargetSnapshotId;
-
-  const compareSnapshotsQuery = trpc.previsaoPython.compareScenarioSnapshots.useQuery(
-    {
-      id: jobId || 0,
-      baseSnapshotId: compareBaseSnapshotId || 0,
-      targetSnapshotId: compareTargetSnapshotId || 0,
-    },
-    {
-      enabled: compareSnapshotsEnabled,
-      staleTime: 10_000,
-    }
-  );
-
-  const cycleSummaryQuery = trpc.previsaoPython.cycleSummary.useQuery(
-    {
-      id: jobId || 0,
-      snapshotId: selectedSummarySnapshotId || undefined,
-    },
-    {
-      enabled: isValidJobId && canVisualizeJob,
-      staleTime: 20_000,
-    }
-  );
-
   const sheetDataQuery = trpc.previsaoPython.sheetData.useQuery(
     {
       id: jobId || 0,
@@ -450,14 +448,87 @@ export default function PrevisaoPythonViewer() {
       search: effectiveSearch,
       sortBy,
       sortDir,
-      filters: debouncedFilters,
+      filters: filtersForQuery,
     },
     {
       enabled: isValidJobId && canVisualizeJob && Boolean(selectedSheet),
-      staleTime: 10_000,
-      placeholderData: previous => previous,
+      staleTime: 5 * 60_000,
+      gcTime: 15 * 60_000,
     }
   );
+
+  const buildSheetPrefetchInput = (sheetName: string) => ({
+    id: jobId,
+    sheetName,
+    page: 1 as const,
+    pageSize,
+    search: globalSkuSearch.trim(),
+    sortBy: "",
+    sortDir: "asc" as const,
+    filters: [] as Array<{ column: string; value: string }>,
+  });
+
+  const prefetchSheet = (sheetName: string) => {
+    if (!isValidJobId || !canVisualizeJob || !sheetName) return;
+    void utils.previsaoPython.sheetData.prefetch(buildSheetPrefetchInput(sheetName));
+  };
+
+  useEffect(() => {
+    if (!isValidJobId || !canVisualizeJob || !workbookSheets?.length) return;
+
+    const priority = [
+      "Visao_Executiva",
+      "Geral",
+      "Detalhado",
+      "Backtest",
+      "Backtest_Sku",
+      "Analise_Cenarios",
+      "Acuracidade",
+      "Acuracidade_Detalhada",
+      "Clientes",
+      "Clientes_Analise",
+      "Modelos_Estatisticos",
+      "Sazonalidade",
+      "Metodologia",
+    ];
+    const skipHeavy = new Set(["Cliente_detalhado", "Clientes_Por_Marca"]);
+    const toPrefetch = [
+      ...priority.filter(name => workbookSheets.includes(name) && !skipHeavy.has(name)),
+      ...workbookSheets.filter(
+        name => !priority.includes(name) && !skipHeavy.has(name)
+      ),
+    ].slice(0, 10);
+
+    let cancelled = false;
+    let index = 0;
+
+    const runNext = () => {
+      if (cancelled || index >= toPrefetch.length) return;
+      const sheetName = toPrefetch[index++];
+      void utils.previsaoPython.sheetData
+        .prefetch(buildSheetPrefetchInput(sheetName))
+        .finally(() => {
+          if (!cancelled) {
+            window.setTimeout(runNext, 40);
+          }
+        });
+    };
+
+    const timer = window.setTimeout(runNext, 80);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- prefetch on sheet list / pageSize / sku only
+  }, [
+    canVisualizeJob,
+    globalSkuSearch,
+    isValidJobId,
+    jobId,
+    pageSize,
+    utils.previsaoPython.sheetData,
+    workbookSheets,
+  ]);
 
   const methodsSheetName = useMemo(
     () => resolveSheetByPriority(workbookSheets, ["Modelos_Estatisticos", "Modelos Estatisticos"]),
@@ -493,36 +564,14 @@ export default function PrevisaoPythonViewer() {
     }
   }, [activeModule, isCiclo13View]);
 
-  const createSnapshotMutation = trpc.previsaoPython.createScenarioSnapshot.useMutation({
-    onSuccess: snapshot => {
-      setSelectedSummarySnapshotId(snapshot.id);
-      setCompareTargetSnapshotId(snapshot.id);
-      setSnapshotTitulo("");
-      setSnapshotObservacoes("");
-      void utils.previsaoPython.scenarioSnapshots.invalidate();
-      void utils.previsaoPython.cycleSummary.invalidate();
-      toast.success(`Snapshot ${snapshot.cicloRef} salvo com sucesso.`);
-    },
-    onError: error => toast.error(error.message),
-  });
-
-  const downloadMutation = trpc.previsaoPython.download.useMutation({
-    onSuccess: payload => {
-      const binary = atob(payload.contentBase64);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-
-      const blob = new Blob([bytes], { type: payload.mimeType });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = payload.fileName;
-      anchor.click();
-      URL.revokeObjectURL(url);
-      toast.success("Download iniciado.");
-    },
-    onError: error => toast.error(error.message),
-  });
+  const downloadMutationPending = false;
+  const handleDownloadOfficialExcel = () => {
+    if (!jobId) return;
+    downloadPrevisaoJobExcel(jobId);
+    toast.success(
+      `Baixando ${job?.outputFileName || `relatorio_previsao_demanda_job_${jobId}.xlsx`}`
+    );
+  };
 
   useEffect(() => {
     if (!workbookSheets || workbookSheets.length === 0) {
@@ -575,41 +624,6 @@ export default function PrevisaoPythonViewer() {
   }, [sheetColumns, sortBy]);
 
   useEffect(() => {
-    if (scenarioSnapshots.length === 0) {
-      if (selectedSummarySnapshotId !== null) setSelectedSummarySnapshotId(null);
-      if (compareBaseSnapshotId !== null) setCompareBaseSnapshotId(null);
-      if (compareTargetSnapshotId !== null) setCompareTargetSnapshotId(null);
-      return;
-    }
-
-    const latestSnapshotId = scenarioSnapshots[0].id;
-    const hasSelectedSummary = scenarioSnapshots.some(
-      snapshot => snapshot.id === selectedSummarySnapshotId
-    );
-    if (!hasSelectedSummary) {
-      setSelectedSummarySnapshotId(latestSnapshotId);
-    }
-
-    const hasTarget = scenarioSnapshots.some(snapshot => snapshot.id === compareTargetSnapshotId);
-    const nextTargetId = hasTarget ? compareTargetSnapshotId : latestSnapshotId;
-    if (nextTargetId !== compareTargetSnapshotId) {
-      setCompareTargetSnapshotId(nextTargetId);
-    }
-
-    const preferredBase = scenarioSnapshots.find(snapshot => snapshot.id !== nextTargetId) || null;
-    const hasBase = scenarioSnapshots.some(snapshot => snapshot.id === compareBaseSnapshotId);
-    const isSameAsTarget = compareBaseSnapshotId === nextTargetId;
-    if (!hasBase || isSameAsTarget) {
-      setCompareBaseSnapshotId(preferredBase ? preferredBase.id : nextTargetId);
-    }
-  }, [
-    compareBaseSnapshotId,
-    compareTargetSnapshotId,
-    scenarioSnapshots,
-    selectedSummarySnapshotId,
-  ]);
-
-  useEffect(() => {
     if (typeof window === "undefined" || !match) return;
 
     const query = new URLSearchParams();
@@ -650,94 +664,6 @@ export default function PrevisaoPythonViewer() {
     sortBy,
     sortDir,
   ]);
-
-  const modelChartData = useMemo(
-    () =>
-      (analytics?.modelRanking || []).slice(0, 8).map(item => ({
-        modelo: item.modelo,
-        skuCount: item.skuCount,
-      })),
-    [analytics?.modelRanking]
-  );
-
-  const modelMapeChartData = useMemo(
-    () =>
-      (analytics?.modelRanking || [])
-        .filter(item => item.avgMape !== null)
-        .slice(0, 8)
-        .map(item => ({
-          modelo: item.modelo,
-          avgMapePct: Number(((item.avgMape ?? 0) * 100).toFixed(2)),
-        })),
-    [analytics?.modelRanking]
-  );
-
-  const acuracidadeChartData = useMemo(
-    () =>
-      (analytics?.acuracidadeDistribution || []).slice(0, 8).map(item => ({
-        classificacao: item.label,
-        count: item.count,
-      })),
-    [analytics?.acuracidadeDistribution]
-  );
-
-  const biasChartData = useMemo(
-    () =>
-      (analytics?.biasDistribution || []).slice(0, 8).map(item => ({
-        bias: item.label,
-        count: item.count,
-      })),
-    [analytics?.biasDistribution]
-  );
-
-  const status12mChartData = useMemo(
-    () =>
-      (analytics?.status12mDistribution || []).slice(0, 8).map(item => ({
-        status: item.label,
-        count: item.count,
-      })),
-    [analytics?.status12mDistribution]
-  );
-
-  const filteredTopErros = useMemo(
-    () =>
-      (analytics?.topErros || []).filter(item =>
-        !normalizedSkuSearch || item.codigo.toLowerCase().includes(normalizedSkuSearch)
-      ),
-    [analytics?.topErros, normalizedSkuSearch]
-  );
-
-  const filteredTopAcertos = useMemo(
-    () =>
-      (analytics?.topAcertos || []).filter(item =>
-        !normalizedSkuSearch || item.codigo.toLowerCase().includes(normalizedSkuSearch)
-      ),
-    [analytics?.topAcertos, normalizedSkuSearch]
-  );
-
-  const filteredTopOportunidades = useMemo(
-    () =>
-      (analytics?.topOportunidades || []).filter(item =>
-        !normalizedSkuSearch || item.codigo.toLowerCase().includes(normalizedSkuSearch)
-      ),
-    [analytics?.topOportunidades, normalizedSkuSearch]
-  );
-
-  const filteredTopRiscos = useMemo(
-    () =>
-      (analytics?.topRiscos || []).filter(item =>
-        !normalizedSkuSearch || item.codigo.toLowerCase().includes(normalizedSkuSearch)
-      ),
-    [analytics?.topRiscos, normalizedSkuSearch]
-  );
-
-  const filteredExplainabilityItems = useMemo(
-    () =>
-      (explainabilityQuery.data?.itens || []).filter(item =>
-        !normalizedSkuSearch || item.codigo.toLowerCase().includes(normalizedSkuSearch)
-      ),
-    [explainabilityQuery.data?.itens, normalizedSkuSearch]
-  );
 
   const executiveTopValorFiltered = useMemo(
     () =>
@@ -799,11 +725,15 @@ export default function PrevisaoPythonViewer() {
 
   const modelRankingWithCatalog = useMemo(
     () =>
-      (analytics?.modelRanking || []).slice(0, 12).map(item => ({
-        ...item,
-        catalog: methodsCatalogMap.get(normalizeToken(item.modelo)) || null,
-      })),
-    [analytics?.modelRanking, methodsCatalogMap]
+      Array.from(methodsCatalogMap.values())
+        .slice(0, 12)
+        .map(item => ({
+          modelo: item.modelo,
+          skuCount: null as number | null,
+          avgMape: null as number | null,
+          catalog: item,
+        })),
+    [methodsCatalogMap]
   );
 
   const buildDrillSnapshot = (label: string, source: string): DrillSnapshot => ({
@@ -1011,65 +941,6 @@ export default function PrevisaoPythonViewer() {
     }
   };
 
-  const handleCreateScenarioSnapshot = () => {
-    if (!cicloRef.trim()) {
-      toast.error("Informe o ciclo para salvar o snapshot.");
-      return;
-    }
-    createSnapshotMutation.mutate({
-      id: jobId || 0,
-      cicloRef: cicloRef.trim(),
-      horizonteRef: horizonteRef.trim() || undefined,
-      titulo: snapshotTitulo.trim() || undefined,
-      observacoes: snapshotObservacoes.trim() || undefined,
-    });
-  };
-
-  const handleExportCycleSummaryPdf = () => {
-    const summaryRoot = cycleSummaryRef.current;
-    if (!summaryRoot) {
-      toast.error("Resumo do ciclo ainda nao carregado.");
-      return;
-    }
-
-    const printWindow = window.open("", "_blank", "width=1100,height=900");
-    if (!printWindow) {
-      toast.error("Nao foi possivel abrir janela para impressao.");
-      return;
-    }
-
-    const css = `
-      body { font-family: Arial, sans-serif; margin: 24px; color: #0f172a; }
-      h1, h2, h3 { margin: 0 0 10px; }
-      .card { border: 1px solid #cbd5e1; border-radius: 10px; padding: 14px; margin-bottom: 12px; }
-      .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-      .kpi { border: 1px solid #dbeafe; border-radius: 8px; padding: 10px; background: #f8fafc; }
-      ul { margin: 0; padding-left: 20px; }
-      li { margin-bottom: 6px; }
-      @media print { body { margin: 8mm; } }
-    `;
-
-    printWindow.document.write(`
-      <!doctype html>
-      <html>
-        <head>
-          <meta charset="utf-8" />
-          <title>Resumo do ciclo - Job ${jobId}</title>
-          <style>${css}</style>
-        </head>
-        <body>
-          ${summaryRoot.innerHTML}
-        </body>
-      </html>
-    `);
-    printWindow.document.close();
-    printWindow.focus();
-    window.setTimeout(() => {
-      printWindow.print();
-      printWindow.close();
-    }, 250);
-  };
-
   const handleSkuRowClick = (
     sku: string,
     preferredSheets: string[],
@@ -1168,63 +1039,100 @@ export default function PrevisaoPythonViewer() {
       ? 0
       : Math.min(customerCurrentPage * customerCurrentPageSize, customerTotalRows);
 
-  return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Visualizacao do Excel da Previsao</h1>
-          <p className="text-muted-foreground">Job #{jobId}</p>
-        </div>
+  const activeFilterCount =
+    filters.length +
+    (globalSkuSearch.trim() ? 1 : 0) +
+    (search.trim() ? 1 : 0) +
+    (sortBy ? 1 : 0);
 
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={() => setLocation("/previsao-python")}>
-            <ArrowLeft className="mr-2 h-4 w-4" />
-            Voltar
-          </Button>
-          <Button
-            variant="outline"
-            disabled={!canVisualizeJob || downloadMutation.isPending}
-            onClick={() => downloadMutation.mutate({ id: jobId })}
-          >
-            <Download className="mr-2 h-4 w-4" />
-            Excel
-          </Button>
+  const clearAllSheetFilters = () => {
+    setDrillHistory([]);
+    setDrillBaseSnapshot(null);
+    setPendingDrillFilter(null);
+    setGlobalSkuSearch("");
+    setSearch("");
+    setSortBy("");
+    setSortDir("asc");
+    setFilters([]);
+  };
+
+  const handleColumnHeaderSort = (column: string) => {
+    if (sortBy === column) {
+      setSortDir(current => (current === "asc" ? "desc" : "asc"));
+      return;
+    }
+    setSortBy(column);
+    setSortDir("asc");
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="overflow-hidden rounded-2xl border border-border/70 bg-gradient-to-br from-card via-card to-primary/[0.04] shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-4 px-5 py-4 md:px-6">
+          <div className="min-w-0 space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <FileSpreadsheet className="h-5 w-5 text-primary" />
+              <h1 className="text-xl font-bold tracking-tight md:text-2xl">
+                Relatório da previsão
+              </h1>
+              <Badge variant="outline" className="font-mono text-xs">
+                Job #{jobId}
+              </Badge>
+              {job?.status === "SUCCESS" ? (
+                <Badge className="bg-emerald-600 hover:bg-emerald-600">Pronto</Badge>
+              ) : job?.status ? (
+                <Badge variant="secondary">{job.status}</Badge>
+              ) : null}
+            </div>
+            <p className="max-w-2xl text-sm text-muted-foreground">
+              Cópia visual do Excel oficial do job
+              {job?.outputFileName ? (
+                <>
+                  : <span className="font-medium text-foreground">{job.outputFileName}</span>
+                </>
+              ) : null}
+              . Cores e abas iguais ao arquivo gerado.
+            </p>
+            {job && (
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                <span>Versão {job.scriptVersion}</span>
+                <span>Criado {formatDate(job.createdAt)}</span>
+                <span>Finalizado {formatDate(job.finishedAt)}</span>
+              </div>
+            )}
+            {loadingJob && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Carregando job...
+              </div>
+            )}
+            {jobQueryFailed && (
+              <p className="text-sm text-destructive">
+                {jobQueryError.message || "Nao foi possivel carregar o job."}
+              </p>
+            )}
+            {!loadingJob && !jobQueryFailed && !job && (
+              <p className="text-sm text-muted-foreground">
+                Job nao encontrado. O registro sumiu do banco e nao ha Excel deste job no disco.
+              </p>
+            )}
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={() => setLocation("/previsao-python")}>
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Voltar
+            </Button>
+            <Button
+              disabled={!canVisualizeJob || downloadMutationPending}
+              onClick={handleDownloadOfficialExcel}
+            >
+              <Download className="mr-2 h-4 w-4" />
+              Baixar Excel
+            </Button>
+          </div>
         </div>
       </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Metadados do Job</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {loadingJob ? (
-            <div className="flex justify-center py-6">
-              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-            </div>
-          ) : !job ? (
-            <p className="text-sm text-muted-foreground">Job nao encontrado.</p>
-          ) : (
-            <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-4">
-              <div>
-                <span className="text-muted-foreground">Status: </span>
-                <Badge variant={job.status === "SUCCESS" ? "default" : "secondary"}>{job.status}</Badge>
-              </div>
-              <div>
-                <span className="text-muted-foreground">Versao: </span>
-                <span className="font-medium">{job.scriptVersion}</span>
-              </div>
-              <div>
-                <span className="text-muted-foreground">Criado em: </span>
-                <span className="font-medium">{formatDate(job.createdAt)}</span>
-              </div>
-              <div>
-                <span className="text-muted-foreground">Finalizado em: </span>
-                <span className="font-medium">{formatDate(job.finishedAt)}</span>
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
 
       {job && !canVisualizeJob && (
         <Card>
@@ -1268,1074 +1176,179 @@ export default function PrevisaoPythonViewer() {
 
           {(!isCiclo13View || activeModule === "previsao") && (
             <>
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <BarChart3 className="h-5 w-5" />
-                Resumo Analitico
-              </CardTitle>
-              <CardDescription>Leitura visual dos principais resultados do job #{jobId}.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              {loadingAnalytics ? (
-                <div className="flex justify-center py-8">
-                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                </div>
-              ) : !analytics ? (
-                <p className="text-sm text-muted-foreground">Nao foi possivel gerar analise visual para este relatorio.</p>
-              ) : (
-                <>
-                  <Card>
-                    <CardHeader>
-                      <CardTitle className="text-base">Painel Executivo de Previsao</CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-6">
-                      <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-6">
-                        <div className="rounded-lg border p-4">
-                          <p className="text-xs text-muted-foreground">SKUs analisados</p>
-                          <p className="text-2xl font-semibold">{formatCompactNumber(analytics.summary.skuCount)}</p>
-                        </div>
-                        <div className="rounded-lg border p-4">
-                          <p className="text-xs text-muted-foreground">MAPE medio</p>
-                          <p className="text-2xl font-semibold">{formatPercent(analytics.summary.avgMapeTotal)}</p>
-                        </div>
-                        <div className="rounded-lg border p-4">
-                          <p className="text-xs text-muted-foreground">MAPE mediano</p>
-                          <p className="text-2xl font-semibold">{formatPercent(analytics.summary.medianMapeTotal)}</p>
-                        </div>
-                        <div className="rounded-lg border p-4">
-                          <p className="text-xs text-muted-foreground">Acuracidade media</p>
-                          <p className="text-2xl font-semibold">{formatPercent(analytics.summary.acuracidadeMedia)}</p>
-                        </div>
-                        <div className="rounded-lg border p-4">
-                          <p className="text-xs text-muted-foreground">Modelos vencedores</p>
-                          <p className="text-2xl font-semibold">{formatCompactNumber(analytics.summary.modelCount)}</p>
-                        </div>
-                        <div className="rounded-lg border p-4">
-                          <p className="text-xs text-muted-foreground">Sugestao media ajuste</p>
-                          <p className="text-2xl font-semibold">{formatPercent(analytics.summary.avgSugestaoAjustePct)}</p>
-                        </div>
-                      </div>
-
-                      <div className="grid gap-4 lg:grid-cols-2">
-                        <Card>
-                          <CardHeader>
-                            <CardTitle className="text-base">Tendencia mensal (ultimos 24 meses)</CardTitle>
-                          </CardHeader>
-                          <CardContent>
-                            <div className="h-[280px]">
-                              <ResponsiveContainer width="100%" height="100%">
-                                <LineChart data={analytics.monthlySeries}>
-                                  <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                                  <XAxis dataKey="label" className="text-xs" />
-                                  <YAxis className="text-xs" />
-                                  <Tooltip formatter={(value: number) => [value.toLocaleString("pt-BR"), "Volume"]} />
-                                  <Line type="monotone" dataKey="total" stroke="#2563eb" strokeWidth={2} dot={false} />
-                                </LineChart>
-                              </ResponsiveContainer>
-                            </div>
-                          </CardContent>
-                        </Card>
-
-                        <Card>
-                          <CardHeader>
-                            <div className="flex items-center justify-between gap-2">
-                              <CardTitle className="text-base">Status 12M (distribuicao)</CardTitle>
-                              {renderDrillActions("status12m")}
-                            </div>
-                          </CardHeader>
-                          <CardContent>
-                            {status12mChartData.length === 0 ? (
-                              <p className="text-sm text-muted-foreground">Sem dados de status 12M para este relatorio.</p>
-                            ) : (
-                              <div className="h-[280px]">
-                                <ResponsiveContainer width="100%" height="100%">
-                                  <BarChart data={status12mChartData}>
-                                    <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                                    <XAxis dataKey="status" className="text-xs" interval={0} angle={-18} textAnchor="end" height={70} />
-                                    <YAxis className="text-xs" />
-                                    <Tooltip formatter={(value: number) => [value, "SKUs"]} />
-                                    <Bar
-                                      dataKey="count"
-                                      fill="#2563eb"
-                                      radius={[4, 4, 0, 0]}
-                                      cursor="pointer"
-                                      onClick={(entry: any) =>
-                                        applyDrillFilter(String(entry?.payload?.status ?? ""), {
-                                          preferredSheets: ["Geral"],
-                                          columnAliases: ["STATUS_12M", "STATUS 12M"],
-                                          message: "Filtro aplicado por status 12M.",
-                                          trailLabel: `Status 12M: ${String(entry?.payload?.status ?? "").trim()}`,
-                                          sourceKey: "status12m",
-                                        })
-                                      }
-                                    />
-                                  </BarChart>
-                                </ResponsiveContainer>
-                              </div>
-                            )}
-                          </CardContent>
-                        </Card>
-                      </div>
-
-                      <div className="grid gap-4 lg:grid-cols-2">
-                        <Card>
-                          <CardHeader>
-                            <div className="flex items-center justify-between gap-2">
-                              <CardTitle className="text-base">Top oportunidades (cenarios)</CardTitle>
-                              {renderDrillActions("oportunidades")}
-                            </div>
-                          </CardHeader>
-                          <CardContent>
-                            {filteredTopOportunidades.length === 0 ? (
-                              <p className="text-sm text-muted-foreground">Sem oportunidades identificadas.</p>
-                            ) : (
-                              <Table>
-                                <TableHeader>
-                                  <TableRow>
-                                    <TableHead>SKU</TableHead>
-                                    <TableHead>Melhor opcao</TableHead>
-                                    <TableHead className="text-right">Valor</TableHead>
-                                    <TableHead className="text-right">Variacao</TableHead>
-                                  </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                  {filteredTopOportunidades.slice(0, 6).map(item => (
-                                    <TableRow
-                                      key={`oportunidade-${item.codigo}`}
-                                      className="cursor-pointer hover:bg-muted/40"
-                                      onClick={() =>
-                                        handleSkuRowClick(item.codigo, ["Analise_Cenarios"], "oportunidades")
-                                      }
-                                    >
-                                      <TableCell>{item.codigo}</TableCell>
-                                      <TableCell>{item.melhorOpcao || "--"}</TableCell>
-                                      <TableCell className="text-right">
-                                        {formatCompactCurrency(item.valorMelhorOpcao)}
-                                      </TableCell>
-                                      <TableCell className="text-right text-emerald-600">
-                                        {formatSignedPercent(item.variacaoPct)}
-                                      </TableCell>
-                                    </TableRow>
-                                  ))}
-                                </TableBody>
-                              </Table>
-                            )}
-                          </CardContent>
-                        </Card>
-
-                        <Card>
-                          <CardHeader>
-                            <div className="flex items-center justify-between gap-2">
-                              <CardTitle className="text-base">Top riscos (cenarios)</CardTitle>
-                              {renderDrillActions("riscos")}
-                            </div>
-                          </CardHeader>
-                          <CardContent>
-                            {filteredTopRiscos.length === 0 ? (
-                              <p className="text-sm text-muted-foreground">Sem riscos identificados.</p>
-                            ) : (
-                              <Table>
-                                <TableHeader>
-                                  <TableRow>
-                                    <TableHead>SKU</TableHead>
-                                    <TableHead>Melhor opcao</TableHead>
-                                    <TableHead className="text-right">Valor</TableHead>
-                                    <TableHead className="text-right">Variacao</TableHead>
-                                  </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                  {filteredTopRiscos.slice(0, 6).map(item => (
-                                    <TableRow
-                                      key={`risco-${item.codigo}`}
-                                      className="cursor-pointer hover:bg-muted/40"
-                                      onClick={() =>
-                                        handleSkuRowClick(item.codigo, ["Analise_Cenarios"], "riscos")
-                                      }
-                                    >
-                                      <TableCell>{item.codigo}</TableCell>
-                                      <TableCell>{item.melhorOpcao || "--"}</TableCell>
-                                      <TableCell className="text-right">
-                                        {formatCompactCurrency(item.valorMelhorOpcao)}
-                                      </TableCell>
-                                      <TableCell className="text-right text-rose-600">
-                                        {formatSignedPercent(item.variacaoPct)}
-                                      </TableCell>
-                                    </TableRow>
-                                  ))}
-                                </TableBody>
-                              </Table>
-                            )}
-                          </CardContent>
-                        </Card>
-                      </div>
-                    </CardContent>
-                  </Card>
-
-                  <Card>
-                    <CardHeader>
-                      <CardTitle className="text-base">Dashboard de Modelos</CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-6">
-                      <div className="grid gap-4 lg:grid-cols-2">
-                        <Card>
-                          <CardHeader>
-                            <div className="flex items-center justify-between gap-2">
-                              <CardTitle className="text-base">Modelos mais frequentes</CardTitle>
-                              {renderDrillActions("modelo_frequencia")}
-                            </div>
-                          </CardHeader>
-                          <CardContent>
-                            <div className="h-[280px]">
-                              <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={modelChartData}>
-                                  <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                                  <XAxis dataKey="modelo" className="text-xs" interval={0} angle={-20} textAnchor="end" height={70} />
-                                  <YAxis className="text-xs" />
-                                  <Tooltip formatter={(value: number) => [value, "SKUs"]} />
-                                  <Bar
-                                    dataKey="skuCount"
-                                    fill="#0d9488"
-                                    radius={[4, 4, 0, 0]}
-                                    cursor="pointer"
-                                    onClick={(entry: any) =>
-                                      applyDrillFilter(String(entry?.payload?.modelo ?? ""), {
-                                        preferredSheets: ["Backtest_Sku", "Backtest"],
-                                        columnAliases: ["MELHOR_MODELO", "MELHOR MODELO", "MODELO"],
-                                        message: "Filtro aplicado por modelo.",
-                                        trailLabel: `Modelo: ${String(entry?.payload?.modelo ?? "").trim()}`,
-                                        sourceKey: "modelo_frequencia",
-                                      })
-                                    }
-                                  />
-                                </BarChart>
-                              </ResponsiveContainer>
-                            </div>
-                          </CardContent>
-                        </Card>
-
-                        <Card>
-                          <CardHeader>
-                            <div className="flex items-center justify-between gap-2">
-                              <CardTitle className="text-base">MAPE medio por modelo</CardTitle>
-                              {renderDrillActions("modelo_mape")}
-                            </div>
-                          </CardHeader>
-                          <CardContent>
-                            {modelMapeChartData.length === 0 ? (
-                              <p className="text-sm text-muted-foreground">Sem dados de MAPE por modelo.</p>
-                            ) : (
-                              <div className="h-[280px]">
-                                <ResponsiveContainer width="100%" height="100%">
-                                  <BarChart data={modelMapeChartData}>
-                                    <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                                    <XAxis dataKey="modelo" className="text-xs" interval={0} angle={-20} textAnchor="end" height={70} />
-                                    <YAxis className="text-xs" />
-                                    <Tooltip formatter={(value: number) => [`${value.toLocaleString("pt-BR")}%`, "MAPE"]} />
-                                    <Bar
-                                      dataKey="avgMapePct"
-                                      fill="#14b8a6"
-                                      radius={[4, 4, 0, 0]}
-                                      cursor="pointer"
-                                      onClick={(entry: any) =>
-                                        applyDrillFilter(String(entry?.payload?.modelo ?? ""), {
-                                          preferredSheets: ["Backtest_Sku", "Backtest"],
-                                          columnAliases: ["MELHOR_MODELO", "MELHOR MODELO", "MODELO"],
-                                          message: "Filtro aplicado por modelo.",
-                                          trailLabel: `Modelo: ${String(entry?.payload?.modelo ?? "").trim()}`,
-                                          sourceKey: "modelo_mape",
-                                        })
-                                      }
-                                    />
-                                  </BarChart>
-                                </ResponsiveContainer>
-                              </div>
-                            )}
-                          </CardContent>
-                        </Card>
-                      </div>
-
-                      <Card>
-                        <CardHeader>
-                          <CardTitle className="text-base">Ranking de modelos</CardTitle>
-                        </CardHeader>
-                        <CardContent>
-                          <ScrollArea className="h-[260px] rounded-md border">
-                            <Table>
-                              <TableHeader>
-                                <TableRow>
-                                  <TableHead>Modelo</TableHead>
-                                  <TableHead className="text-right">SKUs</TableHead>
-                                  <TableHead className="text-right">MAPE medio</TableHead>
-                                </TableRow>
-                              </TableHeader>
-                              <TableBody>
-                                {analytics.modelRanking.slice(0, 12).map(item => (
-                                  <TableRow key={`modelo-${item.modelo}`}>
-                                    <TableCell>{item.modelo}</TableCell>
-                                    <TableCell className="text-right">{formatCompactNumber(item.skuCount)}</TableCell>
-                                    <TableCell className="text-right">{formatPercent(item.avgMape)}</TableCell>
-                                  </TableRow>
-                                ))}
-                              </TableBody>
-                            </Table>
-                          </ScrollArea>
-                        </CardContent>
-                      </Card>
-                    </CardContent>
-                  </Card>
-
-                  <Card>
-                    <CardHeader>
-                      <CardTitle className="text-base">Dashboard de Erro e Vies</CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-6">
-                      <div className="grid gap-4 lg:grid-cols-2">
-                        <Card>
-                          <CardHeader>
-                            <div className="flex items-center justify-between gap-2">
-                              <CardTitle className="text-base">Distribuicao de acuracidade</CardTitle>
-                              {renderDrillActions("acuracidade")}
-                            </div>
-                          </CardHeader>
-                          <CardContent>
-                            <div className="h-[280px]">
-                              <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={acuracidadeChartData}>
-                                  <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                                  <XAxis dataKey="classificacao" className="text-xs" interval={0} angle={-20} textAnchor="end" height={70} />
-                                  <YAxis className="text-xs" />
-                                  <Tooltip formatter={(value: number) => [value, "SKUs"]} />
-                                  <Bar
-                                    dataKey="count"
-                                    fill="#f59e0b"
-                                    radius={[4, 4, 0, 0]}
-                                    cursor="pointer"
-                                    onClick={(entry: any) =>
-                                      applyDrillFilter(String(entry?.payload?.classificacao ?? ""), {
-                                        preferredSheets: ["Acuracidade"],
-                                        columnAliases: [
-                                          "CLASSIFICACAO_ERRO_TOTAL",
-                                          "CLASSIFICACAO ERRO TOTAL",
-                                        ],
-                                        message: "Filtro aplicado por classificacao de erro.",
-                                        trailLabel: `Classificacao erro: ${String(entry?.payload?.classificacao ?? "").trim()}`,
-                                        sourceKey: "acuracidade",
-                                      })
-                                    }
-                                  />
-                                </BarChart>
-                              </ResponsiveContainer>
-                            </div>
-                          </CardContent>
-                        </Card>
-
-                        <Card>
-                          <CardHeader>
-                            <div className="flex items-center justify-between gap-2">
-                              <CardTitle className="text-base">Distribuicao de vies</CardTitle>
-                              {renderDrillActions("vies")}
-                            </div>
-                          </CardHeader>
-                          <CardContent>
-                            {biasChartData.length === 0 ? (
-                              <p className="text-sm text-muted-foreground">Sem dados de vies para este relatorio.</p>
-                            ) : (
-                              <div className="h-[280px]">
-                                <ResponsiveContainer width="100%" height="100%">
-                                  <BarChart data={biasChartData}>
-                                    <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                                    <XAxis dataKey="bias" className="text-xs" interval={0} angle={-20} textAnchor="end" height={70} />
-                                    <YAxis className="text-xs" />
-                                    <Tooltip formatter={(value: number) => [value, "SKUs"]} />
-                                    <Bar
-                                      dataKey="count"
-                                      fill="#6366f1"
-                                      radius={[4, 4, 0, 0]}
-                                      cursor="pointer"
-                                      onClick={(entry: any) =>
-                                        applyDrillFilter(String(entry?.payload?.bias ?? ""), {
-                                          preferredSheets: ["Acuracidade"],
-                                          columnAliases: ["BIAS"],
-                                          message: "Filtro aplicado por vies.",
-                                          trailLabel: `Vies: ${String(entry?.payload?.bias ?? "").trim()}`,
-                                          sourceKey: "vies",
-                                        })
-                                      }
-                                    />
-                                  </BarChart>
-                                </ResponsiveContainer>
-                              </div>
-                            )}
-                          </CardContent>
-                        </Card>
-                      </div>
-
-                      <div className="grid gap-4 lg:grid-cols-2">
-                        <Card>
-                          <CardHeader>
-                            <div className="flex items-center justify-between gap-2">
-                              <CardTitle className="text-base">Top erros</CardTitle>
-                              {renderDrillActions("erros")}
-                            </div>
-                          </CardHeader>
-                          <CardContent>
-                            <Table>
-                              <TableHeader>
-                                <TableRow>
-                                  <TableHead>SKU</TableHead>
-                                  <TableHead className="text-right">MAPE</TableHead>
-                                  <TableHead className="text-right">Ajuste</TableHead>
-                                </TableRow>
-                              </TableHeader>
-                              <TableBody>
-                                {filteredTopErros.slice(0, 8).map(item => (
-                                  <TableRow
-                                    key={`erro-${item.codigo}`}
-                                    className="cursor-pointer hover:bg-muted/40"
-                                    onClick={() =>
-                                      handleSkuRowClick(item.codigo, ["Acuracidade"], "erros")
-                                    }
-                                  >
-                                    <TableCell>{item.codigo}</TableCell>
-                                    <TableCell className="text-right">{formatPercent(item.mapeTotal)}</TableCell>
-                                    <TableCell className="text-right">{formatPercent(item.sugestaoAjustePct)}</TableCell>
-                                  </TableRow>
-                                ))}
-                              </TableBody>
-                            </Table>
-                          </CardContent>
-                        </Card>
-
-                        <Card>
-                          <CardHeader>
-                            <div className="flex items-center justify-between gap-2">
-                              <CardTitle className="text-base">Top acertos</CardTitle>
-                              {renderDrillActions("acertos")}
-                            </div>
-                          </CardHeader>
-                          <CardContent>
-                            <Table>
-                              <TableHeader>
-                                <TableRow>
-                                  <TableHead>SKU</TableHead>
-                                  <TableHead className="text-right">MAPE</TableHead>
-                                  <TableHead className="text-right">Ajuste</TableHead>
-                                </TableRow>
-                              </TableHeader>
-                              <TableBody>
-                                {filteredTopAcertos.slice(0, 8).map(item => (
-                                  <TableRow
-                                    key={`acerto-${item.codigo}`}
-                                    className="cursor-pointer hover:bg-muted/40"
-                                    onClick={() =>
-                                      handleSkuRowClick(item.codigo, ["Acuracidade"], "acertos")
-                                    }
-                                  >
-                                    <TableCell>{item.codigo}</TableCell>
-                                    <TableCell className="text-right">{formatPercent(item.mapeTotal)}</TableCell>
-                                    <TableCell className="text-right">{formatPercent(item.sugestaoAjustePct)}</TableCell>
-                                  </TableRow>
-                                ))}
-                              </TableBody>
-                            </Table>
-                          </CardContent>
-                        </Card>
-                      </div>
-                    </CardContent>
-                  </Card>
-                </>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between gap-3">
-                <CardTitle className="flex items-center gap-2">
-                  <Lightbulb className="h-5 w-5" />
-                  Camada de explicabilidade da previsao
-                </CardTitle>
-                {renderDrillActions("explicabilidade")}
-              </div>
-              <CardDescription>
-                Explicacao por SKU: por que subiu/caiu e o que pode melhorar no proximo ciclo.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {explainabilityQuery.isLoading ? (
-                <div className="flex justify-center py-8">
-                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                </div>
-              ) : !explainabilityQuery.data ? (
-                <p className="text-sm text-muted-foreground">
-                  Nao foi possivel gerar explicabilidade para este relatorio.
-                </p>
-              ) : (
-                <>
-                  <div className="grid gap-3 md:grid-cols-3">
-                    <div className="rounded-lg border p-3">
-                      <p className="text-xs text-muted-foreground">SKUs avaliados</p>
-                      <p className="text-xl font-semibold">
-                        {formatCompactNumber(explainabilityQuery.data.totalSku)}
-                      </p>
-                    </div>
-                    <div className="rounded-lg border p-3">
-                      <p className="text-xs text-muted-foreground">Variacao relevante (3M)</p>
-                      <p className="text-xl font-semibold">
-                        {formatCompactNumber(explainabilityQuery.data.skuComVariacaoRelevante)}
-                      </p>
-                    </div>
-                    <div className="rounded-lg border p-3">
-                      <p className="text-xs text-muted-foreground">Atualizado em</p>
-                      <p className="text-sm font-medium">
-                        {formatDate(explainabilityQuery.data.generatedAt)}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="rounded-lg border bg-muted/20 p-3">
-                    <p className="mb-2 text-sm font-medium">Leituras e melhorias sugeridas</p>
-                    <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
-                      {explainabilityQuery.data.recomendacoesGerais.map((item, index) => (
-                        <li key={`rec-${index}`}>{item}</li>
-                      ))}
-                    </ul>
-                  </div>
-
-                  <div className="rounded-md border">
-                    <Table className="table-fixed [&_th]:whitespace-normal [&_td]:whitespace-normal [&_th]:align-top [&_td]:align-top">
-                      <colgroup>
-                        <col className="w-[26%]" />
-                        <col className="w-[9%]" />
-                        <col className="w-[31%]" />
-                        <col className="w-[34%]" />
-                      </colgroup>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>SKU</TableHead>
-                          <TableHead>Movimento</TableHead>
-                          <TableHead>Por que aconteceu</TableHead>
-                          <TableHead>O que melhorar</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {filteredExplainabilityItems.length === 0 ? (
-                          <TableRow>
-                            <TableCell colSpan={4} className="py-6 text-center text-muted-foreground">
-                              Nenhum SKU encontrado para o filtro global atual.
-                            </TableCell>
-                          </TableRow>
-                        ) : (
-                          filteredExplainabilityItems.slice(0, 12).map(item => (
-                            <TableRow
-                              key={`exp-${item.codigo}`}
-                              className="cursor-pointer hover:bg-muted/30"
-                              onClick={() =>
-                                handleSkuRowClick(
-                                  item.codigo,
-                                  ["Geral", "Acuracidade", "Analise_Cenarios"],
-                                  "explicabilidade"
-                                )
-                              }
-                            >
-                              <TableCell className="font-medium break-words">{item.codigo}</TableCell>
-                              <TableCell className="space-y-1">
-                                <Badge variant={getMovementBadgeVariant(item.direcao)}>
-                                  {item.direcao}
-                                </Badge>
-                                <p className="text-xs text-muted-foreground">
-                                  {formatSignedPercent(item.variacaoPct)}
-                                </p>
-                              </TableCell>
-                              <TableCell className="break-words">
-                                <p className="text-sm leading-relaxed">{item.explicacao}</p>
-                              </TableCell>
-                              <TableCell className="break-words">
-                                <p className="text-sm leading-relaxed text-muted-foreground">
-                                  {item.melhorias[0] || "Sem recomendacao adicional."}
-                                </p>
-                              </TableCell>
-                            </TableRow>
-                          ))
-                        )}
-                      </TableBody>
-                    </Table>
-                  </div>
-                </>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <History className="h-5 w-5" />
-                Versionamento de cenarios
-              </CardTitle>
-              <CardDescription>
-                Salve snapshots por ciclo e compare mudancas para auditoria da previsao.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="rounded-md border bg-muted/20 p-3">
-                <div className="grid gap-3 md:grid-cols-5">
-                  <div className="space-y-1">
-                    <Label>Ciclo</Label>
-                    <Input
-                      placeholder="Ex.: 2026-C2"
-                      value={cicloRef}
-                      onChange={event => setCicloRef(event.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label>Horizonte</Label>
-                    <Input
-                      placeholder="Ex.: M+1"
-                      value={horizonteRef}
-                      onChange={event => setHorizonteRef(event.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-1 md:col-span-2">
-                    <Label>Titulo (opcional)</Label>
-                    <Input
-                      placeholder="Ex.: fechamento comercial"
-                      value={snapshotTitulo}
-                      onChange={event => setSnapshotTitulo(event.target.value)}
-                    />
-                  </div>
-                  <div className="flex items-end">
-                    <Button
-                      className="w-full"
-                      onClick={handleCreateScenarioSnapshot}
-                      disabled={createSnapshotMutation.isPending || !cicloRef.trim()}
-                    >
-                      <Save className="mr-2 h-4 w-4" />
-                      {createSnapshotMutation.isPending ? "Salvando..." : "Salvar snapshot"}
-                    </Button>
-                  </div>
-                </div>
-                <div className="mt-3 space-y-1">
-                  <Label>Observacoes (opcional)</Label>
-                  <Input
-                    placeholder="Contexto da mudanca de cenario"
-                    value={snapshotObservacoes}
-                    onChange={event => setSnapshotObservacoes(event.target.value)}
-                  />
-                </div>
-              </div>
-
-              {scenarioSnapshotsQuery.isLoading ? (
-                <div className="flex justify-center py-6">
-                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                </div>
-              ) : scenarioSnapshots.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  Nenhum snapshot salvo ainda para este job.
-                </p>
-              ) : (
-                <>
-                  <div className="rounded-md border">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Ciclo</TableHead>
-                          <TableHead>Horizonte</TableHead>
-                          <TableHead>SKUs</TableHead>
-                          <TableHead>Oportunidades</TableHead>
-                          <TableHead>Riscos</TableHead>
-                          <TableHead>Criado em</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {scenarioSnapshots.map(snapshot => (
-                          <TableRow key={`snapshot-${snapshot.id}`}>
-                            <TableCell className="font-medium">{snapshot.cicloRef}</TableCell>
-                            <TableCell>{snapshot.horizonteRef || "--"}</TableCell>
-                            <TableCell>{formatCompactNumber(snapshot.summary.skuCount)}</TableCell>
-                            <TableCell className="text-emerald-600">
-                              {formatCompactNumber(snapshot.summary.oportunidades)}
-                            </TableCell>
-                            <TableCell className="text-rose-600">
-                              {formatCompactNumber(snapshot.summary.riscos)}
-                            </TableCell>
-                            <TableCell>{formatDate(snapshot.createdAt)}</TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-
-                  {scenarioSnapshots.length >= 2 && (
-                    <div className="rounded-md border bg-muted/20 p-3 space-y-3">
-                      <div className="grid gap-3 md:grid-cols-3">
-                        <div className="space-y-1">
-                          <Label>Base</Label>
-                          <Select
-                            value={compareBaseSnapshotId ? String(compareBaseSnapshotId) : "__none"}
-                            onValueChange={value =>
-                              setCompareBaseSnapshotId(value === "__none" ? null : Number(value))
-                            }
-                          >
-                            <SelectTrigger>
-                              <SelectValue placeholder="Snapshot base" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="__none">Selecione</SelectItem>
-                              {scenarioSnapshots.map(snapshot => (
-                                <SelectItem key={`base-${snapshot.id}`} value={String(snapshot.id)}>
-                                  {snapshot.cicloRef} {snapshot.horizonteRef ? `(${snapshot.horizonteRef})` : ""}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-
-                        <div className="space-y-1">
-                          <Label>Comparar com</Label>
-                          <Select
-                            value={compareTargetSnapshotId ? String(compareTargetSnapshotId) : "__none"}
-                            onValueChange={value =>
-                              setCompareTargetSnapshotId(value === "__none" ? null : Number(value))
-                            }
-                          >
-                            <SelectTrigger>
-                              <SelectValue placeholder="Snapshot alvo" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="__none">Selecione</SelectItem>
-                              {scenarioSnapshots.map(snapshot => (
-                                <SelectItem key={`target-${snapshot.id}`} value={String(snapshot.id)}>
-                                  {snapshot.cicloRef} {snapshot.horizonteRef ? `(${snapshot.horizonteRef})` : ""}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-
-                        <div className="flex items-end">
-                          <div className="rounded-md border bg-background px-3 py-2 text-sm w-full">
-                            <p className="font-medium flex items-center gap-2">
-                              <GitCompare className="h-4 w-4" />
-                              Comparativo
-                            </p>
-                            <p className="text-xs text-muted-foreground">
-                              {compareSnapshotsEnabled
-                                ? "Deltas entre snapshots selecionados."
-                                : "Selecione base e alvo diferentes."}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-
-                      {compareSnapshotsEnabled && (
-                        <>
-                          {compareSnapshotsQuery.isLoading ? (
-                            <div className="flex justify-center py-4">
-                              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-                            </div>
-                          ) : !compareSnapshotsQuery.data ? (
-                            <p className="text-sm text-muted-foreground">
-                              Nao foi possivel comparar os snapshots.
-                            </p>
-                          ) : (
-                            <div className="space-y-3">
-                              <div className="grid gap-3 md:grid-cols-3">
-                                <div className="rounded-lg border p-3">
-                                  <p className="text-xs text-muted-foreground">SKUs comparados</p>
-                                  <p className="text-lg font-semibold">
-                                    {formatCompactNumber(compareSnapshotsQuery.data.skuComparados)}
-                                  </p>
-                                </div>
-                                <div className="rounded-lg border p-3">
-                                  <p className="text-xs text-muted-foreground">Mudanca de opcao</p>
-                                  <p className="text-lg font-semibold">
-                                    {formatCompactNumber(compareSnapshotsQuery.data.skuMudouOpcao)}
-                                  </p>
-                                </div>
-                                <div className="rounded-lg border p-3">
-                                  <p className="text-xs text-muted-foreground">Delta medio</p>
-                                  <p className="text-lg font-semibold">
-                                    {formatSignedPercent(compareSnapshotsQuery.data.deltaVariacaoMediaPct)}
-                                  </p>
-                                </div>
-                              </div>
-
-                              <div className="rounded-md border">
-                                <Table>
-                                  <TableHeader>
-                                    <TableRow>
-                                      <TableHead>SKU</TableHead>
-                                      <TableHead>Base</TableHead>
-                                      <TableHead>Alvo</TableHead>
-                                      <TableHead>Delta</TableHead>
-                                      <TableHead>Opcao</TableHead>
-                                    </TableRow>
-                                  </TableHeader>
-                                  <TableBody>
-                                    {compareSnapshotsQuery.data.principaisMudancas.length === 0 ? (
-                                      <TableRow>
-                                        <TableCell colSpan={5} className="py-6 text-center text-muted-foreground">
-                                          Sem mudancas relevantes entre os snapshots selecionados.
-                                        </TableCell>
-                                      </TableRow>
-                                    ) : (
-                                      compareSnapshotsQuery.data.principaisMudancas
-                                        .slice(0, 10)
-                                        .map(item => (
-                                          <TableRow key={`cmp-${item.codigo}`}>
-                                            <TableCell>{item.codigo}</TableCell>
-                                            <TableCell>{formatSignedPercent(item.variacaoBasePct)}</TableCell>
-                                            <TableCell>{formatSignedPercent(item.variacaoTargetPct)}</TableCell>
-                                            <TableCell>{formatSignedPercent(item.deltaVariacaoPct)}</TableCell>
-                                            <TableCell>
-                                              {item.mudouOpcao
-                                                ? `${item.melhorOpcaoBase} -> ${item.melhorOpcaoTarget}`
-                                                : item.melhorOpcaoTarget}
-                                            </TableCell>
-                                          </TableRow>
-                                        ))
-                                    )}
-                                  </TableBody>
-                                </Table>
-                              </div>
-                            </div>
-                          )}
-                        </>
-                      )}
-                    </div>
-                  )}
-                </>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <div className="flex flex-wrap items-center justify-between gap-3">
+          <Card className="overflow-hidden border-border/70 shadow-sm">
+            <CardHeader className="space-y-4 border-b bg-muted/20 pb-4">
+              <div className="flex flex-wrap items-end justify-between gap-3">
                 <div>
-                  <CardTitle>Resumo do ciclo (diretoria)</CardTitle>
-                  <CardDescription>
-                    Uma tela executiva com KPIs, riscos, decisoes pendentes e plano de acao.
+                  <CardTitle className="text-lg">
+                    {selectedSheet ? formatSheetLabel(selectedSheet) : "Planilha"}
+                  </CardTitle>
+                  <CardDescription className="mt-1">
+                    {selectedSheet ? (
+                      <>
+                        Aba <span className="font-medium text-foreground">{selectedSheet}</span>
+                        {totalRows > 0 ? ` · ${totalRows.toLocaleString("pt-BR")} linhas` : ""}
+                      </>
+                    ) : (
+                      "Escolha uma aba abaixo para ver os dados."
+                    )}
                   </CardDescription>
                 </div>
-                <div className="flex items-center gap-2">
-                  {scenarioSnapshots.length > 0 && (
-                    <Select
-                      value={selectedSummarySnapshotId ? String(selectedSummarySnapshotId) : "__none"}
-                      onValueChange={value =>
-                        setSelectedSummarySnapshotId(value === "__none" ? null : Number(value))
-                      }
-                    >
-                      <SelectTrigger className="w-[220px]">
-                        <SelectValue placeholder="Snapshot do resumo" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="__none">Sem snapshot</SelectItem>
-                        {scenarioSnapshots.map(snapshot => (
-                          <SelectItem key={`summary-${snapshot.id}`} value={String(snapshot.id)}>
-                            {snapshot.cicloRef} {snapshot.horizonteRef ? `(${snapshot.horizonteRef})` : ""}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                <div className="flex flex-wrap items-center gap-2">
+                  {(filters.length > 0 || globalSkuSearch || search || sortBy) && (
+                    <Button size="sm" variant="ghost" className="h-9" onClick={clearAllSheetFilters}>
+                      Limpar tudo
+                    </Button>
                   )}
                   <Button
+                    size="sm"
                     variant="outline"
-                    onClick={handleExportCycleSummaryPdf}
-                    disabled={!cycleSummaryQuery.data}
+                    className="h-9"
+                    disabled={!selectedSheet || exportingCsv || loadingSheets}
+                    onClick={handleExportFilteredCsv}
                   >
-                    <Printer className="mr-2 h-4 w-4" />
-                    PDF
+                    {exportingCsv ? "Exportando..." : "Exportar CSV"}
                   </Button>
                 </div>
               </div>
-            </CardHeader>
-            <CardContent>
-              {cycleSummaryQuery.isLoading ? (
-                <div className="flex justify-center py-8">
-                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                </div>
-              ) : !cycleSummaryQuery.data ? (
-                <p className="text-sm text-muted-foreground">
-                  Nao foi possivel montar o resumo do ciclo.
-                </p>
-              ) : (
-                <div ref={cycleSummaryRef} className="space-y-4">
-                  <div className="card rounded-lg border p-4">
-                    <h2 className="text-lg font-semibold">{cycleSummaryQuery.data.titulo}</h2>
-                    <p className="text-sm text-muted-foreground">{cycleSummaryQuery.data.contexto}</p>
-                    <p className="mt-2 text-xs text-muted-foreground">
-                      Gerado em {formatDate(cycleSummaryQuery.data.generatedAt)}
-                    </p>
-                  </div>
 
-                  <div className="card rounded-lg border p-4">
-                    <h3 className="mb-3 text-base font-semibold">KPIs executivos</h3>
-                    <div className="grid gap-3 md:grid-cols-3">
-                      {cycleSummaryQuery.data.kpis.map((kpi, index) => (
-                        <div
-                          key={`kpi-${index}`}
-                          className={`kpi rounded-md border p-3 ${
-                            kpi.destaque === "POSITIVO"
-                              ? "border-emerald-200 bg-emerald-50"
-                              : kpi.destaque === "ATENCAO"
-                                ? "border-amber-200 bg-amber-50"
-                                : "border-slate-200 bg-slate-50"
-                          }`}
-                        >
-                          <p className="text-xs text-muted-foreground">{kpi.label}</p>
-                          <p className="text-lg font-semibold">{kpi.valor}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="grid gap-4 lg:grid-cols-3">
-                    <div className="card rounded-lg border p-4">
-                      <h3 className="mb-2 text-base font-semibold">Riscos</h3>
-                      <ul className="list-disc space-y-1 pl-5 text-sm">
-                        {cycleSummaryQuery.data.riscos.map((item, index) => (
-                          <li key={`risk-${index}`}>{item}</li>
-                        ))}
-                      </ul>
-                    </div>
-                    <div className="card rounded-lg border p-4">
-                      <h3 className="mb-2 text-base font-semibold">Decisoes pendentes</h3>
-                      <ul className="list-disc space-y-1 pl-5 text-sm">
-                        {cycleSummaryQuery.data.decisoesPendentes.map((item, index) => (
-                          <li key={`dec-${index}`}>{item}</li>
-                        ))}
-                      </ul>
-                    </div>
-                    <div className="card rounded-lg border p-4">
-                      <h3 className="mb-2 text-base font-semibold">Plano de acao</h3>
-                      <ul className="list-disc space-y-1 pl-5 text-sm">
-                        {cycleSummaryQuery.data.planoAcao.map((item, index) => (
-                          <li key={`plan-${index}`}>{item}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  </div>
-
-                  {cycleSummaryQuery.data.comparativoSnapshots && (
-                    <div className="card rounded-lg border p-4">
-                      <h3 className="mb-2 text-base font-semibold">Comparativo de snapshots</h3>
-                      <p className="text-sm text-muted-foreground">
-                        Delta medio:{" "}
-                        {formatSignedPercent(
-                          cycleSummaryQuery.data.comparativoSnapshots.deltaVariacaoMediaPct
-                        )}{" "}
-                        | Mudanca de opcao em{" "}
-                        {formatCompactNumber(
-                          cycleSummaryQuery.data.comparativoSnapshots.skuMudouOpcao
-                        )}{" "}
-                        SKU(s).
-                      </p>
-                    </div>
-                  )}
-
-                  <div className="card rounded-lg border bg-muted/20 p-4">
-                    <h3 className="mb-2 text-base font-semibold">Recomendacao executiva</h3>
-                    <p className="text-sm">{cycleSummaryQuery.data.recomendacaoExecutiva}</p>
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Dados por Aba</CardTitle>
-              <CardDescription>Visualizacao paginada com busca, filtros e ordenacao.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="rounded-md border bg-muted/20 p-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Label htmlFor="sku-global" className="text-xs text-muted-foreground">
-                    SKU global
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Abas do Excel
                   </Label>
+                  {loadingSheets && (
+                    <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Carregando...
+                    </span>
+                  )}
+                </div>
+                <div className="snop-blue-scroll rounded-xl border border-slate-200/80 bg-gradient-to-b from-slate-50 to-slate-100/80 p-1.5 shadow-inner">
+                  <div className="flex gap-1.5 overflow-x-auto pb-0.5">
+                    {(workbookSheets || []).map(sheet => {
+                      const active = selectedSheet === sheet;
+                      return (
+                        <button
+                          key={sheet}
+                          type="button"
+                          onMouseEnter={() => prefetchSheet(sheet)}
+                          onFocus={() => prefetchSheet(sheet)}
+                          onClick={() => {
+                            if (sheet === selectedSheet) return;
+                            setPage(1);
+                            setSearch("");
+                            setSortBy("");
+                            setSortDir("asc");
+                            setFilters([]);
+                            setSelectedSheet(sheet);
+                          }}
+                          className={`shrink-0 rounded-lg px-3 py-1.5 text-[12px] font-medium tracking-tight transition-all duration-150 ${
+                            active
+                              ? "bg-[#1F4E79] text-white shadow-md shadow-[#1F4E79]/25 ring-1 ring-[#1F4E79]"
+                              : "bg-white/90 text-slate-600 ring-1 ring-slate-200/90 hover:bg-white hover:text-slate-900 hover:ring-slate-300 hover:shadow-sm"
+                          }`}
+                          title={sheet}
+                          style={{ fontFamily: EXCEL_FONT_FAMILY }}
+                        >
+                          {formatSheetLabel(sheet)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                {sheetsQueryFailed && (
+                  <p className="text-xs text-destructive">
+                    {sheetsQueryError.message || "Falha ao carregar abas do Excel."}
+                  </p>
+                )}
+                {!loadingSheets && !sheetsQueryFailed && (workbookSheets || []).length === 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    Nenhuma aba encontrada no Excel deste job.
+                  </p>
+                )}
+              </div>
+
+              <div className="grid gap-2 md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_auto]">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    className="h-10 pl-9"
+                    placeholder="Buscar em todas as colunas desta aba"
+                    value={search}
+                    onChange={event => setSearch(event.target.value)}
+                  />
+                </div>
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                   <Input
                     id="sku-global"
-                    className="h-9 w-full md:w-[340px]"
-                    placeholder="Buscar SKU"
+                    className="h-10 pl-9"
+                    placeholder="Filtrar por SKU / código"
                     value={globalSkuSearch}
                     onChange={event => setGlobalSkuSearch(event.target.value)}
                   />
+                </div>
+                <Button
+                  type="button"
+                  variant={showAdvancedFilters || activeFilterCount > 0 ? "default" : "outline"}
+                  className="h-10"
+                  onClick={() => setShowAdvancedFilters(current => !current)}
+                >
+                  <Filter className="mr-2 h-4 w-4" />
+                  Filtros
+                  {activeFilterCount > 0 && (
+                    <Badge
+                      variant="secondary"
+                      className="ml-2 h-5 min-w-5 justify-center rounded-full px-1.5"
+                    >
+                      {activeFilterCount}
+                    </Badge>
+                  )}
+                </Button>
+              </div>
+
+              {(globalSkuSearch || filters.length > 0) && (
+                <div className="flex flex-wrap gap-2">
                   {globalSkuSearch && (
                     <Badge variant="secondary" className="gap-2">
-                      <span className="max-w-[220px] truncate">SKU: {globalSkuSearch}</span>
+                      SKU: {globalSkuSearch}
                       <button
                         type="button"
                         onClick={() => setGlobalSkuSearch("")}
                         className="rounded-sm p-0.5 hover:bg-muted"
-                        aria-label="Limpar SKU global"
+                        aria-label="Limpar SKU"
                       >
                         <X className="h-3 w-3" />
                       </button>
                     </Badge>
                   )}
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="ml-auto h-9"
-                    disabled={!selectedSheet || exportingCsv || loadingSheets}
-                    onClick={handleExportFilteredCsv}
-                  >
-                    {exportingCsv ? "Exportando..." : "CSV filtrado"}
-                  </Button>
+                  {filters.map(filter => (
+                    <Badge key={filter.id} variant="secondary" className="gap-2">
+                      <span>
+                        {filter.column}: {filter.value}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveFilter(filter.id)}
+                        className="rounded-sm p-0.5 hover:bg-muted"
+                        aria-label="Remover filtro"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </Badge>
+                  ))}
                 </div>
-              </div>
+              )}
 
-              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
-                <div className="space-y-2 lg:col-span-2">
-                  <Label>Aba</Label>
-                  <Select value={selectedSheet} onValueChange={setSelectedSheet}>
-                    <SelectTrigger>
-                      <SelectValue placeholder={loadingSheets ? "Carregando abas..." : "Selecione uma aba"} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {(workbookSheets || []).map(sheet => (
-                        <SelectItem key={sheet} value={sheet}>
-                          {sheet}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-2 lg:col-span-2">
-                  <Label>Busca na aba</Label>
-                  <Input
-                    placeholder="Digite para buscar em todas as colunas"
-                    value={search}
-                    onChange={event => setSearch(event.target.value)}
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label>Tamanho da pagina</Label>
-                  <Select
-                    value={String(pageSize)}
-                    onValueChange={value => setPageSize(parsePageSize(value))}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Tamanho" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="50">50</SelectItem>
-                      <SelectItem value="100">100</SelectItem>
-                      <SelectItem value="250">250</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              <div className="rounded-md border bg-muted/20 p-3">
-                <div className="grid items-end gap-2 md:grid-cols-[minmax(0,2fr)_170px_auto]">
+              {showAdvancedFilters && (
+                <div className="grid gap-3 rounded-xl border bg-background/80 p-3 md:grid-cols-2 lg:grid-cols-4">
                   <div className="space-y-1">
-                    <Label className="text-xs text-muted-foreground">Ordenacao</Label>
-                    <Select value={sortBy || "__none"} onValueChange={value => setSortBy(value === "__none" ? "" : value)}>
+                    <Label className="text-xs text-muted-foreground">Ordenar por</Label>
+                    <Select
+                      value={sortBy || "__none"}
+                      onValueChange={value => setSortBy(value === "__none" ? "" : value)}
+                    >
                       <SelectTrigger className="h-9">
                         <SelectValue placeholder="Sem ordenacao" />
                       </SelectTrigger>
@@ -2349,9 +1362,8 @@ export default function PrevisaoPythonViewer() {
                       </SelectContent>
                     </Select>
                   </div>
-
                   <div className="space-y-1">
-                    <Label className="text-xs text-muted-foreground">Direcao</Label>
+                    <Label className="text-xs text-muted-foreground">Direção</Label>
                     <Select value={sortDir} onValueChange={value => setSortDir(value as "asc" | "desc")}>
                       <SelectTrigger className="h-9">
                         <SelectValue />
@@ -2362,158 +1374,232 @@ export default function PrevisaoPythonViewer() {
                       </SelectContent>
                     </Select>
                   </div>
-
-                  <div className="flex md:justify-end">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-9 w-full md:w-auto"
-                      onClick={() => {
-                        setDrillHistory([]);
-                        setDrillBaseSnapshot(null);
-                        setPendingDrillFilter(null);
-                        setGlobalSkuSearch("");
-                        setSearch("");
-                        setSortBy("");
-                        setSortDir("asc");
-                        setFilters([]);
-                      }}
+                  <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">Linhas por página</Label>
+                    <Select
+                      value={String(pageSize)}
+                      onValueChange={value => setPageSize(parsePageSize(value))}
                     >
-                      Limpar filtros
-                    </Button>
+                      <SelectTrigger className="h-9">
+                        <SelectValue placeholder="Tamanho" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="50">50</SelectItem>
+                        <SelectItem value="100">100</SelectItem>
+                        <SelectItem value="250">250</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1 md:col-span-2 lg:col-span-1">
+                    <Label className="text-xs text-muted-foreground">Filtro de coluna</Label>
+                    <div className="flex gap-2">
+                      <Select
+                        value={newFilterColumn || "__none"}
+                        onValueChange={value => setNewFilterColumn(value === "__none" ? "" : value)}
+                      >
+                        <SelectTrigger className="h-9 min-w-0 flex-1">
+                          <SelectValue placeholder="Coluna" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none">Coluna</SelectItem>
+                          {sheetColumns.map(column => (
+                            <SelectItem key={`filter-col-${column}`} value={column}>
+                              {column}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <div className="space-y-1 md:col-span-2 lg:col-span-3">
+                    <Label className="text-xs text-muted-foreground">Valor contém</Label>
+                    <div className="flex flex-wrap gap-2">
+                      <Input
+                        className="h-9 min-w-[180px] flex-1"
+                        placeholder="Ex.: Adidas, QUEDA, 80.01..."
+                        value={newFilterValue}
+                        onChange={event => setNewFilterValue(event.target.value)}
+                        onKeyDown={event => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            handleAddFilter();
+                          }
+                        }}
+                      />
+                      <Button
+                        className="h-9"
+                        onClick={handleAddFilter}
+                        disabled={!newFilterColumn || !newFilterValue.trim()}
+                      >
+                        Aplicar
+                      </Button>
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
+            </CardHeader>
 
-              <div className="rounded-md border p-3">
-                <p className="mb-3 text-sm font-medium">Filtro por coluna (contains)</p>
-                <div className="grid gap-3 md:grid-cols-3">
-                  <Select value={newFilterColumn || "__none"} onValueChange={value => setNewFilterColumn(value === "__none" ? "" : value)}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Selecione uma coluna" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__none">Selecione</SelectItem>
-                      {sheetColumns.map(column => (
-                        <SelectItem key={`filter-col-${column}`} value={column}>
-                          {column}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-
-                  <Input
-                    placeholder="Valor do filtro"
-                    value={newFilterValue}
-                    onChange={event => setNewFilterValue(event.target.value)}
-                  />
-
-                  <Button onClick={handleAddFilter} disabled={!newFilterColumn || !newFilterValue.trim()}>
-                    Adicionar filtro
+            <CardContent className="space-y-3 pt-4">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <span>
+                    {totalRows === 0
+                      ? "Nenhuma linha"
+                      : `Linhas ${firstRow.toLocaleString("pt-BR")}–${lastRow.toLocaleString("pt-BR")} de ${totalRows.toLocaleString("pt-BR")}`}
+                  </span>
+                  {sheetDataQuery.isFetching && !sheetDataQuery.isLoading && (
+                    <Badge variant="secondary" className="text-[10px]">
+                      Atualizando...
+                    </Badge>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8"
+                    disabled={currentPage <= 1 || sheetDataQuery.isFetching}
+                    onClick={() => setPage(prev => Math.max(1, prev - 1))}
+                  >
+                    <ChevronLeft className="mr-1 h-4 w-4" />
+                    Anterior
+                  </Button>
+                  <span className="min-w-[5.5rem] text-center text-xs text-muted-foreground">
+                    Pág. {currentPage}/{totalPages}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8"
+                    disabled={currentPage >= totalPages || sheetDataQuery.isFetching}
+                    onClick={() => setPage(prev => prev + 1)}
+                  >
+                    Próxima
+                    <ChevronRight className="ml-1 h-4 w-4" />
                   </Button>
                 </div>
-
-                {filters.length > 0 && (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {filters.map(filter => (
-                      <Badge key={filter.id} variant="secondary" className="gap-2">
-                        <span>{filter.column}: {filter.value}</span>
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveFilter(filter.id)}
-                          className="rounded-sm p-0.5 hover:bg-muted"
-                          aria-label="Remover filtro"
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </Badge>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                <span>
-                  Mostrando {firstRow}-{lastRow} de {totalRows} linhas.
-                </span>
-                {sheetDataQuery.isFetching && !sheetDataQuery.isLoading && (
-                  <Badge variant="secondary" className="text-[10px]">
-                    Atualizando...
-                  </Badge>
-                )}
               </div>
 
               {sheetDataQuery.isLoading ? (
-                <div className="flex justify-center py-8">
-                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                <div className="flex flex-col items-center justify-center gap-2 py-16 text-muted-foreground">
+                  <Loader2 className="h-7 w-7 animate-spin" />
+                  <p className="text-sm">Carregando dados da aba...</p>
                 </div>
+              ) : sheetDataQuery.isError ? (
+                <p className="py-10 text-center text-sm text-destructive">
+                  {sheetDataQuery.error.message || "Falha ao carregar a aba."}
+                </p>
               ) : !sheetDataQuery.data ? (
-                <p className="text-sm text-muted-foreground">Selecione uma aba para visualizar.</p>
+                <p className="py-10 text-center text-sm text-muted-foreground">
+                  Selecione uma aba para visualizar.
+                </p>
               ) : (
                 <>
-                  <ScrollArea className="h-[460px] rounded-md border">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
+                  {/* Um único scroll: evita Table (overflow interno) + sticky quebrando as colunas */}
+                  <div
+                    className="snop-blue-scroll max-h-[72vh] overflow-auto rounded-b-xl border border-border/80 bg-white"
+                    style={{ fontFamily: EXCEL_FONT_FAMILY, fontSize: "12px" }}
+                  >
+                    <table className="w-max min-w-full border-collapse">
+                      <thead>
+                        <tr>
                           {sheetDataQuery.data.columns.length === 0 ? (
-                            <TableHead>Sem colunas</TableHead>
+                            <th
+                              className="sticky top-0 z-20 px-2 py-1.5 text-left font-bold"
+                              style={{
+                                backgroundColor: EXCEL_HEADER_BG,
+                                color: EXCEL_HEADER_FG,
+                              }}
+                            >
+                              Sem colunas
+                            </th>
                           ) : (
-                            sheetDataQuery.data.columns.map((column, index) => (
-                              <TableHead key={`col-${index}`} className="whitespace-nowrap">
-                                {column}
-                              </TableHead>
-                            ))
+                            sheetDataQuery.data.columns.map((column, index) => {
+                              const isSorted = sortBy === column;
+                              return (
+                                <th
+                                  key={`col-${index}`}
+                                  className={`sticky top-0 z-20 whitespace-nowrap px-2 py-1.5 text-left font-bold ${
+                                    index === 0 ? "left-0 z-30" : ""
+                                  }`}
+                                  style={{
+                                    backgroundColor: EXCEL_HEADER_BG,
+                                    color: EXCEL_HEADER_FG,
+                                    borderRight: "1px solid #2F5496",
+                                  }}
+                                >
+                                  <button
+                                    type="button"
+                                    className="inline-flex items-center gap-1 hover:opacity-90"
+                                    onClick={() => handleColumnHeaderSort(column)}
+                                    title={`Ordenar por ${column}`}
+                                  >
+                                    <span>{column}</span>
+                                    <ArrowUpDown
+                                      className={`h-3 w-3 ${
+                                        isSorted ? "opacity-100" : "opacity-40"
+                                      }`}
+                                    />
+                                  </button>
+                                </th>
+                              );
+                            })
                           )}
-                        </TableRow>
-                      </TableHeader>
-
-                      <TableBody>
+                        </tr>
+                      </thead>
+                      <tbody>
                         {sheetDataQuery.data.rows.length === 0 ? (
-                          <TableRow>
-                            <TableCell
+                          <tr>
+                            <td
                               colSpan={Math.max(1, sheetDataQuery.data.columns.length)}
-                              className="py-8 text-center text-muted-foreground"
+                              className="px-3 py-12 text-center text-muted-foreground"
                             >
                               Nenhum dado encontrado para os filtros atuais.
-                            </TableCell>
-                          </TableRow>
+                            </td>
+                          </tr>
                         ) : (
-                          sheetDataQuery.data.rows.map((row, rowIndex) => (
-                            <TableRow key={`row-${rowIndex}`}>
-                              {row.map((cell, colIndex) => (
-                                <TableCell key={`cell-${rowIndex}-${colIndex}`} className="whitespace-nowrap">
-                                  {cell}
-                                </TableCell>
-                              ))}
-                            </TableRow>
-                          ))
+                          sheetDataQuery.data.rows.map((row, rowIndex) => {
+                            const zebra = rowIndex % 2 === 1;
+                            const rowBg = zebra ? "#F2F2F2" : "#FFFFFF";
+                            return (
+                              <tr key={`row-${rowIndex}`}>
+                                {row.map((cell, colIndex) => {
+                                  const column = sheetDataQuery.data?.columns[colIndex] || "";
+                                  const formatted = formatSheetCell(column, cell);
+                                  const excelStyle = excelStyleForCell(column, String(cell ?? ""));
+                                  const numeric =
+                                    !excelStyle &&
+                                    formatted !== cell &&
+                                    formatted !== "" &&
+                                    !/[a-zA-ZÀ-ÿ]/.test(formatted);
+                                  const bg = excelStyle?.bg || rowBg;
+                                  const fg = excelStyle?.fg || "#000000";
+                                  return (
+                                    <td
+                                      key={`cell-${rowIndex}-${colIndex}`}
+                                      className={`whitespace-nowrap px-2 py-1 align-middle ${
+                                        colIndex === 0
+                                          ? "sticky left-0 z-10 border-r border-[#D0D0D0]"
+                                          : ""
+                                      } ${numeric ? "text-right tabular-nums" : ""}`}
+                                      style={{
+                                        backgroundColor: bg,
+                                        color: fg,
+                                        fontWeight: excelStyle?.bold ? 700 : 400,
+                                        borderBottom: "1px solid #E0E0E0",
+                                        borderRight: "1px solid #EEEEEE",
+                                      }}
+                                    >
+                                      {formatted}
+                                    </td>
+                                  );
+                                })}
+                              </tr>
+                            );
+                          })
                         )}
-                      </TableBody>
-                    </Table>
-                  </ScrollArea>
-
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-xs text-muted-foreground">
-                      Pagina {currentPage} de {totalPages}
-                    </p>
-                    <div className="flex gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={currentPage <= 1 || sheetDataQuery.isFetching}
-                        onClick={() => setPage(prev => Math.max(1, prev - 1))}
-                      >
-                        Anterior
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={currentPage >= totalPages || sheetDataQuery.isFetching}
-                        onClick={() => setPage(prev => prev + 1)}
-                      >
-                        Proxima
-                      </Button>
-                    </div>
+                      </tbody>
+                    </table>
                   </div>
                 </>
               )}

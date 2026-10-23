@@ -34,6 +34,7 @@ export default function SazonalidadeMarcaPage() {
   const [draft, setDraft] = useState<Record<string, number[]>>({});
 
   const { data: rows, isLoading } = trpc.sazonalidadeMarca.list.useQuery();
+  const { data: invalidas } = trpc.sazonalidadeMarca.invalidas.useQuery();
 
   const brands = useMemo(() => {
     const map = new Map<string, number[]>();
@@ -62,6 +63,7 @@ export default function SazonalidadeMarcaPage() {
           : "Sazonalidade já existia — nada inserido."
       );
       utils.sazonalidadeMarca.list.invalidate();
+      utils.sazonalidadeMarca.invalidas.invalidate();
     },
     onError: e => toast.error(e.message),
   });
@@ -71,6 +73,7 @@ export default function SazonalidadeMarcaPage() {
       toast.success(`Calculado para ${result.marcas} marcas (${result.rows} linhas).`);
       setDraft({});
       utils.sazonalidadeMarca.list.invalidate();
+      utils.sazonalidadeMarca.invalidas.invalidate();
     },
     onError: e => toast.error(e.message),
   });
@@ -80,6 +83,7 @@ export default function SazonalidadeMarcaPage() {
       toast.success("Sazonalidade salva.");
       setDraft({});
       utils.sazonalidadeMarca.list.invalidate();
+      utils.sazonalidadeMarca.invalidas.invalidate();
     },
     onError: e => toast.error(e.message),
   });
@@ -91,6 +95,7 @@ export default function SazonalidadeMarcaPage() {
       );
       setDraft({});
       utils.sazonalidadeMarca.list.invalidate();
+      utils.sazonalidadeMarca.invalidas.invalidate();
     },
     onError: e => toast.error(e.message),
   });
@@ -173,6 +178,29 @@ export default function SazonalidadeMarcaPage() {
           </Label>
         </div>
       </div>
+
+      {invalidas && invalidas.length > 0 && (
+        <Card className="border-destructive/50 bg-destructive/5">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base text-destructive">
+              Sazonalidade Σ ≠ 100% ({invalidas.length} marcas)
+            </CardTitle>
+            <CardDescription>
+              A desagregação exige soma mensal ≈ 100%. Salve a marca para renormalizar, ou recalcule
+              do faturamento.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ul className="max-h-32 list-inside list-disc overflow-auto text-sm">
+              {invalidas.slice(0, 40).map(r => (
+                <li key={r.marcaNome}>
+                  {r.marcaNome}: {(r.soma * 100).toFixed(1)}%
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>

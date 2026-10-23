@@ -32,7 +32,9 @@ RUN python3 -m venv /opt/venv-previsao \
  && /opt/venv-previsao/bin/pip install --no-cache-dir -U pip \
  && /opt/venv-previsao/bin/pip install --no-cache-dir \
       "numpy>=1.26" "pandas>=2.2" "scikit-learn>=1.6" "openpyxl>=3.1" \
-      "python-dateutil>=2.9" "matplotlib>=3.9" "statsmodels>=0.14"
+      "python-dateutil>=2.9" "matplotlib>=3.9" "statsmodels>=0.14" \
+ && mkdir -p /opt/matplotlib-cache \
+ && MPLCONFIGDIR=/opt/matplotlib-cache /opt/venv-previsao/bin/python -c "import matplotlib.pyplot"
 
 ENV PATH="/opt/venv-previsao/bin:${PATH}"
 ENV PREVISAO_PYTHON_CMD=/opt/venv-previsao/bin/python
@@ -40,6 +42,7 @@ ENV NODE_ENV=production
 ENV HOST=0.0.0.0
 ENV PORT=3012
 ENV PYTHONUTF8=1
+ENV MPLCONFIGDIR=/opt/matplotlib-cache
 
 COPY --from=build /app/package.json ./
 COPY --from=build /app/node_modules ./node_modules

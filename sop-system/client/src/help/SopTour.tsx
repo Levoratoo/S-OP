@@ -450,7 +450,7 @@ export function SopTour({
                         Só o roteiro do mês
                       </span>
                       <span className="mt-0.5 block text-xs leading-4 text-muted-foreground">
-                        9 passos operacionais: faturamento → Python → colab → capacidade → consenso.
+                        6 passos: faturamento → cadastros → Python → colaboração.
                       </span>
                     </button>
                     <button

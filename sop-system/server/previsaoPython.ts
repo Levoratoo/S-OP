@@ -1,5 +1,6 @@
 import { createWriteStream } from "fs";
 import { promises as fs } from "fs";
+import { createHash } from "node:crypto";
 import path from "path";
 import { spawn } from "child_process";
 import XLSX from "xlsx";
@@ -13,6 +14,8 @@ type UploadedFileInput = {
 
 type CreatePrevisaoJobInput = {
   createdBy?: string | null;
+  origin?: "SYSTEM" | "UPLOAD";
+  sourceMetadata?: unknown;
   vendas: UploadedFileInput;
   previsto?: UploadedFileInput | null;
   clientes?: UploadedFileInput | null;
@@ -24,6 +27,7 @@ type CreateCiclo13UploadJobInput = {
 };
 
 const SCRIPT_NAME = "previsao_demanda_final_v5_2_COMPLETO.py";
+const SCRIPT_HELPER_NAME = "previsao_meses.py";
 const CICLO_13_SCRIPT_VERSION = "ciclo13-upload";
 const INPUT_VENDAS_NAME = "1- Base de Dados Vendas.xlsx";
 const INPUT_PREVISTO_NAME = "1-BasedeDadosPrevisto.xlsx";
@@ -303,8 +307,11 @@ type WorkbookViewCacheEntry = {
   outputPath: string;
   mtimeMs: number;
   lastAccessAt: number;
+  sheetNames: string[];
+  fileBuffer: Buffer | null;
   sheets: Map<string, WorkbookSheetData>;
   normalizedSheetNameMap: Map<string, string>;
+  warmingPromise: Promise<void> | null;
 };
 
 type SheetDataQueryResult = {
@@ -323,11 +330,11 @@ type SheetDataQueryCacheEntry = {
   data: SheetDataQueryResult;
 };
 
-const WORKBOOK_CACHE_MAX_ITEMS = 5;
-const WORKBOOK_CACHE_TTL_MS = 15 * 60 * 1000;
+const WORKBOOK_CACHE_MAX_ITEMS = 8;
+const WORKBOOK_CACHE_TTL_MS = 30 * 60 * 1000;
 const workbookViewCache = new Map<number, WorkbookViewCacheEntry>();
-const SHEET_DATA_QUERY_CACHE_TTL_MS = 15_000;
-const SHEET_DATA_QUERY_CACHE_MAX_ITEMS = 100;
+const SHEET_DATA_QUERY_CACHE_TTL_MS = 5 * 60_000;
+const SHEET_DATA_QUERY_CACHE_MAX_ITEMS = 200;
 const sheetDataQueryCache = new Map<string, SheetDataQueryCacheEntry>();
 
 let running = false;
@@ -344,6 +351,51 @@ function decodeBase64(contentBase64: string): Buffer {
   return Buffer.from(payload, "base64");
 }
 
+function sha256(buffer: Buffer) {
+  return createHash("sha256").update(buffer).digest("hex");
+}
+
+function inspectWorkbookInput(fileName: string, buffer: Buffer) {
+  const workbook = XLSX.read(buffer, { type: "buffer", cellDates: false });
+  const sheetName = workbook.SheetNames[0] ?? "";
+  const sheet = sheetName ? workbook.Sheets[sheetName] : undefined;
+  if (!sheet) throw new Error(`Planilha sem abas: ${fileName}`);
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
+    header: 1,
+    defval: null,
+  });
+  const headers = (rows[0] ?? []).map(value => String(value ?? "").trim());
+  const monthHeaders = headers.filter(header =>
+    /^(jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)-\d{2}$/i.test(header)
+  );
+  const monthIndexes = headers
+    .map((header, index) => ({ header, index }))
+    .filter(({ header }) =>
+      /^(jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)-\d{2}$/i.test(header)
+    )
+    .map(({ index }) => index);
+  const totalCompetencias = rows.slice(1).reduce(
+    (total, row) =>
+      total +
+      monthIndexes.reduce((rowTotal, index) => {
+        const value = Number(row[index]);
+        return rowTotal + (Number.isFinite(value) ? value : 0);
+      }, 0),
+    0
+  );
+  return {
+    fileName,
+    sha256: sha256(buffer),
+    sizeBytes: buffer.length,
+    sheetName,
+    rowCount: Math.max(0, rows.length - 1),
+    columnCount: headers.length,
+    firstCompetence: monthHeaders[0] ?? null,
+    lastCompetence: monthHeaders.at(-1) ?? null,
+    totalCompetencias: Math.round(totalCompetencias * 100) / 100,
+  };
+}
+
 function sanitizeWorkbookFileName(fileName: string, fallback: string) {
   const trimmed = String(fileName || "").trim();
   if (!trimmed) return fallback;
@@ -355,6 +407,106 @@ function getOutputFileName(jobId: number) {
   return `relatorio_previsao_demanda_job_${jobId}.xlsx`;
 }
 
+const JOB_DIR_PATTERN = /^job-(\d+)$/;
+let reconcileJobsPromise: Promise<void> | null = null;
+
+function isDuplicateKeyError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("Duplicate") || message.includes("ER_DUP_ENTRY");
+}
+
+async function findRecoverableOutputFileName(jobDir: string, jobId: number) {
+  const preferred = getOutputFileName(jobId);
+  const preferredPath = path.join(jobDir, preferred);
+  const preferredExists = await fs
+    .access(preferredPath)
+    .then(() => true)
+    .catch(() => false);
+  if (preferredExists) return preferred;
+
+  const names = await fs.readdir(jobDir).catch(() => [] as string[]);
+  const workbooks = names.filter(
+    name => name.toLowerCase().endsWith(".xlsx") && !name.startsWith("~$")
+  );
+  return (
+    workbooks.find(name => name.toLowerCase().includes("relatorio")) ||
+    workbooks[0] ||
+    null
+  );
+}
+
+async function recoverJobDirectory(jobId: number, jobDir: string) {
+  const outputFileName = await findRecoverableOutputFileName(jobDir, jobId);
+  if (!outputFileName) return;
+
+  const logPath = path.join(jobDir, "run.log");
+  const logExists = await fs
+    .access(logPath)
+    .then(() => true)
+    .catch(() => false);
+
+  try {
+    await db.recoverPrevisaoPythonJobRow({
+      id: jobId,
+      status: "SUCCESS",
+      scriptVersion: "v5.2-COMPLETO",
+      vendasFileName: INPUT_VENDAS_NAME,
+      outputFileName,
+      workdir: jobDir,
+      logPath: logExists ? logPath : null,
+      message: "Job recuperado a partir do arquivo Excel no disco.",
+    });
+  } catch (error) {
+    if (isDuplicateKeyError(error)) return;
+    const existing = await db.getPrevisaoPythonJobById(jobId);
+    if (existing) return;
+    throw error;
+  }
+}
+
+async function reconcilePrevisaoJobsFromDiskOnce() {
+  const entries = await fs.readdir(JOBS_ROOT).catch(() => [] as string[]);
+  for (const entry of entries) {
+    const match = JOB_DIR_PATTERN.exec(entry);
+    if (!match) continue;
+    const jobId = Number(match[1]);
+    if (!Number.isInteger(jobId) || jobId <= 0) continue;
+    const existing = await db.getPrevisaoPythonJobById(jobId);
+    if (existing) continue;
+    await recoverJobDirectory(jobId, path.join(JOBS_ROOT, entry));
+  }
+}
+
+function reconcilePrevisaoJobsFromDisk() {
+  if (!reconcileJobsPromise) {
+    reconcileJobsPromise = reconcilePrevisaoJobsFromDiskOnce().catch(error => {
+      reconcileJobsPromise = null;
+      throw error;
+    });
+  }
+  return reconcileJobsPromise;
+}
+
+export async function getPrevisaoJobById(jobId: number) {
+  const existing = await db.getPrevisaoPythonJobById(jobId);
+  if (existing) {
+    void reconcilePrevisaoJobsFromDisk();
+    return existing;
+  }
+  await reconcilePrevisaoJobsFromDisk();
+  return db.getPrevisaoPythonJobById(jobId);
+}
+
+export async function listPrevisaoJobs(limit = 20) {
+  const jobs = await db.listPrevisaoPythonJobs(limit);
+  if (jobs.length > 0) {
+    void reconcilePrevisaoJobsFromDisk();
+    return jobs;
+  }
+  await reconcilePrevisaoJobsFromDisk();
+  return db.listPrevisaoPythonJobs(limit);
+}
+
 async function ensureJobsRoot() {
   await fs.mkdir(JOBS_ROOT, { recursive: true });
 }
@@ -362,6 +514,13 @@ async function ensureJobsRoot() {
 async function findScriptPath() {
   const candidates = [
     path.resolve(process.cwd(), "scripts-previsao", SCRIPT_NAME),
+    path.resolve(
+      process.cwd(),
+      "..",
+      "OneDrive_2026-07-30",
+      "1-Módulo Previsão Demanda",
+      "MAIS ATUAL previsao_demanda_final_v5_2_COMPLETO.py"
+    ),
     path.resolve(process.cwd(), "..", "3. Script Python Previsão Demanda", SCRIPT_NAME),
     path.resolve(process.cwd(), "3. Script Python Previsão Demanda", SCRIPT_NAME),
   ];
@@ -380,11 +539,13 @@ async function findScriptPath() {
   );
 }
 
-async function appendQueue(jobId: number) {
+function appendQueue(jobId: number) {
   if (queued.has(jobId)) return;
   queue.push(jobId);
   queued.add(jobId);
-  await processQueue();
+  void processQueue().catch(error => {
+    console.error(`[previsao-python] Falha ao processar fila (job ${jobId}):`, error);
+  });
 }
 
 async function processQueue() {
@@ -445,7 +606,7 @@ async function recoverStaleJobsOnBoot() {
 
     const pendingJobs = await db.listPrevisaoPythonJobsByStatus("PENDING", RECOVERY_BATCH_LIMIT);
     for (const job of pendingJobs) {
-      await appendQueue(job.id);
+      appendQueue(job.id);
     }
 
     recoveryCompleted = true;
@@ -488,8 +649,23 @@ async function runJob(jobId: number) {
     const outputName = latestJob?.outputFileName || job.outputFileName || getOutputFileName(jobId);
 
     const scriptPath = await findScriptPath();
+    const scriptBuffer = await fs.readFile(scriptPath);
+    const scriptHash = sha256(scriptBuffer);
     const localScriptPath = path.join(effectiveWorkdir, SCRIPT_NAME);
-    await fs.copyFile(scriptPath, localScriptPath);
+    await fs.writeFile(localScriptPath, scriptBuffer);
+
+    const helperSourcePath = path.join(path.dirname(scriptPath), SCRIPT_HELPER_NAME);
+    try {
+      const helperBuffer = await fs.readFile(helperSourcePath);
+      await fs.writeFile(path.join(effectiveWorkdir, SCRIPT_HELPER_NAME), helperBuffer);
+      writeLog(`[job ${jobId}] Helper copiado: ${SCRIPT_HELPER_NAME}`);
+    } catch {
+      writeLog(
+        `[job ${jobId}] Aviso: helper ${SCRIPT_HELPER_NAME} nao encontrado em ${helperSourcePath}`
+      );
+    }
+
+    await db.updatePrevisaoPythonJob(jobId, { scriptHash });
 
     const pythonCommand = process.env.PREVISAO_PYTHON_CMD || "python";
     const args = [SCRIPT_NAME, "--arquivo", INPUT_VENDAS_NAME, "--saida", outputName];
@@ -501,8 +677,14 @@ async function runJob(jobId: number) {
     const heartbeatSeconds =
       Number.isFinite(heartbeatSecondsRaw) && heartbeatSecondsRaw > 0 ? heartbeatSecondsRaw : 15;
     const heartbeatMs = heartbeatSeconds * 1000;
+    const workerThreadsRaw = Number(process.env.PREVISAO_PYTHON_THREADS || "2");
+    const workerThreads =
+      Number.isFinite(workerThreadsRaw) && workerThreadsRaw > 0
+        ? String(Math.max(1, Math.floor(workerThreadsRaw)))
+        : "2";
 
     writeLog(`[job ${jobId}] Script: ${scriptPath}`);
+    writeLog(`[job ${jobId}] SHA-256 do script: ${scriptHash}`);
     writeLog(`[job ${jobId}] Comando: ${pythonCommand} ${args.join(" ")}`);
     writeLog(`[job ${jobId}] Timeout configurado: ${timeoutMinutes} min`);
     writeLog(`[job ${jobId}] Heartbeat a cada ${heartbeatSeconds}s`);
@@ -519,6 +701,10 @@ async function runJob(jobId: number) {
           ...process.env,
           PYTHONUTF8: "1",
           PYTHONIOENCODING: "utf-8",
+          OMP_NUM_THREADS: workerThreads,
+          OPENBLAS_NUM_THREADS: workerThreads,
+          MKL_NUM_THREADS: workerThreads,
+          NUMEXPR_NUM_THREADS: workerThreads,
         },
       });
       let forcedKillTimer: NodeJS.Timeout | null = null;
@@ -615,9 +801,30 @@ export async function createAndQueuePrevisaoJob(input: CreatePrevisaoJobInput) {
   await recoverStaleJobsOnBoot();
   await ensureJobsRoot();
 
+  const vendasBuffer = decodeBase64(input.vendas.contentBase64);
+  const previstoBuffer = input.previsto?.contentBase64
+    ? decodeBase64(input.previsto.contentBase64)
+    : null;
+  const clientesBuffer = input.clientes?.contentBase64
+    ? decodeBase64(input.clientes.contentBase64)
+    : null;
+  const inputMetadata = {
+    generatedAt: new Date().toISOString(),
+    origin: input.origin ?? "UPLOAD",
+    sourceMetadata: input.sourceMetadata ?? null,
+    vendas: inspectWorkbookInput(input.vendas.fileName, vendasBuffer),
+    previsto: previstoBuffer
+      ? inspectWorkbookInput(input.previsto?.fileName || INPUT_PREVISTO_NAME, previstoBuffer)
+      : null,
+    clientes: clientesBuffer
+      ? inspectWorkbookInput(input.clientes?.fileName || INPUT_CLIENTES_NAME, clientesBuffer)
+      : null,
+  };
+
   const created = await db.createPrevisaoPythonJob({
     status: "PENDING",
-    scriptVersion: "v5.7.0",
+    scriptVersion: "v5.2-COMPLETO",
+    inputMetadataJson: JSON.stringify(inputMetadata),
     createdBy: input.createdBy ?? null,
     vendasFileName: input.vendas.fileName || INPUT_VENDAS_NAME,
     previstoFileName: input.previsto?.fileName || null,
@@ -632,17 +839,17 @@ export async function createAndQueuePrevisaoJob(input: CreatePrevisaoJobInput) {
 
   await fs.mkdir(workdir, { recursive: true });
 
-  await fs.writeFile(path.join(workdir, INPUT_VENDAS_NAME), decodeBase64(input.vendas.contentBase64));
-  if (input.previsto?.contentBase64) {
+  await fs.writeFile(path.join(workdir, INPUT_VENDAS_NAME), vendasBuffer);
+  if (previstoBuffer) {
     await fs.writeFile(
       path.join(workdir, INPUT_PREVISTO_NAME),
-      decodeBase64(input.previsto.contentBase64)
+      previstoBuffer
     );
   }
-  if (input.clientes?.contentBase64) {
+  if (clientesBuffer) {
     await fs.writeFile(
       path.join(workdir, INPUT_CLIENTES_NAME),
-      decodeBase64(input.clientes.contentBase64)
+      clientesBuffer
     );
   }
 
@@ -652,7 +859,7 @@ export async function createAndQueuePrevisaoJob(input: CreatePrevisaoJobInput) {
     outputFileName,
   });
 
-  await appendQueue(jobId);
+  appendQueue(jobId);
   return db.getPrevisaoPythonJobById(jobId);
 }
 
@@ -715,7 +922,7 @@ export async function createCiclo13UploadJob(input: CreateCiclo13UploadJobInput)
 }
 
 export async function getPrevisaoJobLog(jobId: number, maxChars = 40000) {
-  const job = await db.getPrevisaoPythonJobById(jobId);
+  const job = await getPrevisaoJobById(jobId);
   if (!job) throw new Error("Job não encontrado.");
   if (!job.logPath) return "";
 
@@ -724,13 +931,41 @@ export async function getPrevisaoJobLog(jobId: number, maxChars = 40000) {
     throw new Error("Caminho de log inválido.");
   }
 
-  const content = await fs.readFile(logPath, "utf8").catch(() => "");
-  if (content.length <= maxChars) return content;
-  return content.slice(content.length - maxChars);
+  const safeMaxChars = Math.max(1, Math.min(Math.floor(maxChars), 100_000));
+  const file = await fs.open(logPath, "r").catch(() => null);
+  if (!file) return "";
+
+  try {
+    const stat = await file.stat();
+    const bytesToRead = Math.min(stat.size, safeMaxChars * 4);
+    if (bytesToRead === 0) return "";
+
+    const buffer = Buffer.allocUnsafe(bytesToRead);
+    const { bytesRead } = await file.read(
+      buffer,
+      0,
+      bytesToRead,
+      stat.size - bytesToRead
+    );
+    return buffer.subarray(0, bytesRead).toString("utf8").slice(-safeMaxChars);
+  } finally {
+    await file.close();
+  }
 }
 
 export async function getPrevisaoJobOutputAsBase64(jobId: number) {
-  const job = await db.getPrevisaoPythonJobById(jobId);
+  const file = await getPrevisaoJobOutputFile(jobId);
+  const fileBuffer = await fs.readFile(file.filePath);
+  return {
+    fileName: file.fileName,
+    contentBase64: fileBuffer.toString("base64"),
+    mimeType:
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  };
+}
+
+export async function getPrevisaoJobOutputFile(jobId: number) {
+  const job = await getPrevisaoJobById(jobId);
   if (!job) throw new Error("Job não encontrado.");
   if (!job.workdir || !job.outputFileName) throw new Error("Arquivo de saída não disponível.");
 
@@ -739,17 +974,22 @@ export async function getPrevisaoJobOutputAsBase64(jobId: number) {
     throw new Error("Caminho de saída inválido.");
   }
 
-  const fileBuffer = await fs.readFile(outputPath);
+  const outputExists = await fs
+    .access(outputPath)
+    .then(() => true)
+    .catch(() => false);
+  if (!outputExists) {
+    throw new Error("Arquivo de saida nao disponivel.");
+  }
+
   return {
+    filePath: outputPath,
     fileName: job.outputFileName,
-    contentBase64: fileBuffer.toString("base64"),
-    mimeType:
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   };
 }
 
 async function getOutputPathFromJob(jobId: number) {
-  const job = await db.getPrevisaoPythonJobById(jobId);
+  const job = await getPrevisaoJobById(jobId);
   if (!job) throw new Error("Job não encontrado.");
   if (!job.workdir || !job.outputFileName) throw new Error("Arquivo de saída não disponível.");
 
@@ -761,7 +1001,7 @@ async function getOutputPathFromJob(jobId: number) {
 }
 
 async function getVisualizableOutputPathFromJob(jobId: number) {
-  const job = await db.getPrevisaoPythonJobById(jobId);
+  const job = await getPrevisaoJobById(jobId);
   if (!job) throw new Error("Job nao encontrado.");
   if (!job.workdir || !job.outputFileName) {
     throw new Error("Arquivo de saida nao disponivel.");
@@ -893,6 +1133,96 @@ function touchWorkbookCacheEntry(jobId: number, entry: WorkbookViewCacheEntry) {
   workbookViewCache.set(jobId, entry);
 }
 
+function resolveSheetNameFromEntry(entry: WorkbookViewCacheEntry, requestedSheetName: string) {
+  if (entry.sheets.has(requestedSheetName) || entry.sheetNames.includes(requestedSheetName)) {
+    return requestedSheetName;
+  }
+
+  const normalized = normalizeHeader(requestedSheetName);
+  const mapped = entry.normalizedSheetNameMap.get(normalized);
+  if (mapped) return mapped;
+
+  const matched = entry.sheetNames.find(name => normalizeHeader(name) === normalized);
+  return matched || null;
+}
+
+const PRIORITY_SHEETS_TO_WARM = [
+  "Visao_Executiva",
+  "Geral",
+  "Detalhado",
+  "Backtest",
+  "Backtest_Sku",
+  "Analise_Cenarios",
+  "Acuracidade",
+  "Acuracidade_Detalhada",
+  "Clientes",
+  "Clientes_Analise",
+  "Modelos_Estatisticos",
+  "Sazonalidade",
+  "Metodologia",
+];
+
+async function ensureWorkbookSheetLoaded(
+  entry: WorkbookViewCacheEntry,
+  requestedSheetName: string
+) {
+  const sheetName = resolveSheetNameFromEntry(entry, requestedSheetName);
+  if (!sheetName) {
+    throw new Error(`Aba nao encontrada: ${requestedSheetName}`);
+  }
+
+  const cachedSheet = entry.sheets.get(sheetName);
+  if (cachedSheet) return cachedSheet;
+
+  if (!entry.fileBuffer) {
+    entry.fileBuffer = await fs.readFile(entry.outputPath);
+  }
+
+  const wb = XLSX.read(entry.fileBuffer, {
+    type: "buffer",
+    cellDates: true,
+    sheets: [sheetName],
+  });
+  const ws = wb.Sheets[sheetName];
+  if (!ws) {
+    throw new Error(`Aba nao encontrada: ${requestedSheetName}`);
+  }
+
+  const sheetData = buildSheetData(sheetName, ws);
+  entry.sheets.set(sheetName, sheetData);
+  entry.normalizedSheetNameMap.set(normalizeHeader(sheetName), sheetName);
+  entry.lastAccessAt = Date.now();
+  return sheetData;
+}
+
+function warmWorkbookSheetsInBackground(entry: WorkbookViewCacheEntry) {
+  if (entry.warmingPromise) return entry.warmingPromise;
+
+  const heavySheets = new Set(["Cliente_detalhado", "Clientes_Por_Marca"]);
+
+  entry.warmingPromise = (async () => {
+    const pending = PRIORITY_SHEETS_TO_WARM.filter(
+      name =>
+        entry.sheetNames.includes(name) &&
+        !entry.sheets.has(name) &&
+        !heavySheets.has(name)
+    );
+
+    for (const sheetName of pending) {
+      try {
+        await ensureWorkbookSheetLoaded(entry, sheetName);
+        await new Promise<void>(resolve => setImmediate(resolve));
+      } catch {
+        // Aquecimento é best-effort; aba será carregada no clique.
+      }
+    }
+  })().finally(() => {
+    entry.warmingPromise = null;
+  });
+
+  return entry.warmingPromise;
+}
+
 async function getWorkbookViewCacheEntry(jobId: number) {
   const outputPath = await getVisualizableOutputPathFromJob(jobId);
   const stat = await fs.stat(outputPath);
@@ -912,15 +1242,12 @@ async function getWorkbookViewCacheEntry(jobId: number) {
     return cached;
   }
 
-  const wb = XLSX.readFile(outputPath, { cellDates: true });
-  const sheets = new Map<string, WorkbookSheetData>();
+  // Lê o arquivo uma vez em memória; abas são parseadas sob demanda / em warm-up.
+  const fileBuffer = await fs.readFile(outputPath);
+  const wb = XLSX.read(fileBuffer, { type: "buffer", bookSheets: true });
+  const sheetNames = [...wb.SheetNames];
   const normalizedSheetNameMap = new Map<string, string>();
-
-  for (const sheetName of wb.SheetNames) {
-    const ws = wb.Sheets[sheetName];
-    if (!ws) continue;
-
-    sheets.set(sheetName, buildSheetData(sheetName, ws));
+  for (const sheetName of sheetNames) {
     normalizedSheetNameMap.set(normalizeHeader(sheetName), sheetName);
   }
 
@@ -928,8 +1255,11 @@ async function getWorkbookViewCacheEntry(jobId: number) {
     outputPath,
     mtimeMs: stat.mtimeMs,
     lastAccessAt: now,
-    sheets,
+    sheetNames,
+    fileBuffer,
+    sheets: new Map(),
     normalizedSheetNameMap,
+    warmingPromise: null,
   };
 
   workbookViewCache.set(jobId, entry);
@@ -937,22 +1267,8 @@ async function getWorkbookViewCacheEntry(jobId: number) {
   return entry;
 }
 
-function resolveSheetFromCache(entry: WorkbookViewCacheEntry, requestedSheetName: string) {
-  const direct = entry.sheets.get(requestedSheetName);
-  if (direct) return direct;
-
-  const normalized = normalizeHeader(requestedSheetName);
-  const matchedName = entry.normalizedSheetNameMap.get(normalized);
-  if (!matchedName) {
-    throw new Error(`Aba nao encontrada: ${requestedSheetName}`);
-  }
-
-  const matched = entry.sheets.get(matchedName);
-  if (!matched) {
-    throw new Error(`Aba nao encontrada: ${requestedSheetName}`);
-  }
-
-  return matched;
+async function resolveSheetFromCache(entry: WorkbookViewCacheEntry, requestedSheetName: string) {
+  return ensureWorkbookSheetLoaded(entry, requestedSheetName);
 }
 
 function resolveColumnIndex(columns: string[], requestedColumn: string) {
@@ -976,9 +1292,12 @@ function resolveColumnIndexByAliases(columns: string[], aliases: string[]) {
   return -1;
 }
 
-function getOptionalSheetFromCache(entry: WorkbookViewCacheEntry, requestedSheetName: string) {
+async function getOptionalSheetFromCache(
+  entry: WorkbookViewCacheEntry,
+  requestedSheetName: string
+) {
   try {
-    return resolveSheetFromCache(entry, requestedSheetName);
+    return await resolveSheetFromCache(entry, requestedSheetName);
   } catch {
     return null;
   }
@@ -1152,10 +1471,12 @@ function extractBrandFromCodigo(codigo: string) {
   return codigo.trim() || "SEM MARCA";
 }
 
-function buildExecutiveAnalyticsFromCache(cacheEntry: WorkbookViewCacheEntry): PrevisaoExecutiveAnalytics {
+async function buildExecutiveAnalyticsFromCache(
+  cacheEntry: WorkbookViewCacheEntry
+): Promise<PrevisaoExecutiveAnalytics> {
   const executiveSheet =
-    getOptionalSheetFromCache(cacheEntry, "Visao_Executiva") ||
-    getOptionalSheetFromCache(cacheEntry, "Analise_Cenarios");
+    (await getOptionalSheetFromCache(cacheEntry, "Visao_Executiva")) ||
+    (await getOptionalSheetFromCache(cacheEntry, "Analise_Cenarios"));
 
   if (!executiveSheet) {
     return {
@@ -1284,10 +1605,12 @@ function buildExecutiveAnalyticsFromCache(cacheEntry: WorkbookViewCacheEntry): P
   };
 }
 
-function buildCustomerAnalyticsFromCache(cacheEntry: WorkbookViewCacheEntry): PrevisaoCustomerAnalytics {
-  const customersSheet = getOptionalSheetFromCache(cacheEntry, "Clientes");
-  const customerDetailSheet = getOptionalSheetFromCache(cacheEntry, "Cliente_detalhado");
-  const rulesSheet = getOptionalSheetFromCache(cacheEntry, "Clientes_Por_Marca");
+async function buildCustomerAnalyticsFromCache(
+  cacheEntry: WorkbookViewCacheEntry
+): Promise<PrevisaoCustomerAnalytics> {
+  const customersSheet = await getOptionalSheetFromCache(cacheEntry, "Clientes");
+  const customerDetailSheet = await getOptionalSheetFromCache(cacheEntry, "Cliente_detalhado");
+  const rulesSheet = await getOptionalSheetFromCache(cacheEntry, "Clientes_Por_Marca");
 
   const skuRows: PrevisaoCustomerSkuSummary[] = [];
 
@@ -2088,7 +2411,9 @@ async function buildAnalyticsFromWorkbook(outputPath: string) {
 
 export async function getPrevisaoJobWorkbookMeta(jobId: number) {
   const cacheEntry = await getWorkbookViewCacheEntry(jobId);
-  return Array.from(cacheEntry.sheets.keys());
+  // Aquece abas em background para o clique abrir na hora.
+  warmWorkbookSheetsInBackground(cacheEntry);
+  return cacheEntry.sheetNames;
 }
 
 export async function getPrevisaoJobAnalytics(jobId: number, monthsLimit = 24) {
@@ -2124,12 +2449,12 @@ export async function getPrevisaoJobAnalytics(jobId: number, monthsLimit = 24) {
 
 export async function getPrevisaoJobExecutiveAnalytics(jobId: number) {
   const cacheEntry = await getWorkbookViewCacheEntry(jobId);
-  return buildExecutiveAnalyticsFromCache(cacheEntry);
+  return await buildExecutiveAnalyticsFromCache(cacheEntry);
 }
 
 export async function getPrevisaoJobCustomerAnalytics(jobId: number) {
   const cacheEntry = await getWorkbookViewCacheEntry(jobId);
-  return buildCustomerAnalyticsFromCache(cacheEntry);
+  return await buildCustomerAnalyticsFromCache(cacheEntry);
 }
 
 export async function getPrevisaoJobCustomerDetailData(
@@ -2405,7 +2730,7 @@ export async function getPrevisaoJobSheetPreview(
   maxRows = 100
 ) {
   const cacheEntry = await getWorkbookViewCacheEntry(jobId);
-  const sheet = resolveSheetFromCache(cacheEntry, sheetName);
+  const sheet = await resolveSheetFromCache(cacheEntry, sheetName);
   const safeMaxRows = Math.max(1, maxRows);
   const dataRows = sheet.rows.slice(0, safeMaxRows);
 
@@ -2430,7 +2755,7 @@ export async function getPrevisaoJobSheetData(
   }
 ) {
   const cacheEntry = await getWorkbookViewCacheEntry(jobId);
-  const sheet = resolveSheetFromCache(cacheEntry, sheetName);
+  const sheet = await resolveSheetFromCache(cacheEntry, sheetName);
   const columns = sheet.columns;
   const pageSizeRaw = Number(options?.pageSize ?? 100);
   const safePageSize = Math.min(250, Math.max(1, Number.isFinite(pageSizeRaw) ? Math.floor(pageSizeRaw) : 100));

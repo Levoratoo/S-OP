@@ -55,8 +55,7 @@ export default function Ajuda() {
             Ajuda &amp; Guia do Sistema
           </h1>
           <p className="mt-1 text-muted-foreground">
-            Manual operacional do S&OP Printbag — tours na tela + texto detalhado para handoff
-            quando alguém sair da empresa.
+            Manual do fluxo de Previsão de Demanda — tours na tela + guias do ciclo mensal.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -74,13 +73,13 @@ export default function Ajuda() {
         <Card className="cursor-pointer hover:border-primary/40" onClick={() => startTour(FIRST_ACCESS_TOUR_STEPS)}>
           <CardHeader className="pb-2">
             <CardTitle className="text-base">Treinamento completo</CardTitle>
-            <CardDescription>~45 passos — menu inteiro + como usar cada tela</CardDescription>
+            <CardDescription>~15 passos — só o fluxo de Previsão de Demanda</CardDescription>
           </CardHeader>
         </Card>
         <Card className="cursor-pointer hover:border-primary/40" onClick={() => startTour(FLUXO_MENSAL_STEPS)}>
           <CardHeader className="pb-2">
             <CardTitle className="text-base">Roteiro do mês</CardTitle>
-            <CardDescription>9 passos: faturamento → Python → colab → capacidade</CardDescription>
+            <CardDescription>6 passos: faturamento → Python → colaboração</CardDescription>
           </CardHeader>
         </Card>
         <Card className="cursor-pointer hover:border-primary/40" onClick={() => startTour(FULL_TOUR_STEPS)}>

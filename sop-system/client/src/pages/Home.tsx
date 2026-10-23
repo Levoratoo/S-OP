@@ -1,72 +1,119 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { trpc } from "@/lib/trpc";
-import { Package, Users, ShoppingCart, TrendingUp, Factory, BarChart3 } from "lucide-react";
+import {
+  Package,
+  Users,
+  FileSpreadsheet,
+  TrendingUp,
+  Play,
+  TableProperties,
+  Target,
+  Route,
+  Calendar,
+} from "lucide-react";
+import { useLocation } from "wouter";
 
 export default function Home() {
+  const [, setLocation] = useLocation();
   const { data: dashboardData, isLoading } = trpc.dashboard.demanda.useQuery();
 
   const stats = [
     {
-      title: "Total de Produtos",
+      title: "Produtos",
       value: dashboardData?.totalProdutos ?? 0,
       icon: Package,
       color: "text-blue-600",
       bgColor: "bg-blue-100",
     },
     {
-      title: "Total de Clientes",
+      title: "Clientes",
       value: dashboardData?.totalClientes ?? 0,
       icon: Users,
       color: "text-green-600",
       bgColor: "bg-green-100",
     },
     {
-      title: "Total de Vendas",
+      title: "Registros de venda",
       value: dashboardData?.totalVendas ?? 0,
-      icon: ShoppingCart,
+      icon: FileSpreadsheet,
       color: "text-purple-600",
       bgColor: "bg-purple-100",
     },
   ];
 
-  const modules = [
+  const steps = [
     {
-      title: "Previsão de Demanda",
-      description: "Dashboard de demanda, acuracidade e colaborações",
-      icon: TrendingUp,
-      href: "/demanda/dashboard",
-      color: "text-orange-600",
+      step: "1",
+      title: "Cadastros + Skus Projetar",
+      description: "Produtos, De-Para e lista de SKUs que entram na estatística",
+      icon: Package,
+      href: "/cadastros/skus-projetar",
+      color: "text-slate-700",
+      bgColor: "bg-slate-100",
+    },
+    {
+      step: "2",
+      title: "Bases / Faturamento",
+      description: "Atualizar faturamento (Jan/2020 até o mês fechado anterior)",
+      icon: FileSpreadsheet,
+      href: "/vendas/importar",
+      color: "text-blue-700",
+      bgColor: "bg-blue-100",
+    },
+    {
+      step: "3",
+      title: "Rodar Previsão Python",
+      description: "Tratamento das bases + script estatístico v5.2",
+      icon: Play,
+      href: "/previsao-python",
+      color: "text-orange-700",
       bgColor: "bg-orange-100",
     },
     {
-      title: "Análise de Capacidade",
-      description: "Dashboard de capacidade produtiva e IROG",
-      icon: Factory,
-      href: "/capacidade/dashboard",
-      color: "text-cyan-600",
-      bgColor: "bg-cyan-100",
+      step: "4",
+      title: "Relatório Estatístico",
+      description: "Visão executiva e resultado do job",
+      icon: TableProperties,
+      href: "/previsao-python/ciclo-13",
+      color: "text-amber-700",
+      bgColor: "bg-amber-100",
     },
     {
-      title: "Gestão de Vendas",
-      description: "Histórico de vendas, carteira e forecast",
-      icon: BarChart3,
-      href: "/vendas/dashboard",
-      color: "text-pink-600",
-      bgColor: "bg-pink-100",
+      step: "5",
+      title: "Colaboração Comercial",
+      description: "Ciclo S&OP — MTS, JITO, PV e CRM",
+      icon: TrendingUp,
+      href: "/demanda/colaboracoes",
+      color: "text-emerald-700",
+      bgColor: "bg-emerald-100",
     },
+    {
+      step: "6",
+      title: "Acuracidade",
+      description: "Previsto × realizado (MAPE / WMAPE / BIAS)",
+      icon: Target,
+      href: "/demanda/acuracidade",
+      color: "text-rose-700",
+      bgColor: "bg-rose-100",
+    },
+  ];
+
+  const atalhos = [
+    { label: "Skus Projetar", href: "/cadastros/skus-projetar", icon: Target },
+    { label: "De-Para", href: "/cadastros/depara", icon: Route },
+    { label: "Sazonalidade Marca", href: "/cadastros/sazonalidade-marca", icon: Calendar },
+    { label: "Gestor × Marca", href: "/cadastros/gestor-marca", icon: Users },
   ];
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
+        <h1 className="text-2xl font-bold tracking-tight">Previsão de Demanda</h1>
         <p className="text-muted-foreground">
-          Visão geral do sistema de Sales & Operations Planning
+          Fluxo mensal S&OP: cadastros → bases → script Python → colaboração comercial
         </p>
       </div>
 
-      {/* Stats Cards */}
       <div className="grid gap-4 md:grid-cols-3">
         {stats.map((stat) => (
           <Card key={stat.title}>
@@ -91,25 +138,27 @@ export default function Home() {
         ))}
       </div>
 
-      {/* Modules */}
       <div>
-        <h2 className="text-lg font-semibold mb-4">Módulos</h2>
-        <div className="grid gap-4 md:grid-cols-3">
-          {modules.map((module) => (
-            <Card 
-              key={module.title} 
+        <h2 className="text-lg font-semibold mb-4">Passo a passo do ciclo</h2>
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          {steps.map((item) => (
+            <Card
+              key={item.step}
               className="cursor-pointer hover:shadow-md transition-shadow"
-              onClick={() => window.location.href = module.href}
+              onClick={() => setLocation(item.href)}
             >
               <CardHeader>
                 <div className="flex items-center gap-3">
-                  <div className={`p-3 rounded-lg ${module.bgColor}`}>
-                    <module.icon className={`h-6 w-6 ${module.color}`} />
+                  <div className={`p-3 rounded-lg ${item.bgColor}`}>
+                    <item.icon className={`h-6 w-6 ${item.color}`} />
                   </div>
                   <div>
-                    <CardTitle className="text-base">{module.title}</CardTitle>
+                    <CardTitle className="text-base">
+                      <span className="text-muted-foreground mr-1">{item.step}.</span>
+                      {item.title}
+                    </CardTitle>
                     <CardDescription className="text-xs mt-1">
-                      {module.description}
+                      {item.description}
                     </CardDescription>
                   </div>
                 </div>
@@ -119,23 +168,17 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Quick Actions */}
       <div>
-        <h2 className="text-lg font-semibold mb-4">Cadastros Rápidos</h2>
-        <div className="grid gap-3 grid-cols-2 md:grid-cols-4 lg:grid-cols-5">
-          {[
-            { label: "Marcas", href: "/cadastros/gestor-marca" },
-            { label: "Produtos", href: "/cadastros/produtos" },
-            { label: "Clientes", href: "/cadastros/clientes" },
-            { label: "Recursos", href: "/cadastros/recursos" },
-            { label: "Membros", href: "/cadastros/membros" },
-          ].map((item) => (
-            <Card 
+        <h2 className="text-lg font-semibold mb-4">Cadastros do processo</h2>
+        <div className="grid gap-3 grid-cols-2 md:grid-cols-4">
+          {atalhos.map((item) => (
+            <Card
               key={item.label}
               className="cursor-pointer hover:bg-accent transition-colors"
-              onClick={() => window.location.href = item.href}
+              onClick={() => setLocation(item.href)}
             >
-              <CardContent className="p-4 text-center">
+              <CardContent className="p-4 flex items-center gap-2 justify-center">
+                <item.icon className="h-4 w-4 text-muted-foreground" />
                 <span className="text-sm font-medium">{item.label}</span>
               </CardContent>
             </Card>

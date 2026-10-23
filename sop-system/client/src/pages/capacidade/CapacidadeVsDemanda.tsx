@@ -6,6 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { normalizeMarcaNome, useAccessControl } from "@/hooks/useAccessControl";
 import { trpc } from "@/lib/trpc";
+import { canonicalizeLinha, normalizeText } from "@shared/linha";
 import { Loader2 } from "lucide-react";
 
 const MESES = [
@@ -26,11 +27,7 @@ const MESES = [
 const MES_KEYS = ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12"] as const;
 
 function norm(value: string | null | undefined) {
-  return (value || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .trim()
-    .toLowerCase();
+  return normalizeText(value);
 }
 
 function fmt(n: number) {
@@ -136,7 +133,7 @@ export default function CapacidadeVsDemanda() {
         }
       }
 
-      const linhaKey = norm(item.linha) || "sem-linha";
+      const linhaKey = canonicalizeLinha(item.linha) || "sem-linha";
       matchKind = "linha";
       matchKey = `linha:${linhaKey}`;
       matchLabel = linhaKey === "sem-linha" ? "Sem linha" : `Linha: ${linhaKey}`;
@@ -149,7 +146,7 @@ export default function CapacidadeVsDemanda() {
       if (!capPorChave.has(matchKey)) {
         const capBucket = ensureBucket(capPorChave, matchKey);
         for (const rec of capacidade.recursos) {
-          if (norm(rec.linhaProduto) === linhaKey) {
+          if (canonicalizeLinha(rec.linhaProduto) === linhaKey) {
             for (let m = 1; m <= 12; m++) {
               capBucket[m] += rec.capacidadeMensal[m] ?? 0;
             }

@@ -1,5 +1,7 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect } from "vitest";
 import * as db from "./db";
+
+const itWithDatabase = process.env.DATABASE_URL ? it : it.skip;
 
 describe("Níveis de Acesso", () => {
   it("deve listar níveis de acesso", async () => {
@@ -33,7 +35,7 @@ describe("Níveis de Acesso", () => {
 
 describe("Gerenciamento de Usuários", () => {
   // Teste de criação de usuário
-  it("deve criar um novo usuário com dados válidos", async () => {
+  itWithDatabase("deve criar um novo usuário com dados válidos", async () => {
     const novoUsuario = {
       name: "Teste Usuario",
       email: `teste_${Date.now()}@exemplo.com`,
@@ -45,7 +47,7 @@ describe("Gerenciamento de Usuários", () => {
     expect(result.success).toBe(true);
   });
 
-  it("deve atualizar dados do usuário", async () => {
+  itWithDatabase("deve atualizar dados do usuário", async () => {
     // Criar usuário para teste
     const email = `update_test_${Date.now()}@exemplo.com`;
     await db.createUser({ name: "Usuario Original", email, nivelAcesso: 1 });
@@ -64,7 +66,7 @@ describe("Gerenciamento de Usuários", () => {
     expect(usuarioAtualizado?.name).toBe("Usuario Atualizado");
   });
 
-  it("deve excluir usuário", async () => {
+  itWithDatabase("deve excluir usuário", async () => {
     // Criar usuário para teste
     const email = `delete_test_${Date.now()}@exemplo.com`;
     await db.createUser({ name: "Usuario Para Excluir", email, nivelAcesso: 1 });

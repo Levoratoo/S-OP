@@ -3,6 +3,8 @@ Empacota sop-system + script Python e sobe em /opt/sites_dev/snop no Docker host
 Uso (na pasta sop-system):
   set SNOP_SSH_PASS=...
   python docker/deploy_to_server.py
+
+Se SNOP_SSH_PASS não estiver definido, usa SSH agent/chaves locais.
 """
 from __future__ import annotations
 
@@ -24,8 +26,14 @@ APP_PORT = os.environ.get("SNOP_APP_PORT", "3042")
 
 ROOT = Path(__file__).resolve().parents[1]  # sop-system
 REPO = ROOT.parent
-SCRIPT_SRC = REPO / "3. Script Python Previsão Demanda"
+# Preferir o script canônico do sop-system; fallback para pasta histórica do repo.
+SCRIPT_SRC_CANDIDATES = [
+    ROOT / "scripts-previsao",
+    REPO / "3. Script Python Previsão Demanda",
+]
+SCRIPT_SRC = next((p for p in SCRIPT_SRC_CANDIDATES if (p / "previsao_demanda_final_v5_2_COMPLETO.py").exists()), SCRIPT_SRC_CANDIDATES[0])
 SCRIPT_NAME = "previsao_demanda_final_v5_2_COMPLETO.py"
+HELPER_NAME = "previsao_meses.py"
 
 EXCLUDE_DIRS = {
     "node_modules",
@@ -39,11 +47,14 @@ EXCLUDE_DIRS = {
     "canvases",
 }
 EXCLUDE_SUFFIXES = {".log", ".zip", ".bak", ".pyc"}
+EXCLUDE_FILES = {".env", ".env.local", ".env.development", ".env.production"}
 
 
 def should_exclude(path: Path) -> bool:
     parts = set(path.parts)
     if parts & EXCLUDE_DIRS:
+        return True
+    if path.name in EXCLUDE_FILES:
         return True
     if path.suffix.lower() in EXCLUDE_SUFFIXES:
         return True
@@ -81,11 +92,19 @@ def make_tarball(dest: Path) -> None:
         script_file = SCRIPT_SRC / SCRIPT_NAME
         if not script_file.exists():
             raise FileNotFoundError(f"Script Python não encontrado: {script_file}")
+        helper_file = SCRIPT_SRC / HELPER_NAME
         # Pasta ASCII no contexto Docker (evita problema de encoding no Linux)
         tar.add(script_file, arcname=f"scripts-previsao/{SCRIPT_NAME}")
         # Mantém também o path esperado em runtime pelo backend
         tar.add(script_file, arcname=f"{script_dst_name}/{SCRIPT_NAME}")
         count += 2
+        if helper_file.exists():
+            tar.add(helper_file, arcname=f"scripts-previsao/{HELPER_NAME}")
+            tar.add(helper_file, arcname=f"{script_dst_name}/{HELPER_NAME}")
+            count += 2
+            print(f"  packed {HELPER_NAME} helper from {SCRIPT_SRC}", flush=True)
+        else:
+            print(f"  WARN: helper {HELPER_NAME} nao encontrado: {helper_file}", flush=True)
 
         # Cadastros mestres (CSVs) — pasta ASCII no container
         dados_src = REPO / "dados sistema"
@@ -102,15 +121,46 @@ def make_tarball(dest: Path) -> None:
         else:
             print(f"  WARN: pasta dados sistema nao encontrada: {dados_src}", flush=True)
 
+        # Baseline homologado das bases estatísticas. O runtime usa estes arquivos
+        # para preservar 100% do histórico e acrescenta meses novos vindos do ERP.
+        baseline_dir = (
+            REPO
+            / "OneDrive_2026-07-30"
+            / "1-Módulo Previsão Demanda"
+            / "1.1 arquivos"
+        )
+        for name in ("1-BasedeDadosVendas.xlsx", "1-BasedeDadosClientes.xlsx"):
+            baseline = baseline_dir / name
+            if not baseline.is_file():
+                raise FileNotFoundError(f"Baseline homologado não encontrado: {baseline}")
+            tar.add(baseline, arcname=f"dados-sistema/{name}")
+            count += 1
+
         print(f"  packed {count} files total (incl. script Python + seed)", flush=True)
 
 
 def ssh_connect() -> paramiko.SSHClient:
-    if not PASSWORD:
-        raise SystemExit("Defina SNOP_SSH_PASS com a senha SSH.")
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(HOST, username=USER, password=PASSWORD, timeout=30)
+    key_filename = os.environ.get("SNOP_SSH_KEY")
+    connect_options: dict[str, object] = {
+        "hostname": HOST,
+        "username": USER,
+        "timeout": 30,
+        "allow_agent": True,
+        "look_for_keys": True,
+    }
+    if PASSWORD:
+        connect_options["password"] = PASSWORD
+    if key_filename:
+        connect_options["key_filename"] = key_filename
+    try:
+        client.connect(**connect_options)
+    except (paramiko.AuthenticationException, paramiko.SSHException) as error:
+        raise SystemExit(
+            "Falha de autenticação SSH. Defina SNOP_SSH_PASS, SNOP_DOCKER_PASS "
+            "ou SNOP_SSH_KEY com uma chave autorizada."
+        ) from error
     return client
 
 
@@ -171,13 +221,29 @@ def main() -> None:
                 f"cd {REMOTE_DIR} && tar -xzf snop-deploy.tgz && rm -f snop-deploy.tgz",
             )
 
-            # .env se não existir
+            # Sempre garante .env Docker (nunca reaproveitar .env Windows local).
+            # Preserva ERP_* do .env remoto atual; se faltar, injeta do ambiente local do deploy.
+            erp_from_local = ""
+            local_env = ROOT / ".env"
+            if local_env.is_file():
+                for line in local_env.read_text(encoding="utf-8", errors="replace").splitlines():
+                    if line.startswith("ERP_"):
+                        erp_from_local += line + "\n"
+            erp_fallback = erp_from_local.replace("'", "'\"'\"'")
             run(
                 client,
                 f"""
-test -f {REMOTE_DIR}/.env || cat > {REMOTE_DIR}/.env <<'EOF'
+set -e
+ERP_BLOCK=""
+if [ -f {REMOTE_DIR}/.env ]; then
+  ERP_BLOCK=$(grep -E '^ERP_' {REMOTE_DIR}/.env || true)
+fi
+if [ -z "$ERP_BLOCK" ]; then
+  ERP_BLOCK='{erp_fallback}'
+fi
+cat > {REMOTE_DIR}/.env <<'EOF'
 APP_PORT={APP_PORT}
-MYSQL_ROOT_PASSWORD=SnopRoot!{APP_PORT}
+MYSQL_ROOT_PASSWORD=snop_root_change_me
 MYSQL_DATABASE=sop_system
 MYSQL_USER=snop
 MYSQL_PASSWORD=SnopApp!{APP_PORT}
@@ -189,9 +255,17 @@ DEV_AUTH_EMAIL=admin@printbag.local
 DEV_AUTH_ROLE=admin
 DEV_AUTH_NIVEL_ACESSO=3
 VITE_APP_ID=snop-printbag
-PREVISAO_PYTHON_TIMEOUT_MIN=35
+PREVISAO_PYTHON_TIMEOUT_MIN=70
 PREVISAO_PYTHON_HEARTBEAT_SEC=15
+HOST=0.0.0.0
+PORT=3012
+NODE_ENV=production
 EOF
+if [ -n "$ERP_BLOCK" ]; then
+  printf '%s\\n' "$ERP_BLOCK" >> {REMOTE_DIR}/.env
+fi
+grep -q '^PREVISAO_PYTHON_TIMEOUT_MIN=' {REMOTE_DIR}/.env || echo PREVISAO_PYTHON_TIMEOUT_MIN=70 >> {REMOTE_DIR}/.env
+sed -i 's/^PREVISAO_PYTHON_TIMEOUT_MIN=.*/PREVISAO_PYTHON_TIMEOUT_MIN=70/' {REMOTE_DIR}/.env
 chmod 600 {REMOTE_DIR}/.env
 """.strip(),
             )
@@ -229,9 +303,9 @@ chmod 600 {REMOTE_DIR}/.env
                     break
 
             run(client, "docker ps --filter name=snop --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'")
-            print(f"\nOK → http://{HOST}:{APP_PORT}/")
+            print(f"\nOK -> http://{HOST}:{APP_PORT}/")
             print(f"Pasta no servidor: {REMOTE_DIR}")
-            print("Nginx Proxy Manager → Forward to {}:{}".format(HOST, APP_PORT))
+            print("Nginx Proxy Manager -> Forward to {}:{}".format(HOST, APP_PORT))
         finally:
             client.close()
 

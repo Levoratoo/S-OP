@@ -1,142 +1,150 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { trpc } from "@/lib/trpc";
-import { Plus, Loader2, Upload, FileSpreadsheet } from "lucide-react";
-import { toast } from "sonner";
+import { Loader2, FileSpreadsheet, Upload } from "lucide-react";
+
+const MESES = [
+  { value: "0", label: "Todos" },
+  { value: "1", label: "Janeiro" },
+  { value: "2", label: "Fevereiro" },
+  { value: "3", label: "Março" },
+  { value: "4", label: "Abril" },
+  { value: "5", label: "Maio" },
+  { value: "6", label: "Junho" },
+  { value: "7", label: "Julho" },
+  { value: "8", label: "Agosto" },
+  { value: "9", label: "Setembro" },
+  { value: "10", label: "Outubro" },
+  { value: "11", label: "Novembro" },
+  { value: "12", label: "Dezembro" },
+];
 
 export default function HistoricoVendas() {
-  const [isOpen, setIsOpen] = useState(false);
-  const [formData, setFormData] = useState({
-    nfNumero: "",
-    dataNf: new Date().toISOString().split("T")[0],
-    quantidade: "",
-    receitaBruta: "",
-    produtoId: 0,
-    clienteId: null as number | null,
+  const [, setLocation] = useLocation();
+  const anoAtual = new Date().getFullYear();
+  const [year, setYear] = useState(String(anoAtual));
+  const [month, setMonth] = useState("0");
+
+  const yearNum = parseInt(year, 10);
+  const monthNum = month === "0" ? undefined : parseInt(month, 10);
+
+  const { data: rows, isLoading } = trpc.faturamento.list.useQuery({
+    limit: 200,
+    year: yearNum,
+    month: monthNum,
   });
 
-  const utils = trpc.useUtils();
-  const { data: vendas, isLoading } = trpc.vendas.list.useQuery({ limit: 100 });
-  const { data: produtos } = trpc.produtos.list.useQuery();
-  const { data: clientes } = trpc.clientes.list.useQuery();
-  
-  const createMutation = trpc.vendas.create.useMutation({
-    onSuccess: () => {
-      utils.vendas.list.invalidate();
-      toast.success("Venda registrada!");
-      resetForm();
-    },
-    onError: (error) => toast.error(error.message),
+  const { data: stats } = trpc.faturamento.stats.useQuery({
+    year: yearNum,
+    month: monthNum,
   });
 
-  const resetForm = () => {
-    setFormData({ nfNumero: "", dataNf: new Date().toISOString().split("T")[0], quantidade: "", receitaBruta: "", produtoId: 0, clienteId: null });
-    setIsOpen(false);
-  };
+  const yearOptions = useMemo(() => {
+    const years = [anoAtual, anoAtual - 1, anoAtual - 2];
+    return Array.from(new Set(years));
+  }, [anoAtual]);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    createMutation.mutate(formData);
-  };
-
-  const getProdutoNome = (id: number) => produtos?.find(p => p.id === id)?.nome || "-";
-  const getClienteNome = (id: number | null) => id ? clientes?.find(c => c.id === id)?.razaoSocial || "-" : "-";
-
-  const formatCurrency = (value: string | null) => {
-    if (!value) return "-";
+  const formatCurrency = (value: string | null | undefined) => {
+    if (value == null || value === "") return "-";
     return `R$ ${parseFloat(value).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`;
   };
 
-  const formatDate = (date: Date | null) => {
+  const formatDate = (date: Date | string | null | undefined) => {
     if (!date) return "-";
     return new Date(date).toLocaleDateString("pt-BR");
   };
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Histórico de Vendas</h1>
-          <p className="text-muted-foreground">Registro de notas fiscais e vendas</p>
+          <p className="text-muted-foreground">
+            Notas fiscais carregadas do ERP (faturamento)
+          </p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={() => toast.info("Funcionalidade em desenvolvimento")}>
-            <Upload className="h-4 w-4 mr-2" />
-            Importar
-          </Button>
-          <Dialog open={isOpen} onOpenChange={(open) => { setIsOpen(open); if (!open) resetForm(); }}>
-            <DialogTrigger asChild>
-              <Button><Plus className="h-4 w-4 mr-2" />Nova Venda</Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader><DialogTitle>Registrar Venda</DialogTitle></DialogHeader>
-              <form onSubmit={handleSubmit} className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>Nº NF</Label>
-                    <Input value={formData.nfNumero} onChange={(e) => setFormData({ ...formData, nfNumero: e.target.value })} />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Data NF</Label>
-                    <Input type="date" value={formData.dataNf} onChange={(e) => setFormData({ ...formData, dataNf: e.target.value })} required />
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <Label>Produto</Label>
-                  <Select value={formData.produtoId.toString()} onValueChange={(v) => setFormData({ ...formData, produtoId: parseInt(v) })}>
-                    <SelectTrigger><SelectValue placeholder="Selecione..." /></SelectTrigger>
-                    <SelectContent>{produtos?.map((p) => <SelectItem key={p.id} value={p.id.toString()}>{p.nome}</SelectItem>)}</SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label>Cliente</Label>
-                  <Select value={formData.clienteId?.toString() || "none"} onValueChange={(v) => setFormData({ ...formData, clienteId: v === "none" ? null : parseInt(v) })}>
-                    <SelectTrigger><SelectValue placeholder="Selecione..." /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">Nenhum</SelectItem>
-                      {clientes?.map((c) => <SelectItem key={c.id} value={c.id.toString()}>{c.razaoSocial}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>Quantidade</Label>
-                    <Input type="number" step="0.01" value={formData.quantidade} onChange={(e) => setFormData({ ...formData, quantidade: e.target.value })} required />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Receita Bruta (R$)</Label>
-                    <Input type="number" step="0.01" value={formData.receitaBruta} onChange={(e) => setFormData({ ...formData, receitaBruta: e.target.value })} required />
-                  </div>
-                </div>
-                <div className="flex justify-end gap-2">
-                  <Button type="button" variant="outline" onClick={resetForm}>Cancelar</Button>
-                  <Button type="submit" disabled={createMutation.isPending}>
-                    {createMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                    Registrar
-                  </Button>
-                </div>
-              </form>
-            </DialogContent>
-          </Dialog>
-        </div>
+        <Button variant="outline" onClick={() => setLocation("/vendas/importar")}>
+          <Upload className="h-4 w-4 mr-2" />
+          Importar / Atualizar
+        </Button>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-3">
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Registros</CardTitle>
+          </CardHeader>
+          <CardContent className="text-2xl font-bold">
+            {(stats?.totalRegistros ?? 0).toLocaleString("pt-BR")}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Quantidade</CardTitle>
+          </CardHeader>
+          <CardContent className="text-2xl font-bold">
+            {(stats?.totalQtd ?? 0).toLocaleString("pt-BR")}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Valor total</CardTitle>
+          </CardHeader>
+          <CardContent className="text-2xl font-bold">
+            {formatCurrency(String(stats?.totalValor ?? 0))}
+          </CardContent>
+        </Card>
       </div>
 
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between gap-4 flex-wrap space-y-0">
           <CardTitle className="flex items-center gap-2">
             <FileSpreadsheet className="h-5 w-5" />
-            Vendas Registradas
+            Faturamento
           </CardTitle>
+          <div className="flex items-end gap-3">
+            <div className="space-y-1">
+              <Label>Ano</Label>
+              <Select value={year} onValueChange={setYear}>
+                <SelectTrigger className="w-[120px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {yearOptions.map((y) => (
+                    <SelectItem key={y} value={String(y)}>
+                      {y}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label>Mês</Label>
+              <Select value={month} onValueChange={setMonth}>
+                <SelectTrigger className="w-[140px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {MESES.map((m) => (
+                    <SelectItem key={m.value} value={m.value}>
+                      {m.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
           {isLoading ? (
-            <div className="flex justify-center py-8"><Loader2 className="h-8 w-8 animate-spin text-muted-foreground" /></div>
+            <div className="flex justify-center py-8">
+              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            </div>
           ) : (
             <Table>
               <TableHeader>
@@ -145,29 +153,47 @@ export default function HistoricoVendas() {
                   <TableHead>Data</TableHead>
                   <TableHead>Produto</TableHead>
                   <TableHead>Cliente</TableHead>
-                  <TableHead className="text-right">Quantidade</TableHead>
-                  <TableHead className="text-right">Receita</TableHead>
+                  <TableHead>UF</TableHead>
+                  <TableHead>Tipo</TableHead>
+                  <TableHead className="text-right">Qtd</TableHead>
+                  <TableHead className="text-right">Valor</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {vendas?.length === 0 ? (
+                {!rows?.length ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
-                      Nenhuma venda registrada
+                    <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
+                      Nenhum faturamento no período. Use Importar / Atualizar para carregar do ERP.
                     </TableCell>
                   </TableRow>
-                ) : vendas?.map((venda) => (
-                  <TableRow key={venda.id}>
-                    <TableCell className="font-mono">{venda.nfNumero || "-"}</TableCell>
-                    <TableCell>{formatDate(venda.dataNf)}</TableCell>
-                    <TableCell>{getProdutoNome(venda.produtoId)}</TableCell>
-                    <TableCell>{getClienteNome(venda.clienteId)}</TableCell>
-                    <TableCell className="text-right">{parseFloat(venda.quantidade || "0").toLocaleString("pt-BR")}</TableCell>
-                    <TableCell className="text-right font-medium">{formatCurrency(venda.receitaBruta)}</TableCell>
-                  </TableRow>
-                ))}
+                ) : (
+                  rows.map((row) => (
+                    <TableRow key={row.id}>
+                      <TableCell className="font-mono">{row.nfNumero || "-"}</TableCell>
+                      <TableCell>{formatDate(row.dataEmissao)}</TableCell>
+                      <TableCell className="max-w-[220px] truncate" title={row.descricaoItem || row.codMaterial || ""}>
+                        {row.descricaoItem || row.codMaterial || "-"}
+                      </TableCell>
+                      <TableCell className="font-mono text-sm">{row.codCliente || row.cnpj || "-"}</TableCell>
+                      <TableCell>{row.uf || "-"}</TableCell>
+                      <TableCell>{row.tipoFaturamento || "SAIDA"}</TableCell>
+                      <TableCell className="text-right">
+                        {parseFloat(row.qtd || "0").toLocaleString("pt-BR")}
+                      </TableCell>
+                      <TableCell className="text-right font-medium">
+                        {formatCurrency(row.valorTotal)}
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
               </TableBody>
             </Table>
+          )}
+          {rows && rows.length > 0 && (stats?.totalRegistros ?? 0) > rows.length && (
+            <p className="text-xs text-muted-foreground mt-3">
+              Exibindo {rows.length.toLocaleString("pt-BR")} de{" "}
+              {(stats?.totalRegistros ?? 0).toLocaleString("pt-BR")} registros do período.
+            </p>
           )}
         </CardContent>
       </Card>
