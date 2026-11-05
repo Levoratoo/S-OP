@@ -279,9 +279,90 @@ export type ErpCarteiraAbertoRow = {
   sequencia: number;
 };
 
+export type CarteiraAbertoRawLine = {
+  codigo: string;
+  sku: string;
+  anoEnt: number;
+  mesEnt: number;
+  quantidade: number;
+  receitaBruta: number;
+};
+
+/** Uma linha por pedido × SKU (soma entregas de todos os meses). */
+export function aggregateCarteiraPedidosPorPedidoSku(
+  raw: CarteiraAbertoRawLine[]
+): ErpCarteiraAbertoRow[] {
+  const byKey = new Map<
+    string,
+    {
+      codigo: string;
+      sku: string;
+      quantidade: number;
+      receitaBruta: number;
+      anoEnt: number;
+      mesEnt: number;
+    }
+  >();
+
+  for (const row of raw) {
+    const codigo = String(row.codigo || "").trim();
+    const sku = String(row.sku || "").trim();
+    if (!codigo || !sku) continue;
+    const key = `${codigo.toUpperCase()}||${sku.toUpperCase()}`;
+    const qtd = Number(row.quantidade) || 0;
+    const receita = Number(row.receitaBruta) || 0;
+    const y = Number(row.anoEnt);
+    const m = Number(row.mesEnt);
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, {
+        codigo,
+        sku,
+        quantidade: qtd,
+        receitaBruta: receita,
+        anoEnt: y,
+        mesEnt: m,
+      });
+      continue;
+    }
+    existing.quantidade += qtd;
+    existing.receitaBruta += receita;
+    if (y < existing.anoEnt || (y === existing.anoEnt && m < existing.mesEnt)) {
+      existing.anoEnt = y;
+      existing.mesEnt = m;
+    }
+  }
+
+  const grouped = Array.from(byKey.values()).sort((a, b) =>
+    a.codigo.localeCompare(b.codigo, "pt-BR") || a.sku.localeCompare(b.sku, "pt-BR")
+  );
+
+  const rows: ErpCarteiraAbertoRow[] = [];
+  let lastCodigo = "";
+  let seqInPedido = 0;
+  for (const r of grouped) {
+    if (r.codigo !== lastCodigo) {
+      lastCodigo = r.codigo;
+      seqInPedido = 0;
+    }
+    seqInPedido += 1;
+    const competencia = `${r.anoEnt}-${String(r.mesEnt).padStart(2, "0")}-01`;
+    rows.push({
+      codigo: r.codigo,
+      sku: r.sku,
+      competencia,
+      quantidade: r.quantidade,
+      receitaBruta: r.receitaBruta,
+      sequencia: seqInPedido,
+    });
+  }
+
+  return rows;
+}
+
 /**
  * Pedidos em aberto: Status Liberado + tipo PRG.
- * Uma linha por pedido × SKU × mês de entrega (soma das parcelas abertas).
+ * Uma linha por pedido × SKU (quantidade total, competência = 1ª entrega).
  */
 export async function queryErpCarteiraPedidosAbertos(): Promise<{
   rows: ErpCarteiraAbertoRow[];
@@ -297,39 +378,24 @@ WITH abertos AS (
     YEAR(DataEntrega) AS anoEnt,
     MONTH(DataEntrega) AS mesEnt,
     CAST(ISNULL(Qtde, 0) AS float) AS qtde,
-    CAST(ISNULL(PrecoUnitario, 0) AS float) AS preco
+    CAST(ISNULL(Qtde, 0) AS float) * CAST(ISNULL(PrecoUnitario, 0) AS float) AS receitaLinha
   FROM ${CARTEIRA_ERP_SOURCE}
   WHERE StatusPedido = N'Liberado'
     AND UPPER(LTRIM(RTRIM(ISNULL(usr_acabado, N'')))) = N'PRG'
     AND ISNULL(Encerrado, N'N') = N'N'
     AND ISNULL(Qtde, 0) > 0
     AND DataEntrega IS NOT NULL
-),
-agg AS (
-  SELECT
-    codigo,
-    sku,
-    anoEnt,
-    mesEnt,
-    SUM(qtde) AS quantidade,
-    SUM(qtde * preco) AS receitaBruta
-  FROM abertos
-  WHERE codigo <> N'' AND sku <> N''
-  GROUP BY codigo, sku, anoEnt, mesEnt
 )
 SELECT
   codigo,
   sku,
-  anoEnt,
-  mesEnt,
-  quantidade,
-  receitaBruta,
-  ROW_NUMBER() OVER (
-    PARTITION BY codigo
-    ORDER BY anoEnt, mesEnt, sku
-  ) AS sequencia
-FROM agg
-ORDER BY codigo, sequencia
+  YEAR(DataEntrega) AS anoEnt,
+  MONTH(DataEntrega) AS mesEnt,
+  qtde AS quantidade,
+  receitaLinha AS receitaBruta
+FROM abertos
+WHERE codigo <> N'' AND sku <> N''
+ORDER BY codigo, sku, anoEnt, mesEnt
 `;
 
   const result = await erp.request().query(sqlText);
@@ -340,22 +406,18 @@ ORDER BY codigo, sequencia
     mesEnt: number;
     quantidade: number;
     receitaBruta: number;
-    sequencia: number;
   }>;
 
-  const rows: ErpCarteiraAbertoRow[] = raw.map(r => {
-    const y = Number(r.anoEnt);
-    const m = Number(r.mesEnt);
-    const competencia = `${y}-${String(m).padStart(2, "0")}-01`;
-    return {
+  const rows = aggregateCarteiraPedidosPorPedidoSku(
+    raw.map(r => ({
       codigo: String(r.codigo || "").trim(),
       sku: String(r.sku || "").trim(),
-      competencia,
+      anoEnt: Number(r.anoEnt),
+      mesEnt: Number(r.mesEnt),
       quantidade: Number(r.quantidade) || 0,
       receitaBruta: Number(r.receitaBruta) || 0,
-      sequencia: Number(r.sequencia) || 1,
-    };
-  });
+    }))
+  );
 
   return {
     rows,

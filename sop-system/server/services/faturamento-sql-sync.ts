@@ -7,24 +7,6 @@ import {
   queryErpFaturamentoRowsInRange,
   testErpConnection,
 } from "./erp-mssql";
-import { acceptPendingMarcasFromFaturamento } from "./seed-from-faturamento";
-
-async function autoAcceptMarcasPendentes() {
-  try {
-    const result = await acceptPendingMarcasFromFaturamento();
-    if (result.created > 0) {
-      console.log(`[faturamento] ${result.created} marca(s) nova(s) incluída(s) no cadastro`);
-    }
-    return result.created;
-  } catch (error) {
-    console.warn(
-      `[faturamento] falha ao incluir marcas novas: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
-    return 0;
-  }
-}
 
 function asText(value: unknown): string {
   if (value === null || value === undefined) return "";
@@ -240,8 +222,6 @@ export async function syncFaturamentoFromSql(options?: {
   }
 
   await db.rebuildFaturamentoResumo();
-  await autoAcceptMarcasPendentes();
-
   return {
     fetched,
     mapped,
@@ -308,7 +288,6 @@ export async function syncFaturamentoYears(years: number[]): Promise<Faturamento
   }
 
   await db.rebuildFaturamentoResumo();
-  await autoAcceptMarcasPendentes();
   return { source: connection.source, years: results };
 }
 
@@ -463,7 +442,6 @@ async function runSyncFaturamentoRecent(): Promise<FaturamentoRecentSyncResult> 
   await db.clearFaturamentoDateRange(inicio, fim);
   const insertResult = await db.createFaturamentoBatch(batch);
   await db.rebuildFaturamentoResumo();
-  await autoAcceptMarcasPendentes();
   const maxDepois = await db.getFaturamentoMaxDataIso();
 
   return {

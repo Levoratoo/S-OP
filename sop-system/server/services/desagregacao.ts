@@ -1,6 +1,6 @@
 /**
  * Passo 3 — desagrega Previsão Final Sugerida (Tipo-Marca-Linha / total 12M)
- * em grade SKU × mês usando sazonalidade da marca e rateio (6M preferencial, senão 12M).
+ * em grade SKU × mês usando sazonalidade por SKU (fallback: marca) e rateio (6M preferencial, senão 12M).
  */
 import { and, desc, eq } from "drizzle-orm";
 import XLSX from "xlsx";
@@ -100,6 +100,68 @@ async function loadSazonalidadeMap() {
 
 function defaultSazonalidade() {
   return Array(12).fill(1 / 12) as number[];
+}
+
+/** Sazonalidade mensal por SKU (De-Para aplicado), derivada do faturamento SAIDA. */
+export async function loadSazonalidadeSkuMap(anosHistorico = 3) {
+  const db = await getDb();
+  if (!db) return new Map<string, number[]>();
+
+  const dePara = await loadDeParaMap();
+  const rows = await db
+    .select({
+      sku: faturamento.codMaterial,
+      dataEmissao: faturamento.dataEmissao,
+      qtd: faturamento.qtd,
+    })
+    .from(faturamento)
+    .where(eq(faturamento.tipoFaturamento, "SAIDA"));
+
+  const now = new Date();
+  const anoMin = now.getFullYear() - Math.max(1, anosHistorico) + 1;
+  const map = new Map<string, number[]>();
+
+  for (const row of rows) {
+    const raw = (row.sku || "").trim();
+    if (!raw) continue;
+    const skuKey = resolveCodigoAtual(raw, dePara).trim().toUpperCase();
+    if (!skuKey) continue;
+    const d = new Date(String(row.dataEmissao));
+    if (Number.isNaN(d.getTime())) continue;
+    if (d.getFullYear() < anoMin) continue;
+    if (!map.has(skuKey)) map.set(skuKey, Array(12).fill(0));
+    const arr = map.get(skuKey)!;
+    arr[d.getMonth()] += netSalesQuantity("SAIDA", toNumber(row.qtd));
+  }
+
+  Array.from(map.entries()).forEach(([key, arr]) => {
+    const sum = arr.reduce((a, b) => a + b, 0);
+    if (sum <= 0) {
+      map.delete(key);
+      return;
+    }
+    if (Math.abs(sum - 1) > 0.01) {
+      map.set(
+        key,
+        arr.map(v => v / sum)
+      );
+    }
+  });
+
+  return map;
+}
+
+function resolveSazonalidadeForSku(
+  sku: string,
+  marca: string | null | undefined,
+  sazSku: Map<string, number[]>,
+  sazMarca: Map<string, number[]>
+) {
+  const skuKey = (sku || "").trim().toUpperCase();
+  const bySku = skuKey ? sazSku.get(skuKey) : undefined;
+  if (bySku) return bySku;
+  const marcaKey = (marca || "").trim().toLowerCase();
+  return sazMarca.get(marcaKey) || defaultSazonalidade();
 }
 
 export function getClosedWindowBounds(now = new Date()) {
@@ -205,6 +267,7 @@ async function computeRateiosPorSku(now = new Date()) {
       valorVenda: produtos.valorVenda,
       familiaId: produtos.familiaId,
       marcaId: produtos.marcaId,
+      status: produtos.status,
     })
     .from(produtos);
   const [familiasRows, gestoresRows, gestorMarcaRows] = await Promise.all([
@@ -527,6 +590,7 @@ export async function desagregarJobParaCicloComercial(input: DesagregarInput) {
   }
 
   const sazonalidade = await loadSazonalidadeMap();
+  const sazonalidadeSku = await loadSazonalidadeSkuMap();
   const rateios = await computeRateiosPorSku();
 
   type SkuRateio = NonNullable<ReturnType<typeof rateios.get>>;
@@ -631,8 +695,12 @@ export async function desagregarJobParaCicloComercial(input: DesagregarInput) {
 
     base.forEach((skuInfo, idx) => {
       const rateio = pesos[idx] / somaPesos;
-      const marcaKey = (skuInfo.marca || "").toLowerCase();
-      const saz = sazonalidade.get(marcaKey) || defaultSazonalidade();
+      const saz = resolveSazonalidadeForSku(
+        skuInfo.sku,
+        skuInfo.marca,
+        sazonalidadeSku,
+        sazonalidade
+      );
       const plano = resolvePlanoColab(
         skuInfo.tipoEstoque,
         "tipoNegocio" in skuInfo ? skuInfo.tipoNegocio : null

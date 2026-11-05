@@ -285,38 +285,6 @@ export const appRouter = router({
     getById: protectedProcedure
       .input(z.object({ id: z.number() }))
       .query(({ input }) => db.getClienteById(input.id)),
-    
-    create: protectedProcedure
-      .input(z.object({
-        razaoSocial: z.string().min(1),
-        nomeFantasia: z.string().optional(),
-        cnpjCpf: z.string().optional(),
-        clienteRelacionadoId: z.number().nullable().optional(),
-        cidade: z.string().optional(),
-        estado: z.string().max(2).optional(),
-        status: z.enum(["ATIVO", "INATIVO"]).default("ATIVO"),
-      }))
-      .mutation(({ input }) => db.createCliente(input)),
-    
-    update: protectedProcedure
-      .input(z.object({
-        id: z.number(),
-        razaoSocial: z.string().min(1).optional(),
-        nomeFantasia: z.string().optional(),
-        cnpjCpf: z.string().optional(),
-        clienteRelacionadoId: z.number().nullable().optional(),
-        cidade: z.string().optional(),
-        estado: z.string().max(2).optional(),
-        status: z.enum(["ATIVO", "INATIVO"]).optional(),
-      }))
-      .mutation(({ input }) => {
-        const { id, ...data } = input;
-        return db.updateCliente(id, data);
-      }),
-    
-    delete: protectedProcedure
-      .input(z.object({ id: z.number() }))
-      .mutation(({ input }) => db.deleteCliente(input.id)),
   }),
 
   // ==================== RECURSOS ====================

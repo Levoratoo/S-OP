@@ -162,6 +162,68 @@ export function resolveSkuCodificacao(
   return buildSkuCodificacao(code, marca);
 }
 
+function mergeMonthValueMaps(
+  target: Map<string, number>,
+  source: Map<string, number>
+) {
+  for (const [month, qty] of source) {
+    target.set(month, (target.get(month) || 0) + qty);
+  }
+}
+
+/** SKU canônico após De-Para (cadeia resolvida). */
+export function canonicalSkuCode(rawSku: string, deParaMap: Map<string, string>) {
+  const trimmed = (rawSku || "").trim();
+  if (!trimmed) return trimmed;
+  return resolveCodigoAtual(trimmed, deParaMap);
+}
+
+export function isDeParaAliasSku(rawSku: string, deParaMap: Map<string, string>) {
+  const trimmed = (rawSku || "").trim();
+  if (!trimmed) return false;
+  return canonicalSkuCode(trimmed, deParaMap).toUpperCase() !== trimmed.toUpperCase();
+}
+
+export function remapCodificacaoByDePara(
+  codificacao: string,
+  deParaMap: Map<string, string>,
+  skuMarcaOficial: ReadonlyMap<string, string>
+) {
+  const dash = codificacao.indexOf("-");
+  const skuPart = dash > 0 ? codificacao.slice(0, dash) : codificacao;
+  const marcaPart = dash > 0 ? codificacao.slice(dash + 1) : null;
+  const resolved = canonicalSkuCode(skuPart, deParaMap);
+  if (resolved.toUpperCase() === skuPart.toUpperCase()) return codificacao;
+  return resolveSkuCodificacao(resolved, marcaPart, skuMarcaOficial);
+}
+
+export function consolidateVendasAggByDePara<
+  MonthKey extends string,
+>(
+  vendasAgg: Map<string, Map<MonthKey, number>>,
+  deParaMap: Map<string, string>,
+  skuMarcaOficial: ReadonlyMap<string, string>
+) {
+  const merged = new Map<string, Map<MonthKey, number>>();
+  for (const [codificacao, months] of vendasAgg) {
+    const canonical = remapCodificacaoByDePara(codificacao, deParaMap, skuMarcaOficial);
+    if (!merged.has(canonical)) merged.set(canonical, new Map());
+    mergeMonthValueMaps(merged.get(canonical)!, months);
+  }
+  return merged;
+}
+
+export function previsaoCodificacaoForProduto(
+  prod: { codItem?: string | null; codigo?: string | null; marca?: string | null },
+  skuFallback: string,
+  deParaMap: Map<string, string>,
+  skuMarcaOficial: ReadonlyMap<string, string>
+) {
+  const raw = (prod.codItem || prod.codigo || skuFallback || "").trim();
+  const canonical = canonicalSkuCode(raw, deParaMap);
+  return resolveSkuCodificacao(canonical, prod.marca || "SEM-MARCA", skuMarcaOficial);
+}
+
 export function isTmlCodificacao(codigo: string | null | undefined) {
   return /^(MTS|MTO|ENG)-/i.test(String(codigo || "").trim());
 }
@@ -848,7 +910,7 @@ export async function gerarBasesPrevisaoPython(options?: {
     monthsWithData.add(col);
 
     const skuKey = (prod.codItem || prod.codigo || skuAtual || skuOriginal).trim();
-    const codificacao = resolveSkuCodificacao(skuKey, marca, skuMarcaOficial);
+    const codificacao = previsaoCodificacaoForProduto(prod, skuKey, deParaMap, skuMarcaOficial);
     // Devolução com Qtd. positiva no ERP → sinal negativo (como Qtd. líquida do Excel).
     let qtd = toNumber(row.qtd);
     if (row.tipoFaturamento === "DEVOLUCAO" && qtd > 0) qtd = -qtd;
@@ -869,18 +931,29 @@ export async function gerarBasesPrevisaoPython(options?: {
     if (prod.projetarEstatistica !== true || !isSkuAcabado(prod.codItem || prod.codigo)) continue;
     const skuKey = (prod.codItem || prod.codigo || "").trim();
     if (!skuKey) continue;
+    if (isDeParaAliasSku(skuKey, deParaMap)) continue;
     const tipo = prod.tipoEstoque || "MTS";
     const marca = prod.marca || "SEM-MARCA";
     const linha = prod.linha || "SEM-LINHA";
     if (isTipoOutros(tipo, prod.tipoNegocio, linha)) continue;
     if (marcasInativas.has(normalizeKey(marca))) continue;
-    const codificacao = resolveSkuCodificacao(skuKey, marca, skuMarcaOficial);
+    const codificacao = previsaoCodificacaoForProduto(prod, skuKey, deParaMap, skuMarcaOficial);
     if (!vendasAgg.has(codificacao)) {
       vendasAgg.set(codificacao, new Map());
     }
   }
 
-  if (vendasAgg.size === 0) {
+  const vendasConsolidadas = consolidateVendasAggByDePara(vendasAgg, deParaMap, skuMarcaOficial);
+  const clientesConsolidados = new Map<string, Map<string, number>>();
+  for (const [key, mapa] of clientesAgg) {
+    const [codificacao, cliente] = key.split("||");
+    const canonical = remapCodificacaoByDePara(codificacao || "", deParaMap, skuMarcaOficial);
+    const newKey = `${canonical}||${cliente || "SEM-CLIENTE"}`;
+    if (!clientesConsolidados.has(newKey)) clientesConsolidados.set(newKey, new Map());
+    mergeMonthValueMaps(clientesConsolidados.get(newKey)!, mapa);
+  }
+
+  if (vendasConsolidadas.size === 0) {
     throw new PrevisaoEtlUserError(
       "Nenhum SKU elegível após filtros (Skus Projetar / De-Para / Marca ativa / ≠ Outros). " +
         `Revise Cadastros → Skus Projetar (sincronize o Estatística IA). Excluídos: sem projetar=${linhasSemSkuProjetar}, Outros=${linhasOutrosExcluidas}, marca inativa=${marcasInativasExcluidas}.`
@@ -895,7 +968,7 @@ export async function gerarBasesPrevisaoPython(options?: {
     );
   }
 
-  const vendasSorted = Array.from(vendasAgg.entries()).sort(([a], [b]) =>
+  const vendasSorted = Array.from(vendasConsolidadas.entries()).sort(([a], [b]) =>
     a.localeCompare(b, "pt-BR")
   );
   const vendasRows = vendasSorted.map(([codificacao, mapa]) => {
@@ -911,7 +984,7 @@ export async function gerarBasesPrevisaoPython(options?: {
     "Planilha1"
   );
 
-  const clientesSorted = Array.from(clientesAgg.entries()).sort(([a], [b]) =>
+  const clientesSorted = Array.from(clientesConsolidados.entries()).sort(([a], [b]) =>
     a.localeCompare(b, "pt-BR")
   );
   const clientesRows = clientesSorted.map(([key, mapa]) => {

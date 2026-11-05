@@ -134,7 +134,9 @@ export async function syncPvFromCarteira(cicloId: number) {
       and(eq(cicloComercialItens.cicloId, cicloId), eq(cicloComercialItens.planoColab, "PV_MTO"))
     );
 
-  type Agg = {
+  type PvLine = {
+    pedidoCodigo: string;
+    sequencia: number;
     sku: string;
     descricao: string | null;
     marca: string | null;
@@ -145,7 +147,7 @@ export async function syncPvFromCarteira(cicloId: number) {
     gestor: string | null;
     meses: number[];
   };
-  const bySku = new Map<string, Agg>();
+  const lines: PvLine[] = [];
 
   let pedidosForaDoCiclo = 0;
   let pedidosNoCiclo = 0;
@@ -163,45 +165,48 @@ export async function syncPvFromCarteira(cicloId: number) {
     }
     pedidosNoCiclo += 1;
 
-    if (!bySku.has(sku)) {
-      bySku.set(sku, {
-        sku,
-        descricao: prod.descricao || prod.nome || null,
-        marca: prod.marca,
-        linha: prod.linha,
-        tipoEstoque: prod.tipoEstoque === "MTO" ? "MTO" : "MTS",
-        valorVenda: prod.valorVenda,
-        familia: dimensionsByProductId.get(prod.id)?.familia ?? null,
-        gestor: dimensionsByProductId.get(prod.id)?.gestor ?? null,
-        meses: Array(12).fill(0),
-      });
-    }
-    bySku.get(sku)!.meses[idx] += toNum(ped.quantidade);
+    const meses = Array(12).fill(0);
+    meses[idx] = toNum(ped.quantidade);
+    lines.push({
+      pedidoCodigo: String(ped.codigo || "").trim() || sku,
+      sequencia: Number(ped.sequencia) > 0 ? Number(ped.sequencia) : 1,
+      sku,
+      descricao: prod.descricao || prod.nome || null,
+      marca: prod.marca,
+      linha: prod.linha,
+      tipoEstoque: prod.tipoEstoque === "MTO" ? "MTO" : "MTS",
+      valorVenda: prod.valorVenda,
+      familia: dimensionsByProductId.get(prod.id)?.familia ?? null,
+      gestor: dimensionsByProductId.get(prod.id)?.gestor ?? null,
+      meses,
+    });
   }
 
   const itens: InsertCicloComercialItem[] = [];
-  for (const agg of Array.from(bySku.values())) {
+  for (const line of lines) {
     const meses = emptyMeses();
     let total = 0;
     for (let i = 0; i < 12; i++) {
-      const q = Math.round(agg.meses[i] * 100) / 100;
+      const q = Math.round(line.meses[i] * 100) / 100;
       meses[MES_KEYS[i]] = String(q);
       total += q;
     }
+    if (total <= 0) continue;
     itens.push({
       cicloId,
       planoColab: "PV_MTO",
-      sku: agg.sku,
-      descricao: agg.descricao,
-      marca: agg.marca,
-      linha: agg.linha,
-      tipoEstoque: agg.tipoEstoque,
-      tipoMarcaLinha: `${agg.tipoEstoque}-${agg.marca || "SEM-MARCA"}-${agg.linha || "SEM-LINHA"}`,
+      sku: line.sku,
+      descricao: line.descricao,
+      marca: line.marca,
+      linha: line.linha,
+      tipoEstoque: line.tipoEstoque,
+      tipoMarcaLinha: `${line.tipoEstoque}-${line.marca || "SEM-MARCA"}-${line.linha || "SEM-LINHA"}`,
       projetar: false,
       qtdeTotalEstatistica: "0",
-      valorVendaSnapshot: String(toNum(agg.valorVenda)),
-      familiaSnapshot: agg.familia,
-      gestorSnapshot: agg.gestor,
+      valorVendaSnapshot: String(toNum(line.valorVenda)),
+      familiaSnapshot: line.familia,
+      gestorSnapshot: line.gestor,
+      crmCard: line.pedidoCodigo,
       ...meses,
       qtdeColaborada: String(Math.round(total * 100) / 100),
       origem: "PV",
@@ -547,7 +552,7 @@ export async function getResumoRs(cicloId: number) {
     const prod = byCode.get(item.sku.toUpperCase());
     const valorUnit = toNum(item.valorVendaSnapshot ?? prod?.valorVenda);
     if (valorUnit <= 0) skusSemPreco.add(item.sku);
-    const qtde = sumItemMonths(item);
+    const qtde = sumItemMonths(item as Record<string, unknown>);
     const valorTotal = qtde * valorUnit;
     byPlano[item.planoColab] = (byPlano[item.planoColab] || 0) + valorTotal;
     const mk = item.marca || "SEM-MARCA";
@@ -800,10 +805,7 @@ export async function getConsolidadoArquivo(cicloId: number) {
           : fatLookup.precoBySku.get(sku.toUpperCase()) ?? 0;
 
     for (let i = 0; i < 12; i++) {
-      const qtd = monthEffectiveQty(
-        item as unknown as Record<string, string | number | null | undefined>,
-        i
-      );
+      const qtd = monthEffectiveQty(item as Record<string, unknown>, i);
       if (!qtd) continue;
       const mesAbs = ciclo.mesInicio + i;
       const ano = ciclo.anoInicio + Math.floor((mesAbs - 1) / 12);
@@ -1035,7 +1037,7 @@ export async function getAaPrevReal(cicloId: number) {
     .filter(i => i.planoColab === "MTS" || i.planoColab === "JITO")
     .map(item => {
       const key = item.sku.toUpperCase();
-      const colab = sumItemMonths(item);
+      const colab = sumItemMonths(item as Record<string, unknown>);
       const prev = toNum(item.qtdeTotalEstatistica);
       const aa = aaBySku.get(key) || 0;
       const real = realBySku.get(key) || 0;

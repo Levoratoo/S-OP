@@ -21,7 +21,7 @@ import { Loader2, Plus, RefreshCw, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { ColaboracaoArquivo } from "./ColaboracaoArquivo";
 import { ColaboracaoResumos } from "./ColaboracaoResumos";
-import { parseCrmExcel } from "./parse-crm-excel";
+import { CrmExcelLayoutError, parseCrmExcel } from "./parse-crm-excel";
 
 type PlanoColab = "MTS" | "PV_MTO" | "CRM";
 type GradeAba = PlanoColab | "CONSOLIDADO";
@@ -176,6 +176,10 @@ export default function Colaboracoes() {
       }
       importCrm.mutate({ cicloId: selectedCicloId, rows });
     } catch (error) {
+      if (error instanceof CrmExcelLayoutError) {
+        toast.error(error.message);
+        return;
+      }
       toast.error(`Falha ao ler CRM: ${String(error)}`);
     }
   };
@@ -492,7 +496,7 @@ export default function Colaboracoes() {
                       {abaGrade === "CONSOLIDADO"
                         ? "Arquivo consolidado do ciclo: uma linha por SKU e mês, no modelo padrão."
                         : abaGrade === "PV_MTO"
-                          ? "Pedidos em aberto da Carteira / PV (Liberado + PRG), somados por SKU no horizonte do ciclo"
+                          ? "Mesma grade da Carteira / PV: uma linha por pedido × SKU (Liberado + PRG)"
                           : abaGrade === "CRM"
                             ? "Cards do comercial. Importe o Excel para preencher a grade deste ciclo."
                             : "MTS: realizado 2025/2026 e, em cada mês do ciclo, previsão estatística ao lado da Colab do vendedor (em branco = usa a previsão)"}
@@ -677,6 +681,7 @@ export default function Colaboracoes() {
                             <TableHeader>
                               <TableRow>
                                 <TableHead>SKU</TableHead>
+                                {p === "PV_MTO" && <TableHead>Pedido</TableHead>}
                                 <TableHead>Marca</TableHead>
                                 <TableHead>Linha</TableHead>
                                 {MES_KEYS.map((_, i) => (
@@ -688,7 +693,7 @@ export default function Colaboracoes() {
                             <TableBody>
                               {filteredItens.length === 0 ? (
                                 <TableRow>
-                                  <TableCell colSpan={16} className="text-center text-muted-foreground">
+                                  <TableCell colSpan={p === "PV_MTO" ? 17 : 16} className="text-center text-muted-foreground">
                                     {p === "PV_MTO"
                                       ? "Nenhum pedido da carteira neste horizonte."
                                       : p === "CRM"
@@ -711,6 +716,11 @@ export default function Colaboracoes() {
                                       <TableCell className="max-w-[140px] truncate font-medium">
                                         {item.sku}
                                       </TableCell>
+                                      {p === "PV_MTO" && (
+                                        <TableCell className="font-mono text-xs">
+                                          {item.crmCard || "—"}
+                                        </TableCell>
+                                      )}
                                       <TableCell>{item.marca}</TableCell>
                                       <TableCell>{item.linha}</TableCell>
                                       {MES_KEYS.map(key => (

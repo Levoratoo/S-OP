@@ -92,8 +92,10 @@ describe("S&OP System Routes", () => {
       expect(appRouter._def.procedures).toHaveProperty("clientes.list");
     });
 
-    it("has create procedure defined", () => {
-      expect(appRouter._def.procedures).toHaveProperty("clientes.create");
+    it("does not expose manual CRUD (somente ERP)", () => {
+      expect(appRouter._def.procedures).not.toHaveProperty("clientes.create");
+      expect(appRouter._def.procedures).not.toHaveProperty("clientes.update");
+      expect(appRouter._def.procedures).not.toHaveProperty("clientes.delete");
     });
   });
 
