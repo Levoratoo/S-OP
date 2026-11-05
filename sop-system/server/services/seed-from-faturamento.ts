@@ -375,7 +375,7 @@ export async function acceptPendingClienteFromFaturamento(chave: string) {
   return { created: true, clienteId: Number(created.id ?? 0) };
 }
 
-export type PendingMarcaFromFaturamento = { nome: string; notas: number };
+export type PendingMarcaFromFaturamento = { nome: string; notas: number; gestorSugerido?: string | null };
 
 /** Marcas que aparecem no faturamento e ainda não estão no cadastro de Marcas. */
 export async function listPendingMarcasFromFaturamento(): Promise<PendingMarcaFromFaturamento[]> {
@@ -393,9 +393,17 @@ export async function listPendingMarcasFromFaturamento(): Promise<PendingMarcaFr
     ORDER BY notas DESC
   `);
   const rows = (result[0] as unknown as PendingMarcaFromFaturamento[]) ?? [];
-  return rows
+  const pending = rows
     .map(row => ({ nome: String(row.nome || "").trim(), notas: Number(row.notas) || 0 }))
     .filter(row => row.nome.length > 0);
+
+  const { getGestorNomeFromImportMap } = await import("./gestor-marca-import-apply");
+  const enriched: PendingMarcaFromFaturamento[] = [];
+  for (const row of pending) {
+    const gestorSugerido = await getGestorNomeFromImportMap(row.nome);
+    enriched.push({ ...row, gestorSugerido });
+  }
+  return enriched;
 }
 
 export async function acceptPendingMarcasFromFaturamento(nomes?: string[]) {
@@ -406,5 +414,7 @@ export async function acceptPendingMarcasFromFaturamento(nomes?: string[]) {
   const toCreate = pending.filter(row => !wanted || wanted.has(row.nome.toLowerCase()));
   if (toCreate.length === 0) return { created: 0 };
   await db.createMarcasBatch(toCreate.map(row => ({ nome: row.nome, ativo: true })));
+  const { applyImportMapLinksForMarcaNomes } = await import("./gestor-marca-import-apply");
+  await applyImportMapLinksForMarcaNomes(toCreate.map(row => row.nome));
   return { created: toCreate.length };
 }

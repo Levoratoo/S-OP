@@ -11,9 +11,10 @@ import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { trpc } from "@/lib/trpc";
-import { Plus, Pencil, Trash2, Loader2, Users, Tag, Download, Link, AlertCircle } from "lucide-react";
+import { Plus, Pencil, Trash2, Loader2, Users, Tag, Download, Link, AlertCircle, Upload } from "lucide-react";
 import { exportToCsv } from "@/lib/exportCsv";
 import { toast } from "sonner";
+import * as XLSX from "xlsx";
 
 export default function GestorMarca() {
   const [activeTab, setActiveTab] = useState("relacionamento");
@@ -174,6 +175,9 @@ export default function GestorMarca() {
               {pendingMarcas.slice(0, 24).map(marca => (
                 <Badge key={marca.nome} variant="outline" className="border-amber-400 bg-white text-amber-950">
                   {marca.nome}
+                  {marca.gestorSugerido ? (
+                    <span className="ml-1 text-xs text-amber-700">→ {marca.gestorSugerido}</span>
+                  ) : null}
                 </Badge>
               ))}
               {pendingMarcas.length > 24 && (
@@ -228,6 +232,7 @@ export default function GestorMarca() {
 function RelacionamentoTab() {
   const [isOpen, setIsOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [importingFile, setImportingFile] = useState(false);
   const [formData, setFormData] = useState({
     gestorId: "",
     marcaId: "",
@@ -265,6 +270,52 @@ function RelacionamentoTab() {
     onError: (error) => toast.error(error.message),
   });
 
+  const importMergeMutation = trpc.gestorMarca.importMerge.useMutation({
+    onSuccess: result => {
+      utils.gestorMarca.list.invalidate();
+      utils.cadastrosSistema.pendingMarcasFromFaturamento.invalidate();
+      const s = result.stats;
+      toast.success(
+        `Importação: ${s.linksCreated} vínculo(s) criado(s), ${s.linksUpdated} atualizado(s), ${s.pendingGestorStored} gestor(es) guardado(s) para marcas pendentes.`
+      );
+      if (result.unknownGestores.length > 0) {
+        toast.warning(
+          `${result.unknownGestores.length} gestor(es) não encontrado(s) no cadastro (primeiros: ${result.unknownGestores.slice(0, 3).join("; ")})`
+        );
+      }
+    },
+    onError: error => toast.error(error.message),
+  });
+
+  const handleImportFile = async (file: File) => {
+    setImportingFile(true);
+    try {
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: "array" });
+      const sheet = workbook.Sheets[workbook.SheetNames[0] ?? ""];
+      if (!sheet) throw new Error("Planilha vazia");
+      const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as unknown[][];
+      const headers = (aoa[0] as unknown[] | undefined)?.map(h => String(h ?? "").trim().toLowerCase()) ?? [];
+      const marcaIdx = headers.findIndex(h => h === "marca");
+      const gestorIdx = headers.findIndex(h => h === "gestor");
+      if (marcaIdx < 0) throw new Error('Coluna "Marca" não encontrada.');
+      const rows: { marca: string; gestor: string }[] = [];
+      for (let i = 1; i < aoa.length; i++) {
+        const row = aoa[i] as unknown[];
+        const marca = String(row?.[marcaIdx] ?? "").trim();
+        if (!marca) continue;
+        const gestor = gestorIdx >= 0 ? String(row?.[gestorIdx] ?? "").trim() : "";
+        rows.push({ marca, gestor });
+      }
+      if (rows.length === 0) throw new Error("Nenhuma linha válida no arquivo.");
+      await importMergeMutation.mutateAsync(rows);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err));
+    } finally {
+      setImportingFile(false);
+    }
+  };
+
   const resetForm = () => {
     setFormData({ gestorId: "", marcaId: "" });
     setEditingId(null);
@@ -300,9 +351,32 @@ function RelacionamentoTab() {
       <CardHeader className="flex flex-row items-center justify-between">
         <div>
           <CardTitle className="flex items-center gap-2"><Link className="h-5 w-5" /> Relacionamento Gestor x Marca</CardTitle>
-          <CardDescription>Vincule gestores comerciais às marcas que gerenciam. A exportação inclui marcas novas do faturamento, ainda sem gestor.</CardDescription>
+          <CardDescription>Vincule gestores comerciais às marcas que gerenciam. Exporte, edite no Excel/CSV e reimporte para atualizar em lote.</CardDescription>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap justify-end">
+          <label className="inline-flex">
+            <input
+              type="file"
+              accept=".csv,.xlsx,.xls"
+              className="hidden"
+              disabled={importingFile || importMergeMutation.isPending}
+              onChange={e => {
+                const f = e.target.files?.[0];
+                e.target.value = "";
+                if (f) void handleImportFile(f);
+              }}
+            />
+            <Button variant="outline" asChild disabled={importingFile || importMergeMutation.isPending}>
+              <span>
+                {(importingFile || importMergeMutation.isPending) ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Upload className="h-4 w-4 mr-2" />
+                )}
+                Importar base
+              </span>
+            </Button>
+          </label>
           <Button
             variant="outline"
             onClick={() => {
@@ -375,7 +449,25 @@ function RelacionamentoTab() {
         </Dialog>
         </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-4">
+        <Alert className="border-muted bg-muted/40">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Regras da importação (Marca × Gestor)</AlertTitle>
+          <AlertDescription className="text-sm space-y-1">
+            <p>
+              Colunas esperadas: <strong>Marca</strong> e <strong>Gestor</strong> (mesmo layout da exportação).
+            </p>
+            <ul className="list-disc list-inside space-y-0.5">
+              <li>Marca já cadastrada com gestor vazio no arquivo: o vínculo atual é mantido.</li>
+              <li>Marca cadastrada com gestor preenchido: cria ou atualiza o vínculo somente se o gestor mudou.</li>
+              <li>
+                Marca nova (pendente do faturamento) com gestor: o gestor fica guardado e é aplicado ao incluir a
+                marca no cadastro.
+              </li>
+              <li>Marca nova sem gestor: permanece no alerta de pendentes; vínculos fora do arquivo não são removidos.</li>
+            </ul>
+          </AlertDescription>
+        </Alert>
         {isLoading ? (
           <div className="flex justify-center py-8"><Loader2 className="h-8 w-8 animate-spin" /></div>
         ) : (

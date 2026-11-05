@@ -29,6 +29,7 @@ import {
   listPendingSkusFromFaturamento,
   seedProdutosClientesFromFaturamento,
 } from "./services/seed-from-faturamento";
+import { applyGestorMarcaImportMerge } from "./services/gestor-marca-import-apply";
 import { seedCapacidadeBaseline } from "./services/seed-capacidade";
 import { invalidateDeParaCache } from "./services/de-para-map";
 import {
@@ -1476,6 +1477,9 @@ export const appRouter = router({
         return db.updateGestorMarca(id, data);
       }),
     delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(({ input }) => db.deleteGestorMarca(input.id)),
+    importMerge: protectedProcedure
+      .input(z.array(z.object({ marca: z.string(), gestor: z.string().default("") })))
+      .mutation(({ input }) => applyGestorMarcaImportMerge(input)),
   }),
 
   // ==================== DE-PARA DE CÓDIGOS ====================

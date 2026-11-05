@@ -325,7 +325,7 @@ export function startFaturamentoYearsSync(years: number[]): FaturamentoYearsSync
     result: null,
   };
   syncFaturamentoYears(years)
-    .then(result => {
+    .then(async result => {
       yearSyncStatus = {
         ...yearSyncStatus,
         status: "done",
@@ -334,6 +334,14 @@ export function startFaturamentoYearsSync(years: number[]): FaturamentoYearsSync
         error: null,
       };
       console.log(`[faturamento] anos recarregados ${result.years.map(y => y.year).join(",")}`);
+      try {
+        const { reconcileGestorMarcaImportMapAfterFaturamento } = await import(
+          "./gestor-marca-import-apply"
+        );
+        await reconcileGestorMarcaImportMapAfterFaturamento();
+      } catch (err) {
+        console.warn("[gestor-marca] reconcile após faturamento:", err);
+      }
     })
     .catch(error => {
       const message = error instanceof Error ? error.message : String(error);
