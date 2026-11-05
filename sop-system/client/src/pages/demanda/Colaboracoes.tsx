@@ -121,7 +121,7 @@ export default function Colaboracoes() {
   );
 
   const { data: carteiraPedidos, isLoading: loadingCarteira } = trpc.carteiraPedidos.list.useQuery(
-    { limit: 5000 },
+    { limit: 5000, apenasPvAberto: true },
     { enabled: Boolean(selectedCicloId) && abaGrade === "PV_MTO" }
   );
   const { data: produtosCarteira } = trpc.produtos.list.useQuery(undefined, {
@@ -874,6 +874,7 @@ export default function Colaboracoes() {
               cicloId={selectedCicloId}
               consolidado={consolidado}
               marcasConsolidado={marcasConsolidado}
+              marcasSemGestor={consolidado?.marcasSemGestor}
             />
           </TabsContent>
         </Tabs>

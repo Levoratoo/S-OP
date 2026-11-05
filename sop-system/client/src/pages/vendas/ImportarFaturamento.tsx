@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { trpc } from "@/lib/trpc";
 import { AlertCircle, CheckCircle2, Loader2, Trash2, Download, Database, RefreshCw, Users } from "lucide-react";
 import { toast } from "sonner";
-import { useRefreshFaturamentoRecent } from "./useRefreshFaturamentoRecent";
+import { useRefreshFaturamentoRecent, toastPostSyncAlerts } from "./useRefreshFaturamentoRecent";
 
 const MONTH_OPTIONS = [
   { value: "all", label: "Todos os meses" },
@@ -84,6 +84,7 @@ export default function ImportarFaturamento() {
         .map(year => `${year.year}: ${year.inserted.toLocaleString("pt-BR")}`)
         .join(" · ");
       toast.success(`Anos recarregados. ${detail}`);
+      if (status.result.postSync) toastPostSyncAlerts(status.result.postSync);
       utils.faturamento.stats.invalidate();
       utils.faturamento.list.invalidate();
       utils.faturamento.porMes.invalidate();
@@ -97,6 +98,7 @@ export default function ImportarFaturamento() {
       toast.success(
         `Carga salva: ${result.inserted.toLocaleString("pt-BR")} registros de ${result.desde} em diante`
       );
+      if (result.postSync) toastPostSyncAlerts(result.postSync);
       utils.faturamento.stats.invalidate();
       utils.faturamento.list.invalidate();
       utils.faturamento.porMes.invalidate();
@@ -327,7 +329,7 @@ export default function ImportarFaturamento() {
             Carregar histórico do ERP
           </CardTitle>
           <CardDescription>
-            Uma carga grava o histórico local (desde {sqlTestQuery.data?.desde ?? "2020-01-01"}),
+            Uma carga grava o histórico local (desde {sqlTestQuery.data?.desde ?? "2022-01-01"}),
             ano a ano. Depois disso basta filtrar por mês — só rode de novo para atualizar.
           </CardDescription>
         </CardHeader>
@@ -360,7 +362,7 @@ export default function ImportarFaturamento() {
                 ) : (
                   <p className="text-xs text-muted-foreground">
                     Contagem por ano indisponível ou zerada na view a partir de{" "}
-                    {sqlTestQuery.data?.desde ?? "2020-01-01"}.
+                    {sqlTestQuery.data?.desde ?? "2022-01-01"}.
                   </p>
                 )}
               </>
@@ -385,7 +387,7 @@ export default function ImportarFaturamento() {
               onClick={() => {
                 if (
                   confirm(
-                    "Isso atualiza o histórico local a partir do MetricsPROD (substitui o período desde 2020-01-01, ano a ano). Continuar?"
+                    "Isso atualiza o histórico local a partir do MetricsPROD (substitui o período desde 2022-01-01, ano a ano). Continuar?"
                   )
                 ) {
                   syncSqlMutation.mutate({ clearBefore: true });

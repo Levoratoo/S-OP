@@ -2,6 +2,7 @@ import { isSkuAcabado } from "@shared/sku-acabado";
 import { eq, desc, and, sql, asc, gte, lt, inArray } from "drizzle-orm";
 import { cfopDigitosSqlIn } from "@shared/cfop-faturamento";
 import { drizzle } from "drizzle-orm/mysql2";
+import { carteiraListWhere } from "./services/carteira-pv-aberto";
 import { 
   InsertUser, users, User,
   niveisAcesso, InsertNivelAcesso, NivelAcesso,
@@ -578,14 +579,15 @@ export async function createVendasBatch(data: InsertVenda[]) {
 }
 
 // ==================== CARTEIRA DE PEDIDOS ====================
-export async function listCarteiraPedidos(limit = 100) {
+export async function listCarteiraPedidos(limit = 100, apenasPvAberto = false) {
   const db = await getDb();
   if (!db) return [];
-  return db
-    .select()
-    .from(carteiraPedidos)
-    .orderBy(desc(carteiraPedidos.competencia), desc(carteiraPedidos.id))
-    .limit(limit);
+  const pvWhere = carteiraListWhere(apenasPvAberto);
+  const base = db.select().from(carteiraPedidos);
+  const ordered = pvWhere
+    ? base.where(pvWhere).orderBy(desc(carteiraPedidos.competencia), desc(carteiraPedidos.id))
+    : base.orderBy(desc(carteiraPedidos.competencia), desc(carteiraPedidos.id));
+  return ordered.limit(limit);
 }
 
 export async function createCarteiraPedido(data: InsertCarteiraPedido) {
@@ -2670,12 +2672,38 @@ export async function getCicloComercialConsolidado(cicloId: number) {
   const mts = (byPlano["MTS"]?.qtde ?? 0) + (byPlano["JITO"]?.qtde ?? 0);
   const crm = byPlano["CRM"]?.qtde ?? 0;
 
+  const dbConn = await getDb();
+  const marcasSemGestor: string[] = [];
+  if (dbConn) {
+    const [vinculos, marcasRows] = await Promise.all([
+      dbConn
+        .select({ marcaId: gestorMarca.marcaId })
+        .from(gestorMarca)
+        .where(eq(gestorMarca.ativo, true)),
+      dbConn.select({ id: marcas.id, nome: marcas.nome }).from(marcas),
+    ]);
+    const marcaIdComGestor = new Set(vinculos.map(v => v.marcaId));
+    const nomeComGestor = new Set<string>();
+    for (const m of marcasRows) {
+      if (marcaIdComGestor.has(m.id) && m.nome) {
+        nomeComGestor.add(m.nome.trim().toLowerCase());
+      }
+    }
+    for (const marcaKey of Object.keys(byMarca)) {
+      const norm = marcaKey.trim().toLowerCase();
+      if (norm === "sem-marca" || !norm) continue;
+      if (!nomeComGestor.has(norm)) marcasSemGestor.push(marcaKey);
+    }
+    marcasSemGestor.sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }
+
   return {
     totalQtde: total,
     totalEstatistica,
     gapColabVsEstatistica: total - totalEstatistica,
     byPlano,
     byMarca,
+    marcasSemGestor,
     resumoPlanos: {
       mts,
       jito: 0,

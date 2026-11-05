@@ -23,6 +23,7 @@ import {
   type InsertCicloComercialItem,
 } from "../../drizzle/schema";
 import { loadDeParaMap, resolveCodigoAtual } from "./de-para-map";
+import { carteiraPvAbertoWhere } from "./carteira-pv-aberto";
 
 const MES_KEYS = ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12"] as const;
 
@@ -125,7 +126,10 @@ export async function syncPvFromCarteira(cicloId: number) {
   }
 
   const { byId, dimensionsByProductId } = await loadProdutoMaps();
-  const pedidos = await db.select().from(carteiraPedidos).where(eq(carteiraPedidos.faturado, false));
+  const pedidos = await db
+    .select()
+    .from(carteiraPedidos)
+    .where(carteiraPvAbertoWhere());
 
   // A aba PV MTO é a carteira de PV em aberto (pedidos Liberado + PRG), não a previsão estatística.
   await db

@@ -44,8 +44,9 @@ describe("S&OP System Routes", () => {
   });
 
   describe("familias router", () => {
-    it("has list procedure defined (read-only)", () => {
+    it("list/getById desativados (Parte 2)", () => {
       expect(appRouter._def.procedures).toHaveProperty("familias.list");
+      expect(appRouter._def.procedures).toHaveProperty("familias.getById");
     });
 
     it("does not expose CRUD (tela removida Parte 2)", () => {
@@ -246,9 +247,11 @@ describe("S&OP System Routes", () => {
   });
 
   describe("carteiraPedidos router", () => {
-    it("não expõe importação manual", () => {
+    it("não expõe importação manual nem CRUD local", () => {
       expect(appRouter._def.procedures).not.toHaveProperty("carteiraPedidos.importBatch");
       expect(appRouter._def.procedures).not.toHaveProperty("carteiraPedidos.importBySku");
+      expect(appRouter._def.procedures).toHaveProperty("carteiraPedidos.create");
+      expect(appRouter._def.procedures).toHaveProperty("carteiraPedidos.syncFromErp");
     });
   });
 

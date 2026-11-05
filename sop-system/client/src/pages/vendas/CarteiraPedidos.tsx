@@ -7,7 +7,10 @@ import { toast } from "sonner";
 
 export default function CarteiraPedidos() {
   const utils = trpc.useUtils();
-  const { data: pedidos, isLoading } = trpc.carteiraPedidos.list.useQuery({ limit: 2000 });
+  const { data: pedidos, isLoading } = trpc.carteiraPedidos.list.useQuery({
+    limit: 2000,
+    apenasPvAberto: true,
+  });
   const { data: produtos } = trpc.produtos.list.useQuery();
   const { data: clientes } = trpc.clientes.list.useQuery();
 

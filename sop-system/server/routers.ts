@@ -31,11 +31,11 @@ import {
 import { applyGestorMarcaImportMerge } from "./services/gestor-marca-import-apply";
 import { assertCrmExcelHeaders, assertCrmImportRows } from "./services/crm-import-validate";
 import { legacyApiDisabled } from "./legacy-api-disabled";
+import { assertCicloStatusTransition } from "./services/ciclo-status-flow";
 import { seedCapacidadeBaseline } from "./services/seed-capacidade";
 import { invalidateDeParaCache } from "./services/de-para-map";
 import {
   desagregarJobParaCicloComercial,
-  seedSazonalidadeUniformeSeVazia,
 } from "./services/desagregacao";
 import {
   getAaPrevReal,
@@ -94,42 +94,33 @@ export const appRouter = router({
 
   // ==================== FAMÍLIAS ====================
   familias: router({
-    list: protectedProcedure.query(() => db.listFamilias()),
-
+    list: protectedProcedure.query(() => legacyApiDisabled("Cadastro de famílias")),
     getById: protectedProcedure
       .input(z.object({ id: z.number() }))
-      .query(({ input }) => db.getFamiliaById(input.id)),
+      .query(() => legacyApiDisabled("Cadastro de famílias")),
   }),
 
   // ==================== SUBFAMÍLIAS ====================
   subfamilias: router({
     list: protectedProcedure
       .input(z.object({ familiaId: z.number().optional() }).optional())
-      .query(({ input }) => db.listSubfamilias(input?.familiaId)),
-    
+      .query(() => legacyApiDisabled("Subfamílias")),
     create: protectedProcedure
-      .input(z.object({
-        nome: z.string().min(1),
-        familiaId: z.number(),
-        ativo: z.boolean().default(true),
-      }))
-      .mutation(({ input }) => db.createSubfamilia(input)),
-    
+      .input(z.object({ nome: z.string().min(1), familiaId: z.number(), ativo: z.boolean().default(true) }))
+      .mutation(() => legacyApiDisabled("Subfamílias")),
     update: protectedProcedure
-      .input(z.object({
-        id: z.number(),
-        nome: z.string().min(1).optional(),
-        familiaId: z.number().optional(),
-        ativo: z.boolean().optional(),
-      }))
-      .mutation(({ input }) => {
-        const { id, ...data } = input;
-        return db.updateSubfamilia(id, data);
-      }),
-    
+      .input(
+        z.object({
+          id: z.number(),
+          nome: z.string().min(1).optional(),
+          familiaId: z.number().optional(),
+          ativo: z.boolean().optional(),
+        })
+      )
+      .mutation(() => legacyApiDisabled("Subfamílias")),
     delete: protectedProcedure
       .input(z.object({ id: z.number() }))
-      .mutation(({ input }) => db.deleteSubfamilia(input.id)),
+      .mutation(() => legacyApiDisabled("Subfamílias")),
   }),
 
   // ==================== PRODUTOS ====================
@@ -582,48 +573,53 @@ export const appRouter = router({
   // ==================== CARTEIRA DE PEDIDOS ====================
   carteiraPedidos: router({
     list: protectedProcedure
-      .input(z.object({ limit: z.number().default(100) }).optional())
-      .query(({ input }) => db.listCarteiraPedidos(input?.limit)),
+      .input(
+        z
+          .object({
+            limit: z.number().default(100),
+            /** PV MTO / Carteira ERP: só pedidos em aberto (não faturados). */
+            apenasPvAberto: z.boolean().default(true),
+          })
+          .optional()
+      )
+      .query(({ input }) =>
+        db.listCarteiraPedidos(input?.limit ?? 100, input?.apenasPvAberto ?? true)
+      ),
 
     create: protectedProcedure
-      .input(z.object({
-        codigo: z.string().min(1),
-        sequencia: z.number().default(1),
-        competencia: z.string(),
-        quantidade: z.string(),
-        receitaBruta: z.string(),
-        produtoId: z.number(),
-        clienteId: z.number().nullable().optional(),
-        faturado: z.boolean().default(false),
-      }))
-      .mutation(({ input }) => {
-        const { competencia, ...rest } = input;
-        return db.createCarteiraPedido({ ...rest, competencia: new Date(competencia) });
-      }),
+      .input(
+        z.object({
+          codigo: z.string().min(1),
+          sequencia: z.number().default(1),
+          competencia: z.string(),
+          quantidade: z.string(),
+          receitaBruta: z.string(),
+          produtoId: z.number(),
+          clienteId: z.number().nullable().optional(),
+          faturado: z.boolean().default(false),
+        })
+      )
+      .mutation(() => legacyApiDisabled("Carteira manual")),
 
     update: protectedProcedure
-      .input(z.object({
-        id: z.number(),
-        codigo: z.string().optional(),
-        sequencia: z.number().optional(),
-        competencia: z.string().optional(),
-        quantidade: z.string().optional(),
-        receitaBruta: z.string().optional(),
-        produtoId: z.number().optional(),
-        clienteId: z.number().nullable().optional(),
-        faturado: z.boolean().optional(),
-      }))
-      .mutation(({ input }) => {
-        const { id, competencia, ...rest } = input;
-        return db.updateCarteiraPedido(id, {
-          ...rest,
-          competencia: competencia ? new Date(competencia) : undefined,
-        });
-      }),
+      .input(
+        z.object({
+          id: z.number(),
+          codigo: z.string().optional(),
+          sequencia: z.number().optional(),
+          competencia: z.string().optional(),
+          quantidade: z.string().optional(),
+          receitaBruta: z.string().optional(),
+          produtoId: z.number().optional(),
+          clienteId: z.number().nullable().optional(),
+          faturado: z.boolean().optional(),
+        })
+      )
+      .mutation(() => legacyApiDisabled("Carteira manual")),
 
     delete: protectedProcedure
       .input(z.object({ id: z.number() }))
-      .mutation(({ input }) => db.deleteCarteiraPedido(input.id)),
+      .mutation(() => legacyApiDisabled("Carteira manual")),
 
     /**
      * PV Aberto direto do ERP (MetricsPROD): Status Liberado + tipo PRG,
@@ -879,45 +875,17 @@ export const appRouter = router({
           status: z.enum(["ABERTO", "EM_COLABORACAO", "CONSOLIDADO", "FECHADO"]),
         })
       )
-      .mutation(async ({ input }) => {
-        if (input.status === "CONSOLIDADO" || input.status === "FECHADO") {
-          const [pvCrm, resumoRs, itens] = await Promise.all([
-            getPvVsCrmDetalhado(input.id),
-            getResumoRs(input.id),
-            db.listCicloComercialItens(input.id),
-          ]);
-          if (itens.length === 0) {
-            throw new TRPCError({
-              code: "PRECONDITION_FAILED",
-              message: "O ciclo não possui itens para consolidar.",
-            });
-          }
-          if (pvCrm.sobrepostos > 0) {
-            throw new TRPCError({
-              code: "PRECONDITION_FAILED",
-              message: `Corrija ${pvCrm.sobrepostos} sobreposições PV x CRM antes de consolidar.`,
-            });
-          }
-          if (resumoRs.skusSemPreco.length > 0) {
-            throw new TRPCError({
-              code: "PRECONDITION_FAILED",
-              message:
-                "Existem SKUs sem preço de venda: " +
-                resumoRs.skusSemPreco.slice(0, 20).join(", "),
-            });
-          }
-          const crmIncompletos = itens.filter(
-            item =>
-              item.planoColab === "CRM" &&
-              (!item.crmTipo || !item.crmTemperatura)
-          );
-          if (crmIncompletos.length > 0) {
-            throw new TRPCError({
-              code: "PRECONDITION_FAILED",
-              message: `Reimporte ${crmIncompletos.length} itens CRM sem tipo/temperatura.`,
-            });
-          }
+      .mutation(async ({ input, ctx }) => {
+        const ciclo = await db.getCicloComercial(input.id);
+        if (!ciclo) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Ciclo não encontrado." });
         }
+        const isAdmin = ctx.user?.role === "admin";
+        assertCicloStatusTransition(
+          ciclo.status as "ABERTO" | "EM_COLABORACAO" | "CONSOLIDADO" | "FECHADO",
+          input.status,
+          isAdmin
+        );
         return db.updateCicloComercial(input.id, { status: input.status });
       }),
 
@@ -944,7 +912,6 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ input, ctx }) => {
-        await seedSazonalidadeUniformeSeVazia();
         return desagregarJobParaCicloComercial({
           jobId: input.jobId,
           nomeCiclo: input.nomeCiclo,
