@@ -7,24 +7,8 @@ import {
   queryErpFaturamentoRowsInRange,
   testErpConnection,
 } from "./erp-mssql";
-import { acceptPendingMarcasFromFaturamento } from "./seed-from-faturamento";
-
-async function autoAcceptMarcasPendentes() {
-  try {
-    const result = await acceptPendingMarcasFromFaturamento();
-    if (result.created > 0) {
-      console.log(`[faturamento] ${result.created} marca(s) nova(s) incluída(s) no cadastro`);
-    }
-    return result.created;
-  } catch (error) {
-    console.warn(
-      `[faturamento] falha ao incluir marcas novas: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
-    return 0;
-  }
-}
+import type { FaturamentoPostSyncResult } from "./faturamento-post-sync";
+import { runAfterFaturamentoSync } from "./faturamento-post-sync";
 
 function asText(value: unknown): string {
   if (value === null || value === undefined) return "";
@@ -170,6 +154,7 @@ export type FaturamentoSqlSyncResult = {
   source: string;
   years: FaturamentoSqlSyncYearResult[];
   connection: Awaited<ReturnType<typeof testErpConnection>>;
+  postSync?: FaturamentoPostSyncResult;
 };
 
 function yearRangeBounds(desde: string, year: number): { inicio: string; fim: string } {
@@ -240,8 +225,13 @@ export async function syncFaturamentoFromSql(options?: {
   }
 
   await db.rebuildFaturamentoResumo();
-  await autoAcceptMarcasPendentes();
-
+  let postSync: FaturamentoPostSyncResult | undefined;
+  try {
+    postSync = await runAfterFaturamentoSync();
+  } catch (err) {
+    console.warn("[faturamento] pós-sync:", err);
+    postSync = { clientesError: err instanceof Error ? err.message : String(err) };
+  }
   return {
     fetched,
     mapped,
@@ -252,12 +242,14 @@ export async function syncFaturamentoFromSql(options?: {
     source,
     years,
     connection,
+    postSync,
   };
 }
 
 export type FaturamentoYearsSyncResult = {
   source: string;
   years: FaturamentoSqlSyncYearResult[];
+  postSync?: FaturamentoPostSyncResult;
 };
 
 /**
@@ -308,8 +300,14 @@ export async function syncFaturamentoYears(years: number[]): Promise<Faturamento
   }
 
   await db.rebuildFaturamentoResumo();
-  await autoAcceptMarcasPendentes();
-  return { source: connection.source, years: results };
+  let postSync: FaturamentoPostSyncResult | undefined;
+  try {
+    postSync = await runAfterFaturamentoSync();
+  } catch (err) {
+    console.warn("[faturamento] pós-sync:", err);
+    postSync = { clientesError: err instanceof Error ? err.message : String(err) };
+  }
+  return { source: connection.source, years: results, postSync };
 }
 
 export type FaturamentoYearsSyncStatus = {
@@ -346,7 +344,7 @@ export function startFaturamentoYearsSync(years: number[]): FaturamentoYearsSync
     result: null,
   };
   syncFaturamentoYears(years)
-    .then(result => {
+    .then(async result => {
       yearSyncStatus = {
         ...yearSyncStatus,
         status: "done",
@@ -381,6 +379,7 @@ export type FaturamentoRecentSyncResult = {
   maxAntes: string | null;
   maxDepois: string | null;
   today: string;
+  postSync?: FaturamentoPostSyncResult;
 };
 
 const FORCE_REUSE_MS = 20_000;
@@ -463,7 +462,13 @@ async function runSyncFaturamentoRecent(): Promise<FaturamentoRecentSyncResult> 
   await db.clearFaturamentoDateRange(inicio, fim);
   const insertResult = await db.createFaturamentoBatch(batch);
   await db.rebuildFaturamentoResumo();
-  await autoAcceptMarcasPendentes();
+  let postSync: FaturamentoPostSyncResult | undefined;
+  try {
+    postSync = await runAfterFaturamentoSync();
+  } catch (err) {
+    console.warn("[faturamento] pós-sync recent:", err);
+    postSync = { clientesError: err instanceof Error ? err.message : String(err) };
+  }
   const maxDepois = await db.getFaturamentoMaxDataIso();
 
   return {
@@ -478,6 +483,7 @@ async function runSyncFaturamentoRecent(): Promise<FaturamentoRecentSyncResult> 
     maxAntes,
     maxDepois,
     today,
+    postSync,
   };
 }
 

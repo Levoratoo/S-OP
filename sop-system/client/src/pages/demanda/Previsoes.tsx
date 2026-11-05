@@ -32,7 +32,6 @@ export default function Previsoes() {
 
   const { data: previsoes, isLoading } = trpc.previsoes.list.useQuery({ ano });
   const { data: produtos } = trpc.produtos.list.useQuery();
-  const { data: familias } = trpc.familias.list.useQuery();
 
   const createMutation = trpc.previsoes.create.useMutation({
     onSuccess: () => {
@@ -56,7 +55,7 @@ export default function Previsoes() {
     e.preventDefault();
     createMutation.mutate({
       produtoId: formData.produtoId === "none" ? null : Number(formData.produtoId),
-      familiaId: formData.familiaId === "none" ? null : Number(formData.familiaId),
+      familiaId: null,
       ano: Number(formData.ano),
       mes: Number(formData.mes),
       valorPrevisto: formData.valorPrevisto,
@@ -67,7 +66,6 @@ export default function Previsoes() {
   };
 
   const produtoNome = (id: number | null) => produtos?.find((p) => p.id === id)?.nome || "-";
-  const familiaNome = (id: number | null) => familias?.find((f) => f.id === id)?.nome || "-";
 
   return (
     <div className="space-y-6">
@@ -116,16 +114,6 @@ export default function Previsoes() {
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="space-y-2">
-                    <Label>Família (opcional)</Label>
-                    <Select value={formData.familiaId} onValueChange={(value) => setFormData({ ...formData, familiaId: value })}>
-                      <SelectTrigger><SelectValue placeholder="Selecione..." /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="none">Nenhuma</SelectItem>
-                        {familias?.map((f) => <SelectItem key={f.id} value={String(f.id)}>{f.nome}</SelectItem>)}
-                      </SelectContent>
-                    </Select>
-                  </div>
                 </div>
 
                 <div className="grid grid-cols-3 gap-3">
@@ -169,7 +157,6 @@ export default function Previsoes() {
                 <TableRow>
                   <TableHead>Competência</TableHead>
                   <TableHead>Produto</TableHead>
-                  <TableHead>Família</TableHead>
                   <TableHead className="text-right">Valor</TableHead>
                   <TableHead className="text-right">MAPE</TableHead>
                   <TableHead className="text-right">WMAPE</TableHead>
@@ -178,13 +165,12 @@ export default function Previsoes() {
               </TableHeader>
               <TableBody>
                 {!previsoes || previsoes.length === 0 ? (
-                  <TableRow><TableCell colSpan={7} className="py-8 text-center text-muted-foreground">Nenhuma previsão cadastrada</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={6} className="py-8 text-center text-muted-foreground">Nenhuma previsão cadastrada</TableCell></TableRow>
                 ) : (
                   previsoes.map((item) => (
                     <TableRow key={item.id}>
                       <TableCell>{item.ano}/{MESES[(item.mes || 1) - 1]}</TableCell>
                       <TableCell>{produtoNome(item.produtoId)}</TableCell>
-                      <TableCell>{familiaNome(item.familiaId)}</TableCell>
                       <TableCell className="text-right">R$ {Number(item.valorPrevisto || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</TableCell>
                       <TableCell className="text-right">{item.mape ? `${Number(item.mape).toFixed(2)}%` : "-"}</TableCell>
                       <TableCell className="text-right">{item.wmape ? `${Number(item.wmape).toFixed(2)}%` : "-"}</TableCell>

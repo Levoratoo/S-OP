@@ -561,6 +561,18 @@ export const gestorMarca = mysqlTable("gestor_marca", {
 export type GestorMarca = typeof gestorMarca.$inferSelect;
 export type InsertGestorMarca = typeof gestorMarca.$inferInsert;
 
+/** Gestor sugerido por import CSV para marcas ainda não cadastradas (aplicado ao aceitar marca). */
+export const gestorMarcaImportMap = mysqlTable("gestor_marca_import_map", {
+  id: int("id").autoincrement().primaryKey(),
+  marcaKey: varchar("marcaKey", { length: 200 }).notNull().unique(),
+  marcaNome: varchar("marcaNome", { length: 100 }).notNull(),
+  gestorNome: varchar("gestorNome", { length: 200 }).notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type GestorMarcaImportMap = typeof gestorMarcaImportMap.$inferSelect;
+export type InsertGestorMarcaImportMap = typeof gestorMarcaImportMap.$inferInsert;
+
 // ==================== DE-PARA DE CÓDIGOS DE ITEM ====================
 export const deParaCodigos = mysqlTable("de_para_codigos", {
   id: int("id").autoincrement().primaryKey(),

@@ -21,7 +21,7 @@ import { Loader2, Plus, RefreshCw, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { ColaboracaoArquivo } from "./ColaboracaoArquivo";
 import { ColaboracaoResumos } from "./ColaboracaoResumos";
-import { parseCrmExcel } from "./parse-crm-excel";
+import { CrmExcelLayoutError, parseCrmExcel } from "./parse-crm-excel";
 
 type PlanoColab = "MTS" | "PV_MTO" | "CRM";
 type GradeAba = PlanoColab | "CONSOLIDADO";
@@ -54,6 +54,26 @@ function formatNum(value: string | number | null | undefined) {
   const n = Number(value ?? 0);
   if (!Number.isFinite(n)) return "0";
   return n.toLocaleString("pt-BR", { maximumFractionDigits: 0 });
+}
+
+function competenciaNoHorizontoCiclo(
+  value: Date | string | null | undefined,
+  anoInicio: number,
+  mesInicio: number
+) {
+  if (!value) return false;
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return false;
+  const absStart = anoInicio * 12 + (mesInicio - 1);
+  const abs = d.getFullYear() * 12 + d.getMonth();
+  const idx = abs - absStart;
+  return idx >= 0 && idx < 12;
+}
+
+function formatDataBr(value: Date | string | null | undefined) {
+  if (!value) return "-";
+  const d = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(d.getTime()) ? "-" : d.toLocaleDateString("pt-BR");
 }
 
 /** Próximo mês = início do ciclo (equiv. aba Dias e Data C2). */
@@ -100,7 +120,27 @@ export default function Colaboracoes() {
     { enabled: Boolean(selectedCicloId) && abaGrade === "MTS" }
   );
 
+  const { data: carteiraPedidos, isLoading: loadingCarteira } = trpc.carteiraPedidos.list.useQuery(
+    { limit: 5000, apenasPvAberto: true },
+    { enabled: Boolean(selectedCicloId) && abaGrade === "PV_MTO" }
+  );
+  const { data: produtosCarteira } = trpc.produtos.list.useQuery(undefined, {
+    enabled: abaGrade === "PV_MTO",
+  });
+  const { data: clientesCarteira } = trpc.clientes.list.useQuery(undefined, {
+    enabled: abaGrade === "PV_MTO",
+  });
+
   const { data: jobs } = trpc.previsaoPython.list.useQuery({ limit: 20 });
+
+  const fecharCicloMutation = trpc.cicloComercial.fecharCiclo.useMutation({
+    onSuccess: () => {
+      toast.success("Ciclo fechado.");
+      utils.cicloComercial.list.invalidate();
+      if (selectedCicloId) utils.cicloComercial.getById.invalidate({ id: selectedCicloId });
+    },
+    onError: error => toast.error(error.message),
+  });
 
   const desagregarMutation = trpc.cicloComercial.desagregarDoJob.useMutation({
     onSuccess: result => {
@@ -116,15 +156,6 @@ export default function Colaboracoes() {
     onSuccess: () => {
       utils.cicloComercial.itens.invalidate();
       utils.cicloComercial.consolidado.invalidate();
-    },
-    onError: error => toast.error(error.message),
-  });
-
-  const updateStatusMutation = trpc.cicloComercial.updateStatus.useMutation({
-    onSuccess: () => {
-      toast.success("Status do ciclo atualizado.");
-      utils.cicloComercial.list.invalidate();
-      if (selectedCicloId) utils.cicloComercial.getById.invalidate({ id: selectedCicloId });
     },
     onError: error => toast.error(error.message),
   });
@@ -169,13 +200,17 @@ export default function Colaboracoes() {
   const handleCrmFile = async (file: File) => {
     if (!selectedCicloId) return;
     try {
-      const rows = parseCrmExcel(await file.arrayBuffer());
-      if (!rows.length) {
+    const parsed = parseCrmExcel(await file.arrayBuffer());
+      if (!parsed.rows.length) {
         toast.error("Nenhuma linha com SKU no Excel.");
         return;
       }
-      importCrm.mutate({ cicloId: selectedCicloId, rows });
+      importCrm.mutate({ cicloId: selectedCicloId, headers: parsed.headers, rows: parsed.rows });
     } catch (error) {
+      if (error instanceof CrmExcelLayoutError) {
+        toast.error(error.message);
+        return;
+      }
       toast.error(`Falha ao ler CRM: ${String(error)}`);
     }
   };
@@ -207,6 +242,46 @@ export default function Colaboracoes() {
         .some(v => String(v).toLowerCase().includes(term))
     );
   }, [itens, search, podeVerTodasMarcas, marcasPermitidasNomes]);
+
+  const carteiraNoCiclo = useMemo(() => {
+    if (!carteiraPedidos || !ciclo) return [];
+    const prodById = new Map((produtosCarteira ?? []).map(p => [p.id, p]));
+    let rows = carteiraPedidos.filter(p =>
+      competenciaNoHorizontoCiclo(p.competencia, ciclo.anoInicio, ciclo.mesInicio)
+    );
+    if (!podeVerTodasMarcas) {
+      rows = rows.filter(p => {
+        const prod = prodById.get(p.produtoId);
+        return marcasPermitidasNomes.includes(normalizeMarcaNome(prod?.marca));
+      });
+    }
+    const term = search.trim().toLowerCase();
+    if (!term) return rows;
+    return rows.filter(p => {
+      const prod = prodById.get(p.produtoId);
+      const sku = prod?.codItem || prod?.codigo || "";
+      return [p.codigo, sku, prod?.nome, prod?.marca, prod?.descricao]
+        .filter(Boolean)
+        .some(v => String(v).toLowerCase().includes(term));
+    });
+  }, [
+    carteiraPedidos,
+    ciclo,
+    produtosCarteira,
+    search,
+    podeVerTodasMarcas,
+    marcasPermitidasNomes,
+  ]);
+
+  const produtoLabel = (produtoId: number) => {
+    const p = produtosCarteira?.find(x => x.id === produtoId);
+    return p?.nome || p?.codItem || p?.codigo || `Produto ${produtoId}`;
+  };
+
+  const clienteLabel = (clienteId: number | null) =>
+    clienteId
+      ? clientesCarteira?.find(c => c.id === clienteId)?.razaoSocial || "-"
+      : "-";
 
   const marcasConsolidado = useMemo(() => {
     const entries = Object.entries(consolidado?.byMarca ?? {});
@@ -381,20 +456,6 @@ export default function Colaboracoes() {
                 </span>
               </div>
             )}
-            {ciclo && ciclo.status !== "FECHADO" && (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() =>
-                  updateStatusMutation.mutate({
-                    id: ciclo.id,
-                    status: ciclo.status === "CONSOLIDADO" ? "FECHADO" : "CONSOLIDADO",
-                  })
-                }
-              >
-                {ciclo.status === "CONSOLIDADO" ? "Fechar ciclo" : "Marcar consolidado"}
-              </Button>
-            )}
           </CardContent>
         </Card>
 
@@ -492,7 +553,7 @@ export default function Colaboracoes() {
                       {abaGrade === "CONSOLIDADO"
                         ? "Arquivo consolidado do ciclo: uma linha por SKU e mês, no modelo padrão."
                         : abaGrade === "PV_MTO"
-                          ? "Pedidos em aberto da Carteira / PV (Liberado + PRG), somados por SKU no horizonte do ciclo"
+                          ? "Mesma grade da Carteira / PV: uma linha por pedido × SKU (Liberado + PRG)"
                           : abaGrade === "CRM"
                             ? "Cards do comercial. Importe o Excel para preencher a grade deste ciclo."
                             : "MTS: realizado 2025/2026 e, em cada mês do ciclo, previsão estatística ao lado da Colab do vendedor (em branco = usa a previsão)"}
@@ -564,7 +625,9 @@ export default function Colaboracoes() {
                   </div>
                   {PLANOS.map(p => (
                     <TabsContent key={p} value={p} className="mt-4">
-                      {loadingItens ? (
+                      {(
+                        p === "PV_MTO" ? loadingCarteira : loadingItens
+                      ) ? (
                         <div className="flex justify-center py-8">
                           <Loader2 className="h-5 w-5 animate-spin" />
                         </div>
@@ -671,6 +734,63 @@ export default function Colaboracoes() {
                             </TableBody>
                           </Table>
                         </div>
+                      ) : p === "PV_MTO" ? (
+                        loadingCarteira ? (
+                          <div className="flex justify-center py-8">
+                            <Loader2 className="h-5 w-5 animate-spin" />
+                          </div>
+                        ) : (
+                          <div className="overflow-auto rounded-md border">
+                            <Table>
+                              <TableHeader>
+                                <TableRow>
+                                  <TableHead>Código</TableHead>
+                                  <TableHead>Competência</TableHead>
+                                  <TableHead>Produto</TableHead>
+                                  <TableHead>Cliente</TableHead>
+                                  <TableHead className="text-right">Quantidade</TableHead>
+                                  <TableHead className="text-right">Receita</TableHead>
+                                  <TableHead className="text-center">Faturado</TableHead>
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {carteiraNoCiclo.length === 0 ? (
+                                  <TableRow>
+                                    <TableCell
+                                      colSpan={7}
+                                      className="py-8 text-center text-muted-foreground"
+                                    >
+                                      Nenhum pedido Liberado+PRG no horizonte — atualize em Carteira / PV
+                                    </TableCell>
+                                  </TableRow>
+                                ) : (
+                                  carteiraNoCiclo.map(item => (
+                                    <TableRow key={item.id}>
+                                      <TableCell className="font-mono text-sm">
+                                        {item.codigo}/{item.sequencia}
+                                      </TableCell>
+                                      <TableCell>{formatDataBr(item.competencia)}</TableCell>
+                                      <TableCell>{produtoLabel(item.produtoId)}</TableCell>
+                                      <TableCell>{clienteLabel(item.clienteId)}</TableCell>
+                                      <TableCell className="text-right tabular-nums">
+                                        {Number(item.quantidade || 0).toLocaleString("pt-BR")}
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums">
+                                        R${" "}
+                                        {Number(item.receitaBruta || 0).toLocaleString("pt-BR", {
+                                          minimumFractionDigits: 2,
+                                        })}
+                                      </TableCell>
+                                      <TableCell className="text-center">
+                                        {item.faturado ? "Sim" : "Não"}
+                                      </TableCell>
+                                    </TableRow>
+                                  ))
+                                )}
+                              </TableBody>
+                            </Table>
+                          </div>
+                        )
                       ) : (
                         <div className="overflow-auto rounded-md border">
                           <Table>
@@ -689,11 +809,7 @@ export default function Colaboracoes() {
                               {filteredItens.length === 0 ? (
                                 <TableRow>
                                   <TableCell colSpan={16} className="text-center text-muted-foreground">
-                                    {p === "PV_MTO"
-                                      ? "Nenhum pedido da carteira neste horizonte."
-                                      : p === "CRM"
-                                        ? "Nenhum card CRM. Importe o Excel para preencher a grade."
-                                        : "Sem itens neste plano."}
+                                    Nenhum card CRM. Importe o Excel para preencher a grade.
                                   </TableCell>
                                 </TableRow>
                               ) : (
@@ -739,7 +855,14 @@ export default function Colaboracoes() {
                     </TabsContent>
                   ))}
                   <TabsContent value="CONSOLIDADO" className="mt-4">
-                    {selectedCicloId ? <ColaboracaoArquivo cicloId={selectedCicloId} /> : null}
+                    {selectedCicloId ? (
+                      <ColaboracaoArquivo
+                        cicloId={selectedCicloId}
+                        cicloStatus={ciclo?.status}
+                        onFecharCiclo={() => fecharCicloMutation.mutate({ id: selectedCicloId })}
+                        fechando={fecharCicloMutation.isPending}
+                      />
+                    ) : null}
                   </TabsContent>
                 </Tabs>
               </CardContent>
@@ -751,6 +874,7 @@ export default function Colaboracoes() {
               cicloId={selectedCicloId}
               consolidado={consolidado}
               marcasConsolidado={marcasConsolidado}
+              marcasSemGestor={consolidado?.marcasSemGestor}
             />
           </TabsContent>
         </Tabs>

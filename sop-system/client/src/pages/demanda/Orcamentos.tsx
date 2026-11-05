@@ -19,7 +19,6 @@ export default function Orcamentos() {
   const [formData, setFormData] = useState({
     ano: anoAtual,
     mes: 1,
-    familiaId: "none",
     valorMeta: "",
   });
 
@@ -27,7 +26,6 @@ export default function Orcamentos() {
   const utils = trpc.useUtils();
 
   const { data: orcamentos, isLoading } = trpc.orcamentos.list.useQuery({ ano });
-  const { data: familias } = trpc.familias.list.useQuery();
 
   const createMutation = trpc.orcamentos.create.useMutation({
     onSuccess: () => {
@@ -52,19 +50,17 @@ export default function Orcamentos() {
     createMutation.mutate({
       ano: Number(formData.ano),
       mes: Number(formData.mes),
-      familiaId: formData.familiaId === "none" ? null : Number(formData.familiaId),
+      familiaId: null,
       valorMeta: formData.valorMeta,
     });
   };
-
-  const familiaNome = (familiaId: number | null) => familias?.find((f) => f.id === familiaId)?.nome || "-";
 
   return (
     <div className="space-y-6">
       <div className="flex items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Orçamentos</h1>
-          <p className="text-muted-foreground">Metas mensais por família</p>
+          <p className="text-muted-foreground">Metas mensais (tela legada — família removida do cadastro)</p>
         </div>
         <div className="flex items-end gap-2">
           <div className="space-y-2">
@@ -92,16 +88,6 @@ export default function Orcamentos() {
                     <Input type="number" step="0.01" value={formData.valorMeta} onChange={(e) => setFormData({ ...formData, valorMeta: e.target.value })} required />
                   </div>
                 </div>
-                <div className="space-y-2">
-                  <Label>Família</Label>
-                  <Select value={formData.familiaId} onValueChange={(value) => setFormData({ ...formData, familiaId: value })}>
-                    <SelectTrigger><SelectValue placeholder="Selecione..." /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">Sem família</SelectItem>
-                      {familias?.map((f) => <SelectItem key={f.id} value={String(f.id)}>{f.nome}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </div>
                 <div className="flex justify-end gap-2">
                   <Button type="button" variant="outline" onClick={() => setIsOpen(false)}>Cancelar</Button>
                   <Button type="submit" disabled={createMutation.isPending}>
@@ -125,19 +111,17 @@ export default function Orcamentos() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Ano/Mês</TableHead>
-                  <TableHead>Família</TableHead>
                   <TableHead className="text-right">Meta</TableHead>
                   <TableHead className="w-[80px]">Ações</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {!orcamentos || orcamentos.length === 0 ? (
-                  <TableRow><TableCell colSpan={4} className="py-8 text-center text-muted-foreground">Nenhum orçamento cadastrado</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={3} className="py-8 text-center text-muted-foreground">Nenhum orçamento cadastrado</TableCell></TableRow>
                 ) : (
                   orcamentos.map((item) => (
                     <TableRow key={item.id}>
                       <TableCell>{item.ano}/{MESES[(item.mes || 1) - 1]}</TableCell>
-                      <TableCell>{familiaNome(item.familiaId)}</TableCell>
                       <TableCell className="text-right font-medium">R$ {Number(item.valorMeta || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</TableCell>
                       <TableCell>
                         <Button size="icon" variant="ghost" onClick={() => deleteMutation.mutate({ id: item.id })}>

@@ -38,7 +38,17 @@ function formatMes(iso: string) {
   return `${mes}/${ano}`;
 }
 
-export function ColaboracaoArquivo({ cicloId }: { cicloId: number }) {
+export function ColaboracaoArquivo({
+  cicloId,
+  cicloStatus,
+  onFecharCiclo,
+  fechando,
+}: {
+  cicloId: number;
+  cicloStatus?: string;
+  onFecharCiclo?: () => void;
+  fechando?: boolean;
+}) {
   const [search, setSearch] = useState("");
   const { data, isLoading } = trpc.cicloComercial.consolidadoArquivo.useQuery({ cicloId });
 
@@ -109,6 +119,17 @@ export function ColaboracaoArquivo({ cicloId }: { cicloId: number }) {
             <Download className="mr-2 h-4 w-4" />
             Exportar Excel
           </Button>
+          {cicloStatus !== "FECHADO" && onFecharCiclo ? (
+            <Button
+              type="button"
+              size="sm"
+              onClick={onFecharCiclo}
+              disabled={fechando}
+            >
+              {fechando ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Fechar ciclo
+            </Button>
+          ) : null}
         </div>
       </div>
       <div className="max-h-[70vh] overflow-auto rounded-md border">

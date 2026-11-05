@@ -44,20 +44,15 @@ describe("S&OP System Routes", () => {
   });
 
   describe("familias router", () => {
-    it("has list procedure defined", () => {
+    it("list/getById desativados (Parte 2)", () => {
       expect(appRouter._def.procedures).toHaveProperty("familias.list");
+      expect(appRouter._def.procedures).toHaveProperty("familias.getById");
     });
 
-    it("has create procedure defined", () => {
-      expect(appRouter._def.procedures).toHaveProperty("familias.create");
-    });
-
-    it("has update procedure defined", () => {
-      expect(appRouter._def.procedures).toHaveProperty("familias.update");
-    });
-
-    it("has delete procedure defined", () => {
-      expect(appRouter._def.procedures).toHaveProperty("familias.delete");
+    it("does not expose CRUD (tela removida Parte 2)", () => {
+      expect(appRouter._def.procedures).not.toHaveProperty("familias.create");
+      expect(appRouter._def.procedures).not.toHaveProperty("familias.update");
+      expect(appRouter._def.procedures).not.toHaveProperty("familias.delete");
     });
   });
 
@@ -92,8 +87,10 @@ describe("S&OP System Routes", () => {
       expect(appRouter._def.procedures).toHaveProperty("clientes.list");
     });
 
-    it("has create procedure defined", () => {
-      expect(appRouter._def.procedures).toHaveProperty("clientes.create");
+    it("does not expose manual CRUD (somente ERP)", () => {
+      expect(appRouter._def.procedures).not.toHaveProperty("clientes.create");
+      expect(appRouter._def.procedures).not.toHaveProperty("clientes.update");
+      expect(appRouter._def.procedures).not.toHaveProperty("clientes.delete");
     });
   });
 
@@ -236,7 +233,7 @@ describe("S&OP System Routes", () => {
       expect(appRouter._def.procedures).toHaveProperty("faturamento.stats");
     });
 
-    it("has importBatch procedure defined", () => {
+    it("importBatch legado ainda exposto mas bloqueado no handler", () => {
       expect(appRouter._def.procedures).toHaveProperty("faturamento.importBatch");
     });
 
@@ -246,6 +243,15 @@ describe("S&OP System Routes", () => {
 
     it("has clear procedure defined", () => {
       expect(appRouter._def.procedures).toHaveProperty("faturamento.clear");
+    });
+  });
+
+  describe("carteiraPedidos router", () => {
+    it("não expõe importação manual nem CRUD local", () => {
+      expect(appRouter._def.procedures).not.toHaveProperty("carteiraPedidos.importBatch");
+      expect(appRouter._def.procedures).not.toHaveProperty("carteiraPedidos.importBySku");
+      expect(appRouter._def.procedures).toHaveProperty("carteiraPedidos.create");
+      expect(appRouter._def.procedures).toHaveProperty("carteiraPedidos.syncFromErp");
     });
   });
 

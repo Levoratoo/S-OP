@@ -2,6 +2,7 @@ import { isSkuAcabado } from "@shared/sku-acabado";
 import { eq, desc, and, sql, asc, gte, lt, inArray } from "drizzle-orm";
 import { cfopDigitosSqlIn } from "@shared/cfop-faturamento";
 import { drizzle } from "drizzle-orm/mysql2";
+import { carteiraListWhere } from "./services/carteira-pv-aberto";
 import { 
   InsertUser, users, User,
   niveisAcesso, InsertNivelAcesso, NivelAcesso,
@@ -578,14 +579,15 @@ export async function createVendasBatch(data: InsertVenda[]) {
 }
 
 // ==================== CARTEIRA DE PEDIDOS ====================
-export async function listCarteiraPedidos(limit = 100) {
+export async function listCarteiraPedidos(limit = 100, apenasPvAberto = false) {
   const db = await getDb();
   if (!db) return [];
-  return db
-    .select()
-    .from(carteiraPedidos)
-    .orderBy(desc(carteiraPedidos.competencia), desc(carteiraPedidos.id))
-    .limit(limit);
+  const pvWhere = carteiraListWhere(apenasPvAberto);
+  const base = db.select().from(carteiraPedidos);
+  const ordered = pvWhere
+    ? base.where(pvWhere).orderBy(desc(carteiraPedidos.competencia), desc(carteiraPedidos.id))
+    : base.orderBy(desc(carteiraPedidos.competencia), desc(carteiraPedidos.id));
+  return ordered.limit(limit);
 }
 
 export async function createCarteiraPedido(data: InsertCarteiraPedido) {
@@ -2581,7 +2583,7 @@ export async function updateCicloComercialItem(
     .update(cicloComercialItens)
     .set({
       ...data,
-      qtdeColaborada: String(Math.round(sumItemMonths(merged) * 100) / 100),
+      qtdeColaborada: String(Math.round(sumItemMonths(merged as Record<string, unknown>) * 100) / 100),
     })
     .where(eq(cicloComercialItens.id, id));
 }
@@ -2590,10 +2592,7 @@ const MES_KEYS_SUM = ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10
 const EST_KEYS_SUM = ["e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8", "e9", "e10", "e11", "e12"] as const;
 
 /** Vendedor prevalece quando informou o mês; senão usa estatística e*. */
-export function monthEffectiveQty(
-  item: Record<string, string | number | null | undefined>,
-  monthIndex: number
-): number {
+export function monthEffectiveQty(item: Record<string, unknown>, monthIndex: number): number {
   const mKey = MES_KEYS_SUM[monthIndex];
   const eKey = EST_KEYS_SUM[monthIndex];
   const mRaw = item[mKey];
@@ -2605,7 +2604,7 @@ export function monthEffectiveQty(
   return Number.isFinite(e) ? e : 0;
 }
 
-export function sumItemMonths(item: Record<string, string | number | null | undefined>) {
+export function sumItemMonths(item: Record<string, unknown>) {
   let total = 0;
   for (let i = 0; i < 12; i++) total += monthEffectiveQty(item, i);
   return total;
@@ -2650,7 +2649,7 @@ export async function getCicloComercialConsolidado(cicloId: number) {
     const anoBase = ciclo?.anoInicio ?? new Date().getFullYear();
     const mesBase = ciclo?.mesInicio ?? 1;
     for (let i = 0; i < 12; i++) {
-      const qMes = monthEffectiveQty(item as Record<string, string | number | null | undefined>, i);
+      const qMes = monthEffectiveQty(item as Record<string, unknown>, i);
       if (qMes === 0) continue;
       const mesAbs = mesBase + i;
       const ano = anoBase + Math.floor((mesAbs - 1) / 12);
@@ -2673,12 +2672,38 @@ export async function getCicloComercialConsolidado(cicloId: number) {
   const mts = (byPlano["MTS"]?.qtde ?? 0) + (byPlano["JITO"]?.qtde ?? 0);
   const crm = byPlano["CRM"]?.qtde ?? 0;
 
+  const dbConn = await getDb();
+  const marcasSemGestor: string[] = [];
+  if (dbConn) {
+    const [vinculos, marcasRows] = await Promise.all([
+      dbConn
+        .select({ marcaId: gestorMarca.marcaId })
+        .from(gestorMarca)
+        .where(eq(gestorMarca.ativo, true)),
+      dbConn.select({ id: marcas.id, nome: marcas.nome }).from(marcas),
+    ]);
+    const marcaIdComGestor = new Set(vinculos.map(v => v.marcaId));
+    const nomeComGestor = new Set<string>();
+    for (const m of marcasRows) {
+      if (marcaIdComGestor.has(m.id) && m.nome) {
+        nomeComGestor.add(m.nome.trim().toLowerCase());
+      }
+    }
+    for (const marcaKey of Object.keys(byMarca)) {
+      const norm = marcaKey.trim().toLowerCase();
+      if (norm === "sem-marca" || !norm) continue;
+      if (!nomeComGestor.has(norm)) marcasSemGestor.push(marcaKey);
+    }
+    marcasSemGestor.sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }
+
   return {
     totalQtde: total,
     totalEstatistica,
     gapColabVsEstatistica: total - totalEstatistica,
     byPlano,
     byMarca,
+    marcasSemGestor,
     resumoPlanos: {
       mts,
       jito: 0,

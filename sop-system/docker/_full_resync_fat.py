@@ -40,7 +40,7 @@ for kv in \
   'ERP_MSSQL_ENCRYPT=false' \
   'ERP_MSSQL_TRUST_CERT=true' \
   'ERP_FATURAMENTO_SOURCE=dbo.Usr_VIEW_MITRA_FAT_02' \
-  'ERP_FATURAMENTO_DESDE=2020-01-01'
+  'ERP_FATURAMENTO_DESDE=2022-01-01'
 do
   key="${kv%%=*}"
   if grep -q "^${key}=" .env; then

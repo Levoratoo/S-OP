@@ -134,9 +134,7 @@ export default function PrevisaoPythonCiclo13() {
                 size="sm"
                 variant="outline"
                 disabled={!canUseOutput(selected)}
-                onClick={() =>
-                  void downloadPrevisaoJobExcel(selected.id).catch(err => toast.error(String(err)))
-                }
+                onClick={() => downloadPrevisaoJobExcel(selected.id)}
               >
                 <FileSpreadsheet className="mr-1 h-4 w-4" />
                 Excel
@@ -224,9 +222,7 @@ export default function PrevisaoPythonCiclo13() {
                           disabled={!canUseOutput(job)}
                           onClick={e => {
                             e.stopPropagation();
-                            void downloadPrevisaoJobExcel(job.id).catch(err =>
-                              toast.error(String(err))
-                            );
+                            downloadPrevisaoJobExcel(job.id);
                           }}
                         >
                           <Download className="h-4 w-4" />
