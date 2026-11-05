@@ -22,17 +22,22 @@ export default function DeParaCodigos() {
       <div>
         <h1 className="text-3xl font-bold">De-Para de Códigos</h1>
         <p className="text-muted-foreground">
-          Migração de códigos SKU para consolidar histórico. SKUs novos pendentes: Cadastros → Produtos.
+          Migração de códigos SKU. Use a aba Skus Novos para aceitar códigos do faturamento.
         </p>
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
           <TabsTrigger value="lista">Lista De-Para</TabsTrigger>
+          <TabsTrigger value="novos">Skus Novos</TabsTrigger>
         </TabsList>
 
         <TabsContent value="lista">
           <ListaTab />
+        </TabsContent>
+
+        <TabsContent value="novos">
+          <SkusNovosTab />
         </TabsContent>
       </Tabs>
     </div>

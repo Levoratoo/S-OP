@@ -136,6 +136,12 @@ const menuItems: MenuItem[] = [
         tourId: "nav-previsao-python",
       },
       {
+        label: "Bases / Faturamento",
+        path: "/vendas/importar",
+        icon: FileSpreadsheet,
+        tourId: "nav-vendas-importar",
+      },
+      {
         label: "Colaboracao Comercial",
         path: "/demanda/colaboracoes",
         icon: Users,
@@ -264,10 +270,10 @@ const menuItems: MenuItem[] = [
         tourId: "nav-cadastros-membros",
       },
       {
-        label: "Importar Faturamento (legado)",
-        path: "/vendas/importar",
+        label: "Importacao Base",
+        path: "/cadastros/importacao-base",
         icon: FileSpreadsheet,
-        tourId: "nav-vendas-importar",
+        tourId: "nav-cadastros-importacao",
       },
     ],
   },

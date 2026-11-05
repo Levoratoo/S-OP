@@ -56,6 +56,26 @@ function formatNum(value: string | number | null | undefined) {
   return n.toLocaleString("pt-BR", { maximumFractionDigits: 0 });
 }
 
+function competenciaNoHorizontoCiclo(
+  value: Date | string | null | undefined,
+  anoInicio: number,
+  mesInicio: number
+) {
+  if (!value) return false;
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return false;
+  const absStart = anoInicio * 12 + (mesInicio - 1);
+  const abs = d.getFullYear() * 12 + d.getMonth();
+  const idx = abs - absStart;
+  return idx >= 0 && idx < 12;
+}
+
+function formatDataBr(value: Date | string | null | undefined) {
+  if (!value) return "-";
+  const d = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(d.getTime()) ? "-" : d.toLocaleDateString("pt-BR");
+}
+
 /** Próximo mês = início do ciclo (equiv. aba Dias e Data C2). */
 function defaultCicloInicio(now = new Date()) {
   const next = new Date(now.getFullYear(), now.getMonth() + 1, 1);
@@ -99,6 +119,14 @@ export default function Colaboracoes() {
     { anos: [2025, 2026] },
     { enabled: Boolean(selectedCicloId) && abaGrade === "MTS" }
   );
+
+  const { data: carteiraPedidos, isLoading: loadingCarteira } = trpc.carteiraPedidos.list.useQuery(
+    { limit: 5000 },
+    { enabled: Boolean(selectedCicloId) && abaGrade === "PV_MTO" }
+  );
+  const { data: produtosCarteira } = trpc.produtos.list.useQuery(undefined, {
+    enabled: abaGrade === "PV_MTO",
+  });
 
   const { data: jobs } = trpc.previsaoPython.list.useQuery({ limit: 20 });
 
@@ -211,6 +239,43 @@ export default function Colaboracoes() {
         .some(v => String(v).toLowerCase().includes(term))
     );
   }, [itens, search, podeVerTodasMarcas, marcasPermitidasNomes]);
+
+  const carteiraNoCiclo = useMemo(() => {
+    if (!carteiraPedidos || !ciclo) return [];
+    const prodById = new Map((produtosCarteira ?? []).map(p => [p.id, p]));
+    let rows = carteiraPedidos.filter(
+      p =>
+        !p.faturado &&
+        competenciaNoHorizontoCiclo(p.competencia, ciclo.anoInicio, ciclo.mesInicio)
+    );
+    if (!podeVerTodasMarcas) {
+      rows = rows.filter(p => {
+        const prod = prodById.get(p.produtoId);
+        return marcasPermitidasNomes.includes(normalizeMarcaNome(prod?.marca));
+      });
+    }
+    const term = search.trim().toLowerCase();
+    if (!term) return rows;
+    return rows.filter(p => {
+      const prod = prodById.get(p.produtoId);
+      const sku = prod?.codItem || prod?.codigo || "";
+      return [p.codigo, sku, prod?.nome, prod?.marca, prod?.descricao]
+        .filter(Boolean)
+        .some(v => String(v).toLowerCase().includes(term));
+    });
+  }, [
+    carteiraPedidos,
+    ciclo,
+    produtosCarteira,
+    search,
+    podeVerTodasMarcas,
+    marcasPermitidasNomes,
+  ]);
+
+  const produtoLabel = (produtoId: number) => {
+    const p = produtosCarteira?.find(x => x.id === produtoId);
+    return p?.nome || p?.codItem || p?.codigo || `Produto ${produtoId}`;
+  };
 
   const marcasConsolidado = useMemo(() => {
     const entries = Object.entries(consolidado?.byMarca ?? {});
@@ -568,7 +633,9 @@ export default function Colaboracoes() {
                   </div>
                   {PLANOS.map(p => (
                     <TabsContent key={p} value={p} className="mt-4">
-                      {loadingItens ? (
+                      {(
+                        p === "PV_MTO" ? loadingCarteira : loadingItens
+                      ) ? (
                         <div className="flex justify-center py-8">
                           <Loader2 className="h-5 w-5 animate-spin" />
                         </div>
@@ -675,13 +742,63 @@ export default function Colaboracoes() {
                             </TableBody>
                           </Table>
                         </div>
+                      ) : p === "PV_MTO" ? (
+                        loadingCarteira ? (
+                          <div className="flex justify-center py-8">
+                            <Loader2 className="h-5 w-5 animate-spin" />
+                          </div>
+                        ) : (
+                          <div className="overflow-auto rounded-md border">
+                            <Table>
+                              <TableHeader>
+                                <TableRow>
+                                  <TableHead>Código</TableHead>
+                                  <TableHead>Competência</TableHead>
+                                  <TableHead>Produto</TableHead>
+                                  <TableHead className="text-right">Quantidade</TableHead>
+                                  <TableHead className="text-right">Receita</TableHead>
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {carteiraNoCiclo.length === 0 ? (
+                                  <TableRow>
+                                    <TableCell
+                                      colSpan={5}
+                                      className="py-8 text-center text-muted-foreground"
+                                    >
+                                      Nenhum pedido Liberado+PRG no horizonte — atualize em Carteira / PV
+                                    </TableCell>
+                                  </TableRow>
+                                ) : (
+                                  carteiraNoCiclo.map(item => (
+                                    <TableRow key={item.id}>
+                                      <TableCell className="font-mono text-sm">
+                                        {item.codigo}/{item.sequencia}
+                                      </TableCell>
+                                      <TableCell>{formatDataBr(item.competencia)}</TableCell>
+                                      <TableCell>{produtoLabel(item.produtoId)}</TableCell>
+                                      <TableCell className="text-right tabular-nums">
+                                        {Number(item.quantidade || 0).toLocaleString("pt-BR")}
+                                      </TableCell>
+                                      <TableCell className="text-right tabular-nums">
+                                        R${" "}
+                                        {Number(item.receitaBruta || 0).toLocaleString("pt-BR", {
+                                          minimumFractionDigits: 2,
+                                        })}
+                                      </TableCell>
+                                    </TableRow>
+                                  ))
+                                )}
+                              </TableBody>
+                            </Table>
+                          </div>
+                        )
                       ) : (
                         <div className="overflow-auto rounded-md border">
                           <Table>
                             <TableHeader>
                               <TableRow>
                                 <TableHead>SKU</TableHead>
-                                {p === "PV_MTO" && <TableHead>Pedido</TableHead>}
                                 <TableHead>Marca</TableHead>
                                 <TableHead>Linha</TableHead>
                                 {MES_KEYS.map((_, i) => (
@@ -693,12 +810,8 @@ export default function Colaboracoes() {
                             <TableBody>
                               {filteredItens.length === 0 ? (
                                 <TableRow>
-                                  <TableCell colSpan={p === "PV_MTO" ? 17 : 16} className="text-center text-muted-foreground">
-                                    {p === "PV_MTO"
-                                      ? "Nenhum pedido da carteira neste horizonte."
-                                      : p === "CRM"
-                                        ? "Nenhum card CRM. Importe o Excel para preencher a grade."
-                                        : "Sem itens neste plano."}
+                                  <TableCell colSpan={16} className="text-center text-muted-foreground">
+                                    Nenhum card CRM. Importe o Excel para preencher a grade.
                                   </TableCell>
                                 </TableRow>
                               ) : (
@@ -716,11 +829,6 @@ export default function Colaboracoes() {
                                       <TableCell className="max-w-[140px] truncate font-medium">
                                         {item.sku}
                                       </TableCell>
-                                      {p === "PV_MTO" && (
-                                        <TableCell className="font-mono text-xs">
-                                          {item.crmCard || "—"}
-                                        </TableCell>
-                                      )}
                                       <TableCell>{item.marca}</TableCell>
                                       <TableCell>{item.linha}</TableCell>
                                       {MES_KEYS.map(key => (
