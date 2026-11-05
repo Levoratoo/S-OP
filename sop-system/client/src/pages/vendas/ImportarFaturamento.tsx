@@ -1,4 +1,6 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
+import { formatCalendarDate } from "@shared/calendar-date";
+import { isCfopFaturamentoPermitido } from "@shared/cfop-faturamento";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -9,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { trpc } from "@/lib/trpc";
 import { Upload, FileSpreadsheet, CheckCircle2, AlertCircle, Loader2, Trash2, Download, Database, RefreshCw, Users } from "lucide-react";
 import { toast } from "sonner";
+import { useRefreshFaturamentoRecent } from "./useRefreshFaturamentoRecent";
 import * as XLSX from "xlsx";
 
 const MONTH_OPTIONS = [
@@ -94,6 +97,7 @@ export default function ImportarFaturamento() {
   const [importProgress, setImportProgress] = useState(0);
 
   const utils = trpc.useUtils();
+  const refreshRecent = useRefreshFaturamentoRecent();
   const monthNum = month === "all" ? undefined : Number(month);
   const periodFilter = { year, month: monthNum };
 
@@ -107,7 +111,12 @@ export default function ImportarFaturamento() {
   
   const importMutation = trpc.faturamento.importBatch.useMutation({
     onSuccess: (result) => {
-      toast.success(`${result.count} registros importados com sucesso!`);
+      const skipped = result.skippedCfop ?? 0;
+      toast.success(
+        skipped > 0
+          ? `${result.count} registros importados. ${skipped} linhas fora do CFOP foram ignoradas.`
+          : `${result.count} registros importados com sucesso!`
+      );
       utils.faturamento.stats.invalidate();
       utils.faturamento.list.invalidate();
       utils.faturamento.porMes.invalidate();
@@ -135,6 +144,37 @@ export default function ImportarFaturamento() {
     retry: false,
     refetchOnWindowFocus: false,
   });
+
+  const syncYearsMutation = trpc.faturamento.syncYears.useMutation({
+    onSuccess: () => {
+      toast.success("Recarga de 2024 e 2025 iniciada. Pode levar vários minutos.");
+      utils.faturamento.syncYearsStatus.invalidate();
+    },
+    onError: error => toast.error(`Falha ao recarregar anos: ${error.message}`),
+  });
+  const yearsStatus = trpc.faturamento.syncYearsStatus.useQuery(undefined, {
+    refetchInterval: query => (query.state.data?.status === "running" ? 4000 : false),
+  });
+  const yearsRunning = yearsStatus.data?.status === "running";
+  const yearsDoneSeen = useRef<string | null>(null);
+  useEffect(() => {
+    const status = yearsStatus.data;
+    if (!status || status.status === "running" || status.status === "idle") return;
+    const stamp = status.finishedAt;
+    if (!stamp || yearsDoneSeen.current === stamp) return;
+    yearsDoneSeen.current = stamp;
+    if (status.status === "done" && status.result) {
+      const detail = status.result.years
+        .map(year => `${year.year}: ${year.inserted.toLocaleString("pt-BR")}`)
+        .join(" · ");
+      toast.success(`Anos recarregados. ${detail}`);
+      utils.faturamento.stats.invalidate();
+      utils.faturamento.list.invalidate();
+      utils.faturamento.porMes.invalidate();
+      return;
+    }
+    if (status.status === "error") toast.error(status.error || "Falha ao recarregar 2024 e 2025");
+  }, [yearsStatus.data, utils]);
 
   const syncSqlMutation = trpc.faturamento.syncFromSql.useMutation({
     onSuccess: result => {
@@ -236,6 +276,8 @@ export default function ImportarFaturamento() {
 
         // Parse data rows
         const rows: ParsedRow[] = [];
+        const cfopIdx = mappedHeaders.indexOf("cfop");
+        let cfopIgnorados = 0;
         for (let i = 1; i < jsonData.length; i++) {
           const row = jsonData[i] as unknown[];
           if (!row || row.length === 0) continue;
@@ -246,6 +288,11 @@ export default function ImportarFaturamento() {
 
           // Skip empty rows
           if (!dataEmissao || qtd === "0" || qtd === "") continue;
+          const cfopValor = cfopIdx >= 0 ? row[cfopIdx] : "";
+          if (!isCfopFaturamentoPermitido(cfopValor)) {
+            cfopIgnorados += 1;
+            continue;
+          }
 
           const parsedRow: ParsedRow = {
             dataEmissao,
@@ -281,7 +328,11 @@ export default function ImportarFaturamento() {
 
         setParsedData(rows);
         setIsProcessing(false);
-        toast.success(`${rows.length} registros carregados do arquivo`);
+        toast.success(
+          cfopIgnorados > 0
+            ? `${rows.length} registros carregados. ${cfopIgnorados} linhas fora do CFOP foram ignoradas.`
+            : `${rows.length} registros carregados do arquivo`
+        );
       } catch (error) {
         setErrors([`Erro ao processar arquivo: ${error}`]);
         setIsProcessing(false);
@@ -333,7 +384,7 @@ export default function ImportarFaturamento() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Faturamento</h1>
           <p className="text-muted-foreground">
-            Base local persistente (ano corrente). Depois da carga, filtre por mês — sem sincronizar de novo.
+            Ao abrir, o S&OP busca notas novas no ERP e mantém só os CFOP de venda e devolução da lista.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -383,6 +434,12 @@ export default function ImportarFaturamento() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {refreshRecent.isPending ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Atualizando notas novas do ERP e removendo CFOP fora da lista...
+            </div>
+          ) : null}
           {loadingStats ? (
             <Loader2 className="h-6 w-6 animate-spin" />
           ) : (
@@ -492,9 +549,7 @@ export default function ImportarFaturamento() {
                   {storedRows.map(row => (
                     <TableRow key={row.id}>
                       <TableCell>
-                        {row.dataEmissao
-                          ? new Date(row.dataEmissao).toLocaleDateString("pt-BR")
-                          : "-"}
+                        {formatCalendarDate(row.dataEmissao)}
                       </TableCell>
                       <TableCell>{row.nfNumero || "-"}</TableCell>
                       <TableCell>{row.codCliente || "-"}</TableCell>
@@ -608,14 +663,36 @@ export default function ImportarFaturamento() {
               )}
               Carregar / atualizar do ERP
             </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                if (
+                  confirm(
+                    "Recarrega 2024 e 2025 do ERP com o mesmo ajuste da carga de 2026. 2026 e os demais anos não são apagados. Pode levar vários minutos. Continuar?"
+                  )
+                ) {
+                  syncYearsMutation.mutate({ years: [2024, 2025] });
+                }
+              }}
+              disabled={syncYearsMutation.isPending || syncSqlMutation.isPending || yearsRunning}
+            >
+              {syncYearsMutation.isPending || yearsRunning ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-2 h-4 w-4" />
+              )}
+              Recarregar 2024 e 2025
+            </Button>
           </div>
-          {syncSqlMutation.isPending ? (
+          {syncSqlMutation.isPending || yearsRunning ? (
             <Alert>
               <Loader2 className="h-4 w-4 animate-spin" />
               <AlertTitle>Carga em andamento</AlertTitle>
               <AlertDescription>
-                Buscando faturamento desde {sqlTestQuery.data?.desde ?? "2020-01-01"} no
-                MetricsPROD (um ano por vez) e gravando na base local. Pode levar vários minutos.
+                {yearsRunning
+                  ? "Recarregando 2024 e 2025 no MetricsPROD com o mesmo ajuste de 2026. Os outros anos ficam como estão."
+                  : `Buscando faturamento desde ${sqlTestQuery.data?.desde ?? "2020-01-01"} no MetricsPROD (um ano por vez) e gravando na base local. Pode levar vários minutos.`}
               </AlertDescription>
             </Alert>
           ) : null}
@@ -784,7 +861,7 @@ export default function ImportarFaturamento() {
                 <TableBody>
                   {parsedData.slice(0, 10).map((row, idx) => (
                     <TableRow key={idx}>
-                      <TableCell>{new Date(row.dataEmissao).toLocaleDateString("pt-BR")}</TableCell>
+                      <TableCell>{formatCalendarDate(row.dataEmissao)}</TableCell>
                       <TableCell>{row.nfNumero || "-"}</TableCell>
                       <TableCell>{row.codCliente || "-"}</TableCell>
                       <TableCell className="font-mono text-xs">{row.codMaterial || "-"}</TableCell>

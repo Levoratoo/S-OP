@@ -108,6 +108,7 @@ function Router() {
           <Route path="/cadastros/sazonalidade-marca" component={SazonalidadeMarca} />
 
           <Route path="/admin/usuarios" component={GerenciamentoUsuarios} />
+          <Route path="/admin/permissoes" component={GerenciamentoUsuarios} />
 
           <Route path="/demanda/dashboard">{() => <RedirectTo href="/" />}</Route>
           <Route path="/demanda/previsoes">{() => <RedirectTo href="/demanda/colaboracoes" />}</Route>

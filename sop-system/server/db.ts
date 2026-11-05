@@ -1,4 +1,6 @@
+import { isSkuAcabado } from "@shared/sku-acabado";
 import { eq, desc, and, sql, asc, gte, lt, inArray } from "drizzle-orm";
+import { cfopDigitosSqlIn } from "@shared/cfop-faturamento";
 import { drizzle } from "drizzle-orm/mysql2";
 import { 
   InsertUser, users, User,
@@ -247,6 +249,10 @@ export async function setProjetarEstatisticaBatch(input: {
   const ids = new Set<number>();
   const naoEncontrados: string[] = [];
   for (const code of codes) {
+    if (input.projetar && !isSkuAcabado(code)) {
+      naoEncontrados.push(code);
+      continue;
+    }
     const id = byCode.get(code.toUpperCase());
     if (id == null) naoEncontrados.push(code);
     else ids.add(id);
@@ -1064,6 +1070,91 @@ export async function clearFaturamento() {
   return { success: true };
 }
 
+function readAffectedRows(result: unknown): number {
+  if (
+    Array.isArray(result) &&
+    result[0] &&
+    typeof result[0] === "object" &&
+    "affectedRows" in result[0]
+  ) {
+    return Number((result[0] as { affectedRows: number }).affectedRows) || 0;
+  }
+  return 0;
+}
+
+function readCount(result: unknown): number {
+  const rows = (Array.isArray(result) ? result[0] : []) as Array<{ n?: number }>;
+  return Number(rows?.[0]?.n ?? 0);
+}
+
+const cfopForaDaListaSql = () =>
+  sql.raw(
+    `REPLACE(REPLACE(TRIM(IFNULL(cfop,'')), '.', ''), ' ', '') NOT IN (${cfopDigitosSqlIn()})`
+  );
+
+/** Maior data de emissão gravada, em YYYY-MM-DD (data de calendário). */
+export async function getFaturamentoMaxDataIso(): Promise<string | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const result = await db.execute(sql`
+    SELECT DATE_FORMAT(MAX(dataEmissao), '%Y-%m-%d') AS maxData
+    FROM faturamento
+  `);
+  const row = (result[0] as unknown as Array<{ maxData: string | null }>)[0];
+  const value = row?.maxData ?? null;
+  return value && value !== "null" ? String(value).slice(0, 10) : null;
+}
+
+/** Apaga o intervalo [inicio, fimExclusive) para recarregar do ERP sem duplicar. */
+export async function clearFaturamentoDateRange(inicio: string, fimExclusive: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  await db
+    .delete(faturamento)
+    .where(
+      sql`${faturamento.dataEmissao} >= ${inicio} AND ${faturamento.dataEmissao} < ${fimExclusive}`
+    );
+}
+
+/** Depois da primeira varredura limpa neste processo, não varre a tabela de novo a cada abertura. */
+let cfopBaseConferida = false;
+
+/**
+ * Remove linhas cujo CFOP não está na lista permitida.
+ * Lotes de 20 mil para não segurar um único lock na tabela inteira.
+ */
+export async function purgeFaturamentoCfopIndevido(): Promise<number> {
+  if (cfopBaseConferida) return 0;
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  const pendingResult = await db.execute(sql`
+    SELECT COUNT(*) AS n FROM faturamento WHERE ${cfopForaDaListaSql()}
+  `);
+  const pending = readCount(pendingResult);
+  if (pending === 0) {
+    cfopBaseConferida = true;
+    return 0;
+  }
+
+  let total = 0;
+  while (total < pending) {
+    const deleted = await db.execute(sql`
+      DELETE FROM faturamento WHERE ${cfopForaDaListaSql()} LIMIT 20000
+    `);
+    const affected = readAffectedRows(deleted);
+    if (affected === 0) {
+      throw new Error(
+        `Falha ao remover CFOP fora da lista (${pending - total} restantes)`
+      );
+    }
+    total += affected;
+    console.log(`[faturamento] CFOP removidos ${total}/${pending}`);
+  }
+  cfopBaseConferida = true;
+  return total;
+}
+
 /** Remove apenas o período a partir de `desde` (YYYY-MM-DD), preservando histórico anterior. */
 export async function clearFaturamentoFromDate(desde: string) {
   const db = await getDb();
@@ -1077,6 +1168,19 @@ export async function clearFaturamentoFromDate(desde: string) {
     WHERE ano > ${year} OR (ano = ${year} AND mes >= ${month})
   `);
   return { success: true, desde };
+}
+
+/** Remove um ano civil inteiro. Os demais anos permanecem. */
+export async function clearFaturamentoYear(year: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const inicio = `${year}-01-01`;
+  const fim = `${year + 1}-01-01`;
+  await db.delete(faturamento).where(
+    sql`${faturamento.dataEmissao} >= ${inicio} AND ${faturamento.dataEmissao} < ${fim}`
+  );
+  await db.execute(sql`DELETE FROM faturamento_resumo_mensal WHERE ano = ${year}`);
+  return { success: true, year };
 }
 
 export async function rebuildFaturamentoResumo() {

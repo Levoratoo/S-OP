@@ -19,10 +19,22 @@ export default function GestorMarca() {
   const [activeTab, setActiveTab] = useState("relacionamento");
   const [acceptingChave, setAcceptingChave] = useState<string | null>(null);
   const [acceptingAll, setAcceptingAll] = useState(false);
+  const [acceptingMarcas, setAcceptingMarcas] = useState(false);
 
   const utils = trpc.useUtils();
   const { data: pendingClientes = [] } =
     trpc.cadastrosSistema.pendingClientesFromFaturamento.useQuery();
+  const { data: pendingMarcas = [] } =
+    trpc.cadastrosSistema.pendingMarcasFromFaturamento.useQuery();
+
+  const acceptPendingMarcasMutation = trpc.cadastrosSistema.acceptPendingMarcas.useMutation({
+    onSuccess: result => {
+      toast.success(`${result.created} marca(s) incluída(s) no cadastro`);
+      utils.cadastrosSistema.pendingMarcasFromFaturamento.invalidate();
+      utils.marcas.list.invalidate();
+    },
+    onError: error => toast.error(error.message),
+  });
 
   const acceptPendingClienteMutation = trpc.cadastrosSistema.acceptPendingCliente.useMutation({
     onSuccess: () => {
@@ -145,6 +157,50 @@ export default function GestorMarca() {
         </Alert>
       )}
 
+      {pendingMarcas.length > 0 && (
+        <Alert className="border-amber-300 bg-amber-50 text-amber-950">
+          <AlertCircle className="h-4 w-4 text-amber-700" />
+          <AlertTitle className="flex items-center gap-2">
+            Marcas no Faturamento fora do cadastro
+            <Badge variant="secondary" className="bg-amber-200 text-amber-900">
+              {pendingMarcas.length}
+            </Badge>
+          </AlertTitle>
+          <AlertDescription className="space-y-3 mt-2">
+            <p>
+              Estas marcas aparecem em Bases/Faturamento e ainda não estão em Marcas. Inclua-as para o vínculo com gestor.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {pendingMarcas.slice(0, 24).map(marca => (
+                <Badge key={marca.nome} variant="outline" className="border-amber-400 bg-white text-amber-950">
+                  {marca.nome}
+                </Badge>
+              ))}
+              {pendingMarcas.length > 24 && (
+                <span className="text-xs text-amber-800">+{pendingMarcas.length - 24}</span>
+              )}
+            </div>
+            <Button
+              size="sm"
+              disabled={acceptingMarcas || acceptPendingMarcasMutation.isPending}
+              onClick={async () => {
+                setAcceptingMarcas(true);
+                try {
+                  await acceptPendingMarcasMutation.mutateAsync({});
+                } finally {
+                  setAcceptingMarcas(false);
+                }
+              }}
+            >
+              {(acceptingMarcas || acceptPendingMarcasMutation.isPending) && (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              )}
+              Incluir marcas no cadastro ({pendingMarcas.length})
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="grid grid-cols-3 w-full max-w-md">
           <TabsTrigger value="relacionamento">Relacionamento</TabsTrigger>
@@ -181,6 +237,7 @@ function RelacionamentoTab() {
   const { data: relacionamentos, isLoading } = trpc.gestorMarca.list.useQuery();
   const { data: gestores } = trpc.gestores.list.useQuery();
   const { data: marcas } = trpc.marcas.list.useQuery();
+  const { data: pendingMarcas = [] } = trpc.cadastrosSistema.pendingMarcasFromFaturamento.useQuery();
 
   const createMutation = trpc.gestorMarca.create.useMutation({
     onSuccess: () => {
@@ -243,9 +300,33 @@ function RelacionamentoTab() {
       <CardHeader className="flex flex-row items-center justify-between">
         <div>
           <CardTitle className="flex items-center gap-2"><Link className="h-5 w-5" /> Relacionamento Gestor x Marca</CardTitle>
-          <CardDescription>Vincule gestores comerciais às marcas que gerenciam</CardDescription>
+          <CardDescription>Vincule gestores comerciais às marcas que gerenciam. A exportação inclui marcas novas do faturamento, ainda sem gestor.</CardDescription>
         </div>
-        <Dialog open={isOpen} onOpenChange={setIsOpen}>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={() => {
+              const rows = [
+                ...(relacionamentos ?? []).map(item => ({
+                  marca: item.marcaNome ?? "",
+                  gestor: item.gestorNome ?? "",
+                })),
+                ...pendingMarcas.map(item => ({ marca: item.nome, gestor: "" })),
+              ];
+              if (rows.length === 0) {
+                toast.error("Não há dados para exportar");
+                return;
+              }
+              exportToCsv(rows, "gestor-marca", [
+                { key: "marca", title: "Marca" },
+                { key: "gestor", title: "Gestor" },
+              ]);
+            }}
+          >
+            <Download className="h-4 w-4 mr-2" />
+            Exportar base
+          </Button>
+          <Dialog open={isOpen} onOpenChange={setIsOpen}>
           <DialogTrigger asChild>
             <Button onClick={() => resetForm()}>
               <Plus className="h-4 w-4 mr-2" /> Novo Relacionamento
@@ -292,6 +373,7 @@ function RelacionamentoTab() {
             </form>
           </DialogContent>
         </Dialog>
+        </div>
       </CardHeader>
       <CardContent>
         {isLoading ? (

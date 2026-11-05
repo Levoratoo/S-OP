@@ -1,0 +1,73 @@
+{
+  "source": "shared-snop-job-4",
+  "capturedAt": "2026-09-17T14:19:50.718Z",
+  "jobId": 4,
+  "scriptVersion": "v5.7.0",
+  "closedMonthObserved": "08/2026",
+  "sheetNames": [
+    "Visao_Executiva",
+    "Geral",
+    "Detalhado",
+    "Backtest",
+    "Backtest_Sku",
+    "Modelos_Estatisticos",
+    "Sazonalidade",
+    "Analise_Cenarios",
+    "Acuracidade",
+    "Acuracidade_Detalhada",
+    "Clientes",
+    "Cliente_detalhado",
+    "Clientes_Por_Marca",
+    "Metodologia"
+  ],
+  "visaoExecutiva": {
+    "rowCount": 102,
+    "sumPrevisaoFinalSugerida": 316983673,
+    "sumHistorico12M": 107258032,
+    "sampleGrupos": [
+      {
+        "codigo": "MTO-Fórmula Animal-Automática",
+        "previsaoFinalSugerida": 711043,
+        "historico12M": 402200
+      },
+      {
+        "codigo": "MTS-Adidas-Automática",
+        "previsaoFinalSugerida": 19632033,
+        "historico12M": 9001850
+      },
+      {
+        "codigo": "MTS-Live-Adicionais",
+        "previsaoFinalSugerida": 39651919,
+        "historico12M": 9529700
+      },
+      {
+        "codigo": "MTS-Shoulder-Adicionais",
+        "previsaoFinalSugerida": 28032493,
+        "historico12M": 6670846
+      }
+    ]
+  },
+  "analyticsSummary": {
+    "skuCount": 95,
+    "avgMapeTotal": 0.3073,
+    "acuracidadeMedia": 0.6927
+  },
+  "executiveSummary": {
+    "skuCount": 102,
+    "oportunidades": 29,
+    "riscos": 12
+  },
+  "reportsExpected": [
+    "1-Consolidado",
+    "2-Resumo R$",
+    "3-PVxCRM",
+    "4-Resumo PROD",
+    "5-Base Ciclo",
+    "6-MTO Variação",
+    "7-RFS"
+  ],
+  "tolerance": {
+    "absolute": 1,
+    "relative": 0.001
+  }
+}

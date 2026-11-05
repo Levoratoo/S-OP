@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useLocation } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -28,8 +29,22 @@ import {
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 
 export default function GerenciamentoUsuarios() {
+  const [location] = useLocation();
+  const [activeTab, setActiveTab] = useState(
+    location.includes("/admin/permissoes") ? "niveis" : "usuarios"
+  );
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedUser, setSelectedUser] = useState<any>(null);
+  const [editNivelDialogOpen, setEditNivelDialogOpen] = useState(false);
+  const [editNivelData, setEditNivelData] = useState({
+    id: 0,
+    nivel: 1,
+    nome: "",
+    descricao: "",
+    podeEditarCadastros: false,
+    podeVerTodasMarcas: false,
+    podeGerenciarUsuarios: false,
+  });
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [marcasDialogOpen, setMarcasDialogOpen] = useState(false);
   const [selectedNivel, setSelectedNivel] = useState<string>("");
@@ -55,10 +70,22 @@ export default function GerenciamentoUsuarios() {
     podeGerenciarUsuarios: false,
   });
 
+  useEffect(() => {
+    setActiveTab(location.includes("/admin/permissoes") ? "niveis" : "usuarios");
+  }, [location]);
+
   // Queries
   const { data: usuarios = [], isLoading: loadingUsuarios, refetch: refetchUsuarios } = trpc.usuarios.list.useQuery();
   const { data: niveisAcesso = [], isLoading: loadingNiveis, refetch: refetchNiveis } = trpc.niveisAcesso.list.useQuery();
   const { data: marcas = [] } = trpc.marcas.list.useQuery();
+  const updateNivelDefMutation = trpc.niveisAcesso.update.useMutation({
+    onSuccess: () => {
+      toast.success("Nível atualizado!");
+      refetchNiveis();
+      setEditNivelDialogOpen(false);
+    },
+    onError: error => toast.error(error.message),
+  });
 
   // Mutations
   const updateNivelMutation = trpc.usuarios.updateNivelAcesso.useMutation({
@@ -297,11 +324,17 @@ export default function GerenciamentoUsuarios() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-            <Users className="h-6 w-6 text-indigo-600" />
-            Gerenciamento de Usuários
+            {activeTab === "niveis" ? (
+              <Shield className="h-6 w-6 text-indigo-600" />
+            ) : (
+              <Users className="h-6 w-6 text-indigo-600" />
+            )}
+            {activeTab === "niveis" ? "Permissões" : "Gerenciamento de Usuários"}
           </h1>
           <p className="text-gray-500 mt-1">
-            Gerencie os usuários do sistema e seus níveis de acesso
+            {activeTab === "niveis"
+              ? "Crie e ajuste os níveis de permissão do sistema"
+              : "Gerencie os usuários do sistema e seus níveis de acesso"}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -323,7 +356,7 @@ export default function GerenciamentoUsuarios() {
         </div>
       </div>
 
-      <Tabs defaultValue="usuarios" className="space-y-4">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
         <TabsList>
           <TabsTrigger value="usuarios" className="flex items-center gap-2">
             <Users className="h-4 w-4" />
@@ -525,6 +558,24 @@ export default function GerenciamentoUsuarios() {
                             <div className="text-sm text-gray-500">{nivel.descricao}</div>
                           </div>
                         </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setEditNivelData({
+                              id: nivel.id,
+                              nivel: nivel.nivel,
+                              nome: nivel.nome,
+                              descricao: nivel.descricao || "",
+                              podeEditarCadastros: Boolean(nivel.podeEditarCadastros),
+                              podeVerTodasMarcas: Boolean(nivel.podeVerTodasMarcas),
+                              podeGerenciarUsuarios: Boolean(nivel.podeGerenciarUsuarios),
+                            });
+                            setEditNivelDialogOpen(true);
+                          }}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
                       </div>
                       <div className="flex gap-4 mt-3 text-sm">
                         <div className="flex items-center gap-2">
@@ -942,6 +993,80 @@ export default function GerenciamentoUsuarios() {
               }
             >
               {createNivelMutation.isPending ? "Criando..." : "Criar nível"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={editNivelDialogOpen} onOpenChange={setEditNivelDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Editar nível de permissão</DialogTitle>
+            <DialogDescription>Ajuste nome, descrição e flags deste nível</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label>Nome</Label>
+              <Input
+                value={editNivelData.nome}
+                onChange={e => setEditNivelData({ ...editNivelData, nome: e.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Descrição</Label>
+              <Input
+                value={editNivelData.descricao}
+                onChange={e => setEditNivelData({ ...editNivelData, descricao: e.target.value })}
+              />
+            </div>
+            <div className="space-y-3 rounded-lg border p-3">
+              <div className="flex items-center justify-between">
+                <Label className="cursor-pointer">Pode editar cadastros</Label>
+                <Switch
+                  checked={editNivelData.podeEditarCadastros}
+                  onCheckedChange={checked =>
+                    setEditNivelData({ ...editNivelData, podeEditarCadastros: checked })
+                  }
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <Label className="cursor-pointer">Pode ver todas as marcas</Label>
+                <Switch
+                  checked={editNivelData.podeVerTodasMarcas}
+                  onCheckedChange={checked =>
+                    setEditNivelData({ ...editNivelData, podeVerTodasMarcas: checked })
+                  }
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <Label className="cursor-pointer">Pode gerenciar usuários</Label>
+                <Switch
+                  checked={editNivelData.podeGerenciarUsuarios}
+                  onCheckedChange={checked =>
+                    setEditNivelData({ ...editNivelData, podeGerenciarUsuarios: checked })
+                  }
+                />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditNivelDialogOpen(false)}>
+              Cancelar
+            </Button>
+            <Button
+              disabled={!editNivelData.nome.trim() || updateNivelDefMutation.isPending}
+              onClick={() =>
+                updateNivelDefMutation.mutate({
+                  id: editNivelData.id,
+                  nome: editNivelData.nome.trim(),
+                  descricao: editNivelData.descricao.trim() || undefined,
+                  podeEditarCadastros: editNivelData.podeEditarCadastros,
+                  podeVerTodasMarcas: editNivelData.podeVerTodasMarcas,
+                  podeGerenciarUsuarios: editNivelData.podeGerenciarUsuarios,
+                })
+              }
+            >
+              {updateNivelDefMutation.isPending ? "Salvando..." : "Salvar"}
             </Button>
           </DialogFooter>
         </DialogContent>

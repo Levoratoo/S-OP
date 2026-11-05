@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { trpc } from "@/lib/trpc";
-import { Loader2, Eye, Download, ArrowLeft, BarChart3 } from "lucide-react";
+import { Loader2, Eye, Download, ArrowLeft, BarChart3, FileSpreadsheet } from "lucide-react";
 import { toast } from "sonner";
 import { downloadPrevisaoJobExcel } from "@/lib/downloadPrevisaoJobExcel";
 
@@ -23,6 +23,23 @@ function formatDate(value: Date | string | number | null | undefined) {
 
 function canUseOutput(job: { outputFileName?: string | null; workdir?: string | null }) {
   return Boolean(job.outputFileName && job.workdir);
+}
+
+type JobMeta = {
+  origin?: string;
+  sourceMetadata?: { previstoOrigem?: string } | null;
+  vendas?: { rowCount?: number; lastCompetence?: string | null; firstCompetence?: string | null };
+  previsto?: { rowCount?: number; lastCompetence?: string | null } | null;
+  clientes?: { rowCount?: number } | null;
+};
+
+function parseMeta(json: string | null | undefined): JobMeta | null {
+  if (!json) return null;
+  try {
+    return JSON.parse(json) as JobMeta;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -54,6 +71,10 @@ export default function PrevisaoPythonCiclo13() {
   }, [estatisticaJobs, selectedJobId]);
 
   const selected = estatisticaJobs.find(j => j.id === selectedJobId) ?? estatisticaJobs[0];
+  const meta = useMemo(
+    () => parseMeta(selected?.inputMetadataJson ?? null),
+    [selected?.inputMetadataJson]
+  );
 
   return (
     <div className="space-y-6">
@@ -69,6 +90,61 @@ export default function PrevisaoPythonCiclo13() {
           Ir para Gerar Previsão
         </Button>
       </div>
+
+      {selected && (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm text-muted-foreground">Último job</CardTitle>
+            </CardHeader>
+            <CardContent className="text-2xl font-semibold">#{selected.id}</CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm text-muted-foreground">SKUs na base de vendas</CardTitle>
+            </CardHeader>
+            <CardContent className="text-2xl font-semibold">
+              {(meta?.vendas?.rowCount ?? 0).toLocaleString("pt-BR")}
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm text-muted-foreground">Competência</CardTitle>
+            </CardHeader>
+            <CardContent className="text-lg font-semibold">
+              {meta?.vendas?.firstCompetence && meta?.vendas?.lastCompetence
+                ? `${meta.vendas.firstCompetence} → ${meta.vendas.lastCompetence}`
+                : meta?.vendas?.lastCompetence || "—"}
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm text-muted-foreground">Arquivo</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                disabled={!canUseOutput(selected)}
+                onClick={() => setLocation(`/previsao-python/jobs/${selected.id}/visualizacao`)}
+              >
+                <Eye className="mr-1 h-4 w-4" />
+                Visão executiva
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!canUseOutput(selected)}
+                onClick={() =>
+                  void downloadPrevisaoJobExcel(selected.id).catch(err => toast.error(String(err)))
+                }
+              >
+                <FileSpreadsheet className="mr-1 h-4 w-4" />
+                Excel
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       <Card>
         <CardHeader>
@@ -103,53 +179,62 @@ export default function PrevisaoPythonCiclo13() {
                 <TableRow>
                   <TableHead>Job</TableHead>
                   <TableHead>Versão</TableHead>
+                  <TableHead>SKUs</TableHead>
+                  <TableHead>Até</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Criado</TableHead>
                   <TableHead className="text-right">Ações</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {estatisticaJobs.map(job => (
-                  <TableRow
-                    key={job.id}
-                    className={selected?.id === job.id ? "bg-muted/50" : undefined}
-                    onClick={() => setSelectedJobId(job.id)}
-                  >
-                    <TableCell>#{job.id}</TableCell>
-                    <TableCell>{job.scriptVersion}</TableCell>
-                    <TableCell>
-                      <Badge variant={statusVariant[job.status] || "secondary"}>{job.status}</Badge>
-                    </TableCell>
-                    <TableCell>{formatDate(job.createdAt)}</TableCell>
-                    <TableCell className="text-right space-x-1">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={!canUseOutput(job)}
-                        onClick={e => {
-                          e.stopPropagation();
-                          setLocation(`/previsao-python/jobs/${job.id}/visualizacao`);
-                        }}
-                      >
-                        <Eye className="mr-1 h-4 w-4" />
-                        Ver
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={!canUseOutput(job)}
-                        onClick={e => {
-                          e.stopPropagation();
-                          void downloadPrevisaoJobExcel(job.id).catch(err =>
-                            toast.error(String(err))
-                          );
-                        }}
-                      >
-                        <Download className="h-4 w-4" />
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {estatisticaJobs.map(job => {
+                  const jobMeta = parseMeta(job.inputMetadataJson);
+                  return (
+                    <TableRow
+                      key={job.id}
+                      className={selected?.id === job.id ? "bg-muted/50" : undefined}
+                      onClick={() => setSelectedJobId(job.id)}
+                    >
+                      <TableCell>#{job.id}</TableCell>
+                      <TableCell>{job.scriptVersion}</TableCell>
+                      <TableCell>
+                        {(jobMeta?.vendas?.rowCount ?? 0).toLocaleString("pt-BR")}
+                      </TableCell>
+                      <TableCell>{jobMeta?.vendas?.lastCompetence || "—"}</TableCell>
+                      <TableCell>
+                        <Badge variant={statusVariant[job.status] || "secondary"}>{job.status}</Badge>
+                      </TableCell>
+                      <TableCell>{formatDate(job.createdAt)}</TableCell>
+                      <TableCell className="text-right space-x-1">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={!canUseOutput(job)}
+                          onClick={e => {
+                            e.stopPropagation();
+                            setLocation(`/previsao-python/jobs/${job.id}/visualizacao`);
+                          }}
+                        >
+                          <Eye className="mr-1 h-4 w-4" />
+                          Ver
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={!canUseOutput(job)}
+                          onClick={e => {
+                            e.stopPropagation();
+                            void downloadPrevisaoJobExcel(job.id).catch(err =>
+                              toast.error(String(err))
+                            );
+                          }}
+                        >
+                          <Download className="h-4 w-4" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           )}

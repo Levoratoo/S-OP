@@ -1,0 +1,61 @@
+{
+  "jobId": 13,
+  "ok": true,
+  "gaps": [],
+  "sheets": [
+    "Visao_Executiva",
+    "Geral",
+    "Detalhado",
+    "Backtest",
+    "Backtest_Sku",
+    "Modelos_Estatisticos",
+    "Sazonalidade",
+    "Analise_Cenarios",
+    "Acuracidade",
+    "Acuracidade_Detalhada",
+    "Clientes",
+    "Cliente_detalhado",
+    "Clientes_Por_Marca",
+    "Clientes_Analise",
+    "Metodologia"
+  ],
+  "detalhado_rows": 254,
+  "clientes_analise_rows": 250,
+  "cliente_detalhado_rows": 49097,
+  "sku_like_codes": 254,
+  "tml_codes": 0,
+  "en_headers": [],
+  "skus_projetar_csv": 254,
+  "missing_vs_projetar": 0,
+  "extra_vs_projetar": 0,
+  "missing_sample": [],
+  "extra_sample": [],
+  "detalhado_code_sample": [
+    "80.01.000372-Outlet Lingerie",
+    "80.01.000809-Outlet Lingerie",
+    "80.01.000846-Lacoste",
+    "80.01.000847-Lacoste",
+    "80.01.000848-Lacoste"
+  ],
+  "detalhado_tail_headers": [
+    "mar/2027_ENSEMBLE",
+    "abr/2027_ENSEMBLE",
+    "mai/2027_ENSEMBLE",
+    "jun/2027_ENSEMBLE",
+    "jul/2027_ENSEMBLE",
+    "ago/2027_ENSEMBLE",
+    "set/2027_ENSEMBLE",
+    "TOTAL_12M_ENSEMBLE"
+  ],
+  "cliente_detalhado_tail": [
+    "jan-26",
+    "fev-26",
+    "mar-26",
+    "abr-26",
+    "mai-26",
+    "jun-26",
+    "jul-26",
+    "ago-26"
+  ],
+  "previstoOrigem": "seed_sku"
+}

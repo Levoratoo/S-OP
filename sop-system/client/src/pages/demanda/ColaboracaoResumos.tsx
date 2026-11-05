@@ -8,7 +8,7 @@ import { exportToCsv } from "@/lib/exportCsv";
 import { trpc } from "@/lib/trpc";
 import { Download, Loader2, RefreshCw, Upload } from "lucide-react";
 import { toast } from "sonner";
-import * as XLSX from "xlsx";
+import { parseCrmExcel } from "./parse-crm-excel";
 
 function formatNum(value: string | number | null | undefined) {
   const n = Number(value ?? 0);
@@ -101,83 +101,12 @@ export function ColaboracaoResumos({ cicloId, consolidado, marcasConsolidado }: 
 
   const handleCrmFile = async (file: File) => {
     try {
-      const buf = await file.arrayBuffer();
-      const wb = XLSX.read(buf, { type: "array", cellDates: true });
-      const sheet = wb.Sheets[wb.SheetNames[0]];
-      const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
-      const cell = (row: Record<string, unknown>, ...keys: string[]) => {
-        for (const k of keys) {
-          if (row[k] != null && String(row[k]).trim() !== "") return row[k];
-          const found = Object.keys(row).find(h => h.trim().toLowerCase() === k.toLowerCase());
-          if (found && row[found] != null && String(row[found]).trim() !== "") return row[found];
-        }
-        return "";
-      };
-      const num = (row: Record<string, unknown>, ...keys: string[]) => {
-        const v = cell(row, ...keys);
-        if (v instanceof Date) return 0;
-        const n = Number(String(v ?? "0").replace(/\s/g, "").replace(",", "."));
-        return Number.isFinite(n) ? n : 0;
-      };
-      const asDateStr = (v: unknown) => {
-        if (v instanceof Date && !Number.isNaN(v.getTime())) {
-          return `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, "0")}-${String(v.getDate()).padStart(2, "0")}`;
-        }
-        return String(v ?? "").trim();
-      };
-      const rows = json.map(row => {
-        const sku = String(
-          cell(
-            row,
-            "Produto",
-            "SKU",
-            "sku",
-            "Cod Item",
-            "CodItem",
-            "Codigo",
-            "Cod Material",
-            "Cod. Material"
-          )
-        ).trim();
-        return {
-          sku,
-          descricao: String(cell(row, "Descrição", "Descricao", "descricao")),
-          marca: String(cell(row, "Marca", "marca")),
-          card: String(cell(row, "Card", "card", "ID Card")),
-          cliente: String(cell(row, "Cliente", "cliente")),
-          gestor: String(cell(row, "Gestor", "gestor")),
-          temperatura: String(cell(row, "Temperatura", "temperatura")),
-          tipo: String(
-            cell(
-              row,
-              "ColaboracaoAposta/Oportunidade",
-              "ColaboracaoApostaOportunidade",
-              "Tipo",
-              "tipo"
-            )
-          ),
-          orcamento: num(row, "Orçamento", "Orcamento", "Cálculo OR", "Calculo OR"),
-          valorVenda: num(row, "R$ Venda", "R$Venda", "Valor Venda"),
-          dataFaturamento: asDateStr(
-            cell(row, "Data de Faturamento", "Data Faturamento", "DataFaturamento", "Competencia")
-          ),
-          qtdMes: num(row, "Qtd Mês", "Qtd Mes", "Qtde Mês", "Qtde Mes"),
-          modalidade: String(cell(row, "Modalidade", "modalidade")),
-          m1: num(row, "m1", "M1"),
-          m2: num(row, "m2", "M2"),
-          m3: num(row, "m3", "M3"),
-          m4: num(row, "m4", "M4"),
-          m5: num(row, "m5", "M5"),
-          m6: num(row, "m6", "M6"),
-          m7: num(row, "m7", "M7"),
-          m8: num(row, "m8", "M8"),
-          m9: num(row, "m9", "M9"),
-          m10: num(row, "m10", "M10"),
-          m11: num(row, "m11", "M11"),
-          m12: num(row, "m12", "M12"),
-        };
-      });
-      importCrm.mutate({ cicloId, rows: rows.filter(r => r.sku) });
+      const rows = parseCrmExcel(await file.arrayBuffer());
+      if (!rows.length) {
+        toast.error("Nenhuma linha com SKU no Excel.");
+        return;
+      }
+      importCrm.mutate({ cicloId, rows });
     } catch (e) {
       toast.error(`Falha ao ler CRM: ${String(e)}`);
     }

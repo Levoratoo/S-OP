@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,11 +17,14 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { normalizeMarcaNome, useAccessControl } from "@/hooks/useAccessControl";
 import { trpc } from "@/lib/trpc";
-import { Loader2, Plus, RefreshCw } from "lucide-react";
+import { Loader2, Plus, RefreshCw, Upload } from "lucide-react";
 import { toast } from "sonner";
+import { ColaboracaoArquivo } from "./ColaboracaoArquivo";
 import { ColaboracaoResumos } from "./ColaboracaoResumos";
+import { parseCrmExcel } from "./parse-crm-excel";
 
 type PlanoColab = "MTS" | "PV_MTO" | "CRM";
+type GradeAba = PlanoColab | "CONSOLIDADO";
 
 const PLANOS: PlanoColab[] = ["MTS", "PV_MTO", "CRM"];
 const PLANO_LABEL: Record<PlanoColab, string> = {
@@ -63,7 +66,8 @@ export default function Colaboracoes() {
   const utils = trpc.useUtils();
   const { podeVerTodasMarcas, marcasPermitidasNomes, isGestor } = useAccessControl();
   const [cicloId, setCicloId] = useState<number | null>(null);
-  const [plano, setPlano] = useState<PlanoColab>("MTS");
+  const [abaGrade, setAbaGrade] = useState<GradeAba>("MTS");
+  const plano: PlanoColab = abaGrade === "CONSOLIDADO" ? "MTS" : abaGrade;
   const [search, setSearch] = useState("");
   const [abaPrincipal, setAbaPrincipal] = useState<"grade" | "consolidado">("grade");
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -83,7 +87,7 @@ export default function Colaboracoes() {
 
   const { data: itens, isLoading: loadingItens } = trpc.cicloComercial.itens.useQuery(
     { cicloId: selectedCicloId ?? 0, planoColab: plano },
-    { enabled: Boolean(selectedCicloId) }
+    { enabled: Boolean(selectedCicloId) && abaGrade !== "CONSOLIDADO" }
   );
 
   const { data: consolidado } = trpc.cicloComercial.consolidado.useQuery(
@@ -93,7 +97,7 @@ export default function Colaboracoes() {
 
   const { data: realizadoAnual } = trpc.cicloComercial.realizadoAnual.useQuery(
     { anos: [2025, 2026] },
-    { enabled: Boolean(selectedCicloId) && plano === "MTS" }
+    { enabled: Boolean(selectedCicloId) && abaGrade === "MTS" }
   );
 
   const { data: jobs } = trpc.previsaoPython.list.useQuery({ limit: 20 });
@@ -124,6 +128,57 @@ export default function Colaboracoes() {
     },
     onError: error => toast.error(error.message),
   });
+
+  const manualPvSync = useRef(false);
+  const autoPvSynced = useRef<number | null>(null);
+  const syncPv = trpc.cicloComercial.syncPvFromCarteira.useMutation({
+    onSuccess: result => {
+      utils.cicloComercial.itens.invalidate();
+      utils.cicloComercial.consolidado.invalidate();
+      if (manualPvSync.current) {
+        manualPvSync.current = false;
+        toast.success(
+          `PV MTO atualizado da carteira: ${result.itensCriados} SKUs (${result.pedidosNoCiclo} pedidos no ciclo).`
+        );
+      }
+    },
+    onError: error => {
+      manualPvSync.current = false;
+      toast.error(error.message);
+    },
+  });
+
+  useEffect(() => {
+    if (!selectedCicloId || ciclo?.id !== selectedCicloId || ciclo.status === "FECHADO") return;
+    if (autoPvSynced.current === selectedCicloId || syncPv.isPending) return;
+    autoPvSynced.current = selectedCicloId;
+    syncPv.mutate({ cicloId: selectedCicloId });
+  }, [selectedCicloId, ciclo?.id, ciclo?.status, syncPv]);
+
+  const importCrm = trpc.cicloComercial.importCrm.useMutation({
+    onSuccess: result => {
+      toast.success(`CRM importado: ${result.itensCriados} itens.`);
+      if (result.avisos.length) toast.message(`${result.avisos.length} avisos de validação`);
+      if (result.erros.length) toast.error(`${result.erros.length} erros — confira SKUs`);
+      utils.cicloComercial.itens.invalidate();
+      utils.cicloComercial.consolidado.invalidate();
+    },
+    onError: error => toast.error(error.message),
+  });
+
+  const handleCrmFile = async (file: File) => {
+    if (!selectedCicloId) return;
+    try {
+      const rows = parseCrmExcel(await file.arrayBuffer());
+      if (!rows.length) {
+        toast.error("Nenhuma linha com SKU no Excel.");
+        return;
+      }
+      importCrm.mutate({ cicloId: selectedCicloId, rows });
+    } catch (error) {
+      toast.error(`Falha ao ler CRM: ${String(error)}`);
+    }
+  };
 
   const successJobs = useMemo(
     () =>
@@ -434,10 +489,35 @@ export default function Colaboracoes() {
                   <div>
                     <CardTitle>Grade de colaboração</CardTitle>
                     <CardDescription>
-                      MTS: realizado 2025/2026 · previsão estatística · coluna Colab do vendedor (em
-                      branco = usa a previsão)
+                      {abaGrade === "CONSOLIDADO"
+                        ? "Arquivo consolidado do ciclo: uma linha por SKU e mês, no modelo padrão."
+                        : abaGrade === "PV_MTO"
+                          ? "Pedidos em aberto da Carteira / PV (Liberado + PRG), somados por SKU no horizonte do ciclo"
+                          : abaGrade === "CRM"
+                            ? "Cards do comercial. Importe o Excel para preencher a grade deste ciclo."
+                            : "MTS: realizado 2025/2026 e, em cada mês do ciclo, previsão estatística ao lado da Colab do vendedor (em branco = usa a previsão)"}
                     </CardDescription>
                   </div>
+                  {abaGrade === "PV_MTO" && ciclo?.status !== "FECHADO" && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={syncPv.isPending}
+                      onClick={() => {
+                        if (!selectedCicloId) return;
+                        manualPvSync.current = true;
+                        syncPv.mutate({ cicloId: selectedCicloId });
+                      }}
+                    >
+                      {syncPv.isPending ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <RefreshCw className="mr-2 h-4 w-4" />
+                      )}
+                      Atualizar da Carteira
+                    </Button>
+                  )}
+                  {abaGrade !== "CONSOLIDADO" && (
                   <div className="w-64 space-y-1">
                     <Label>Buscar</Label>
                     <Input
@@ -446,17 +526,42 @@ export default function Colaboracoes() {
                       onChange={e => setSearch(e.target.value)}
                     />
                   </div>
+                  )}
                 </div>
               </CardHeader>
               <CardContent>
-                <Tabs value={plano} onValueChange={v => setPlano(v as PlanoColab)}>
-                  <TabsList>
-                    {PLANOS.map(p => (
-                      <TabsTrigger key={p} value={p}>
-                        {PLANO_LABEL[p]}
-                      </TabsTrigger>
-                    ))}
-                  </TabsList>
+                <Tabs value={abaGrade} onValueChange={v => setAbaGrade(v as GradeAba)}>
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <TabsList>
+                      {PLANOS.map(p => (
+                        <TabsTrigger key={p} value={p}>
+                          {PLANO_LABEL[p]}
+                        </TabsTrigger>
+                      ))}
+                      <TabsTrigger value="CONSOLIDADO">Consolidado</TabsTrigger>
+                    </TabsList>
+                    {abaGrade === "CRM" && ciclo?.status !== "FECHADO" && (
+                      <Label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-md border bg-background px-3 text-sm font-medium hover:bg-accent">
+                        {importCrm.isPending ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Upload className="h-4 w-4" />
+                        )}
+                        Importar Excel
+                        <input
+                          type="file"
+                          accept=".xlsx,.xls,.csv"
+                          className="hidden"
+                          disabled={importCrm.isPending}
+                          onChange={event => {
+                            const file = event.target.files?.[0];
+                            if (file) void handleCrmFile(file);
+                            event.target.value = "";
+                          }}
+                        />
+                      </Label>
+                    )}
+                  </div>
                   {PLANOS.map(p => (
                     <TabsContent key={p} value={p} className="mt-4">
                       {loadingItens ? (
@@ -482,15 +587,15 @@ export default function Colaboracoes() {
                                     {m}/26
                                   </TableHead>
                                 ))}
-                                {MES_KEYS.map((_, i) => (
-                                  <TableHead key={`prev-${i}`} className="text-right text-xs bg-blue-50/50">
-                                    {cicloMesLabel(i)} Prev
-                                  </TableHead>
-                                ))}
                                 {MES_KEYS.map((key, i) => (
-                                  <TableHead key={`colab-${key}`} className="text-right text-xs bg-amber-50/60">
-                                    {cicloMesLabel(i)} Colab
-                                  </TableHead>
+                                  <Fragment key={`pair-h-${key}`}>
+                                    <TableHead className="border-l text-right text-xs bg-blue-50/80">
+                                      {cicloMesLabel(i)} Prev
+                                    </TableHead>
+                                    <TableHead className="text-right text-xs bg-amber-50/80">
+                                      {cicloMesLabel(i)} Colab
+                                    </TableHead>
+                                  </Fragment>
                                 ))}
                                 <TableHead className="text-right">Total</TableHead>
                               </TableRow>
@@ -498,7 +603,7 @@ export default function Colaboracoes() {
                             <TableBody>
                               {filteredItens.length === 0 ? (
                                 <TableRow>
-                                  <TableCell colSpan={52} className="text-center text-muted-foreground">
+                                  <TableCell colSpan={51} className="text-center text-muted-foreground">
                                     Sem itens neste plano.
                                   </TableCell>
                                 </TableRow>
@@ -531,33 +636,29 @@ export default function Colaboracoes() {
                                           {q ? formatNum(q) : "·"}
                                         </TableCell>
                                       ))}
-                                      {EST_KEYS.map(key => {
-                                        const v = (item as Record<string, unknown>)[key];
-                                        return (
-                                          <TableCell
-                                            key={key}
-                                            className="p-1 text-right tabular-nums bg-blue-50/30"
-                                          >
-                                            {formatNum(Number(v || 0))}
-                                          </TableCell>
-                                        );
-                                      })}
-                                      {MES_KEYS.map(key => {
+                                      {MES_KEYS.map((key, i) => {
+                                        const estKey = EST_KEYS[i];
+                                        const v = (item as Record<string, unknown>)[estKey];
                                         const raw = item[key];
                                         const empty =
                                           raw === null || raw === undefined || String(raw).trim() === "";
                                         return (
-                                          <TableCell key={key} className="p-0.5 bg-amber-50/40">
-                                            <Input
-                                              className="h-8 w-[4.5rem] px-1 text-right"
-                                              placeholder="—"
-                                              defaultValue={empty ? "" : String(Math.round(Number(raw || 0)))}
-                                              disabled={ciclo?.status === "FECHADO"}
-                                              onBlur={e =>
-                                                handleMonthEdit(item.id, key, e.target.value)
-                                              }
-                                            />
-                                          </TableCell>
+                                          <Fragment key={`pair-${item.id}-${key}`}>
+                                            <TableCell className="border-l p-1 text-right tabular-nums bg-blue-50/40">
+                                              {formatNum(Number(v || 0))}
+                                            </TableCell>
+                                            <TableCell className="p-0.5 bg-amber-50/50">
+                                              <Input
+                                                className="h-8 w-[4.5rem] px-1 text-right"
+                                                placeholder="—"
+                                                defaultValue={empty ? "" : String(Math.round(Number(raw || 0)))}
+                                                disabled={ciclo?.status === "FECHADO"}
+                                                onBlur={e =>
+                                                  handleMonthEdit(item.id, key, e.target.value)
+                                                }
+                                              />
+                                            </TableCell>
+                                          </Fragment>
                                         );
                                       })}
                                       <TableCell className="font-medium text-right tabular-nums">
@@ -588,7 +689,11 @@ export default function Colaboracoes() {
                               {filteredItens.length === 0 ? (
                                 <TableRow>
                                   <TableCell colSpan={16} className="text-center text-muted-foreground">
-                                    Sem itens neste plano.
+                                    {p === "PV_MTO"
+                                      ? "Nenhum pedido da carteira neste horizonte."
+                                      : p === "CRM"
+                                        ? "Nenhum card CRM. Importe o Excel para preencher a grade."
+                                        : "Sem itens neste plano."}
                                   </TableCell>
                                 </TableRow>
                               ) : (
@@ -633,6 +738,9 @@ export default function Colaboracoes() {
                       )}
                     </TabsContent>
                   ))}
+                  <TabsContent value="CONSOLIDADO" className="mt-4">
+                    {selectedCicloId ? <ColaboracaoArquivo cicloId={selectedCicloId} /> : null}
+                  </TabsContent>
                 </Tabs>
               </CardContent>
             </Card>

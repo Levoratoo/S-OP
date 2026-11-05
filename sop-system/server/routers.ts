@@ -7,6 +7,14 @@ import { z } from "zod";
 import path from "node:path";
 import fs from "node:fs";
 import * as db from "./db";
+import { isCfopFaturamentoPermitido } from "@shared/cfop-faturamento";
+import {
+  getFaturamentoYearsSyncStatus,
+  startFaturamentoYearsSync,
+  syncFaturamentoFromSql,
+  syncFaturamentoRecent,
+  testErpConnection,
+} from "./services/faturamento-sql-sync";
 import * as sharepoint from "./sharepoint";
 import * as previsaoPythonService from "./previsaoPython";
 import { importSystemCadastros } from "./services/system-cadastros-importer";
@@ -14,8 +22,10 @@ import { gerarBasesPrevisaoPython, PrevisaoEtlUserError } from "./services/previ
 import { seedDadosMestresOperacionais } from "./services/seed-mestres";
 import {
   acceptPendingClienteFromFaturamento,
+  acceptPendingMarcasFromFaturamento,
   acceptPendingSkuFromFaturamento,
   listPendingClientesFromFaturamento,
+  listPendingMarcasFromFaturamento,
   listPendingSkusFromFaturamento,
   seedProdutosClientesFromFaturamento,
 } from "./services/seed-from-faturamento";
@@ -30,6 +40,7 @@ import {
 import {
   getAaPrevReal,
   getBaseCicloFull,
+  getConsolidadoArquivo,
   getMtoVariacao,
   getPvVsCrmDetalhado,
   getRealizadoAnualPorSku,
@@ -1093,6 +1104,10 @@ export const appRouter = router({
       .input(z.object({ cicloId: z.number() }))
       .query(({ input }) => getBaseCicloFull(input.cicloId)),
 
+    consolidadoArquivo: protectedProcedure
+      .input(z.object({ cicloId: z.number() }))
+      .query(({ input }) => getConsolidadoArquivo(input.cicloId)),
+
     resumoProd: protectedProcedure
       .input(z.object({ cicloId: z.number() }))
       .query(({ input }) => getResumoProd(input.cicloId)),
@@ -1310,22 +1325,20 @@ export const appRouter = router({
         tipoFaturamento: z.enum(["DEVOLUCAO", "SAIDA"]).optional(),
       })))
       .mutation(async ({ input }) => {
-        const data = input.map(item => ({
+        const allowed = input.filter(item => isCfopFaturamentoPermitido(item.cfop));
+        const data = allowed.map(item => ({
           ...item,
           dataEmissao: new Date(item.dataEmissao),
         }));
         const result = await db.createFaturamentoBatch(data);
-        await db.rebuildFaturamentoResumo();
-        return result;
+        if (result.count > 0) await db.rebuildFaturamentoResumo();
+        return { ...result, skippedCfop: input.length - allowed.length };
       }),
     
     clear: protectedProcedure.mutation(() => db.clearFaturamento()),
 
     /** Testa conexão com MetricsPROD (SQL Server ERP). */
-    testSqlConnection: protectedProcedure.query(async () => {
-      const { testErpConnection } = await import("./services/faturamento-sql-sync");
-      return testErpConnection();
-    }),
+    testSqlConnection: protectedProcedure.query(() => testErpConnection()),
 
     /**
      * Sincroniza faturamento a partir da query SQL do ERP (substitui planilha).
@@ -1333,10 +1346,22 @@ export const appRouter = router({
      */
     syncFromSql: protectedProcedure
       .input(z.object({ clearBefore: z.boolean().default(true) }).optional())
-      .mutation(async ({ input }) => {
-        const { syncFaturamentoFromSql } = await import("./services/faturamento-sql-sync");
-        return syncFaturamentoFromSql({ clearBefore: input?.clearBefore ?? true });
-      }),
+      .mutation(({ input }) => syncFaturamentoFromSql({ clearBefore: input?.clearBefore ?? true })),
+
+    /** Recarrega anos fechados com o mesmo mapeamento da carga de 2026, sem mexer nos demais. */
+    syncYears: protectedProcedure
+      .input(z.object({ years: z.array(z.number().int().min(2000).max(2100)).min(1).max(6) }))
+      .mutation(({ input }) => startFaturamentoYearsSync(input.years)),
+
+    syncYearsStatus: protectedProcedure.query(() => getFaturamentoYearsSyncStatus()),
+
+    /**
+     * Descarta CFOP fora da lista e puxa notas novas desde a última data local.
+     * A tela de faturamento chama isso ao abrir.
+     */
+    refreshRecent: protectedProcedure
+      .input(z.object({ force: z.boolean().optional() }).optional())
+      .mutation(({ input }) => syncFaturamentoRecent({ force: input?.force === true })),
     
     delete: protectedProcedure
       .input(z.object({ id: z.number() }))
@@ -1607,7 +1632,7 @@ export const appRouter = router({
         return job;
       }),
 
-    /** Passo 1: gera as 3 bases a partir do faturamento e enfileira o job Python. */
+    /** Atualiza o faturamento no ERP e só então gera as 3 bases e enfileira o Python. */
     createFromSistema: protectedProcedure
       .input(
         z
@@ -1618,7 +1643,16 @@ export const appRouter = router({
           .optional()
       )
       .mutation(async ({ input, ctx }) => {
-        const sourceSync = await syncEstatisticaIaCadastros();
+        const faturamentoSync = await syncFaturamentoRecent({ force: true });
+        if (!faturamentoSync.maxDepois) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              "Base de faturamento vazia. Carregue o histórico do ERP em Bases / Faturamento antes de gerar a previsão.",
+          });
+        }
+        // CSV do Excel é opcional: a fonte oficial de Projetar é o cadastro no banco.
+        const sourceSync = await syncEstatisticaIaCadastros({ requireFreshSources: false });
         const bases = await runGerarBasesOrThrow({
           dataInicio: input?.dataInicio,
           dataFim: input?.dataFim,
@@ -1648,14 +1682,24 @@ export const appRouter = router({
               }
             : null,
         });
-        return { job, stats: bases.stats, sourceSync };
+        return { job, stats: bases.stats, sourceSync, faturamentoSync };
       }),
 
     /** Sincroniza Cadastros + Skus Projetar + Desconsiderar (Estatística IA → produtos). */
     syncEstatisticaIaCadastros: protectedProcedure
-      .input(z.object({ dirPath: z.string().optional() }).optional())
+      .input(
+        z
+          .object({
+            dirPath: z.string().optional(),
+            requireFreshSources: z.boolean().optional(),
+          })
+          .optional()
+      )
       .mutation(({ input }) =>
-        syncEstatisticaIaCadastros({ dir: input?.dirPath })
+        syncEstatisticaIaCadastros({
+          dir: input?.dirPath,
+          requireFreshSources: input?.requireFreshSources ?? true,
+        })
       ),
 
     gerarBasesPreview: protectedProcedure
@@ -1668,6 +1712,7 @@ export const appRouter = router({
           .optional()
       )
       .mutation(async ({ input }) => {
+        await syncFaturamentoRecent({ force: true });
         const bases = await runGerarBasesOrThrow({
           dataInicio: input?.dataInicio,
           dataFim: input?.dataFim,
@@ -2154,6 +2199,15 @@ export const appRouter = router({
     acceptPendingCliente: protectedProcedure
       .input(z.object({ chave: z.string().min(1) }))
       .mutation(({ input }) => acceptPendingClienteFromFaturamento(input.chave)),
+
+    /** Marcas no faturamento que ainda não estão em Marcas. */
+    pendingMarcasFromFaturamento: protectedProcedure.query(() =>
+      listPendingMarcasFromFaturamento()
+    ),
+
+    acceptPendingMarcas: protectedProcedure
+      .input(z.object({ nomes: z.array(z.string().min(1)).optional() }).optional())
+      .mutation(({ input }) => acceptPendingMarcasFromFaturamento(input?.nomes)),
 
     /**
      * Baseline de capacidade: velocidade calibrada, config mensal (turno),

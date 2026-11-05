@@ -109,11 +109,14 @@ export type SyncEstatisticaIaResult = {
 
 export async function syncEstatisticaIaCadastros(options?: {
   dir?: string;
+  /** Se false (padrão), CSV ausente/vencido não aborta — usa o cadastro já no banco (Skus Projetar). */
+  requireFreshSources?: boolean;
 }): Promise<SyncEstatisticaIaResult> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
   const dir = resolveDadosDir(options?.dir);
+  const requireFresh = options?.requireFreshSources === true;
   const avisos: string[] = [];
   const cadPath = path.join(dir, "estatistica_cadastros.csv");
   const projPath = path.join(dir, "estatistica_skus_projetar.csv");
@@ -122,7 +125,20 @@ export async function syncEstatisticaIaCadastros(options?: {
   const requiredPaths = [cadPath, projPath, descPath];
   const missingPaths = requiredPaths.filter(filePath => !fs.existsSync(filePath));
   if (missingPaths.length > 0) {
-    throw new Error(`Fontes obrigatórias ausentes: ${missingPaths.join(", ")}`);
+    const message = `Fontes obrigatórias ausentes: ${missingPaths.join(", ")}`;
+    if (requireFresh) throw new Error(message);
+    avisos.push(`${message}. Usando cadastro e Skus Projetar já gravados no sistema.`);
+    return {
+      dir,
+      marcasUpserted: 0,
+      produtosAtualizados: 0,
+      produtosCriados: 0,
+      projetarTrue: 0,
+      desconsiderar: 0,
+      deParaUpserted: 0,
+      avisos: avisos.slice(0, 50),
+      fontes: [],
+    };
   }
   const maxAgeDays = Math.max(
     1,
@@ -140,12 +156,28 @@ export async function syncEstatisticaIaCadastros(options?: {
   });
   const staleSources = fontes.filter(source => source.ageDays > maxAgeDays);
   if (staleSources.length > 0) {
-    throw new Error(
+    const message =
       `Fontes vencidas (limite ${maxAgeDays} dias): ` +
-        staleSources
-          .map(source => `${source.arquivo} (${Math.floor(source.ageDays)} dias)`)
-          .join(", ")
-    );
+      staleSources
+        .map(source => `${source.arquivo} (${Math.floor(source.ageDays)} dias)`)
+        .join(", ");
+    if (requireFresh) throw new Error(message);
+    avisos.push(`${message}. Geração segue com os SKUs marcados em Projetar no cadastro.`);
+    return {
+      dir,
+      marcasUpserted: 0,
+      produtosAtualizados: 0,
+      produtosCriados: 0,
+      projetarTrue: 0,
+      desconsiderar: 0,
+      deParaUpserted: 0,
+      avisos: avisos.slice(0, 50),
+      fontes: fontes.map(({ arquivo, atualizadoEm, tamanhoBytes }) => ({
+        arquivo,
+        atualizadoEm,
+        tamanhoBytes,
+      })),
+    };
   }
 
   const cadRows = parseCsv(fs.readFileSync(cadPath, "utf8"));

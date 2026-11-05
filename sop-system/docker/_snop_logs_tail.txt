@@ -1,0 +1,13 @@
+[entrypoint] Waiting for database...
+[entrypoint] Applying SQL migrations...
+[migrate] skip 0000_next_colossus.sql
+[migrate] skip 0001_powerful_darkhawk.sql
+[migrate] skip 0002_fair_doctor_spectrum.sql
+[migrate] skip 0003_add_product_fields.sql
+[migrate] skip 0004_ciclo_comercial_snop.sql
+[migrate] skip 0005_schema_sync_cadastros.sql
+[migrate] done
+[entrypoint] Starting S&OP on 0.0.0.0:3012
+[OAuth] Initialized with baseURL: http://127.0.0.1:9999
+Server running on http://localhost:3012/
+LAN access enabled on port 3012 (HOST=0.0.0.0).

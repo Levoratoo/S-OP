@@ -61,7 +61,7 @@ export default function CarteiraPedidos() {
   const syncErpMutation = trpc.carteiraPedidos.syncFromErp.useMutation({
     onSuccess: r => {
       toast.success(
-        `ERP: ${r.importados} linhas (Liberado+PRG) · ${r.fetched} lidas · ${r.removidosAbertos} abertos substituídos`
+        `ERP: ${r.importados} linhas (Liberado+PRG) · ${r.fetched} lidas · PV MTO atualizado em ${r.ciclosPv} ciclo(s)`
       );
       if (r.avisos.length) toast.message(`${r.avisos.length} avisos`);
       if (r.erros.length) toast.error(`${r.erros.length} SKUs sem cadastro (veja console)`);

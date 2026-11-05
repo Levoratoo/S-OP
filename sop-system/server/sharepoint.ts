@@ -3,6 +3,7 @@ import * as XLSX from "xlsx";
 import { getDb } from "./db";
 import { sharepointConfig, syncLogs, produtos, faturamento, clientes } from "../drizzle/schema";
 import { eq, sql } from "drizzle-orm";
+import { isCfopFaturamentoPermitido } from "@shared/cfop-faturamento";
 
 // ==================== TIPOS ====================
 interface SharePointConfig {
@@ -209,6 +210,10 @@ async function syncFaturamento(data: Record<string, unknown>[]): Promise<{ inser
         descCfop: String(row["Desc. CFOP"] || row["descCfop"] || ""),
         tipoFaturamento: (String(row["Tipo de Fatur."] || row["tipoFaturamento"] || "").toUpperCase().includes("DEVOLUCAO") || String(row["Tipo de Fatur."] || row["tipoFaturamento"] || "").toUpperCase().includes("DEVOLUÇÃO") ? "DEVOLUCAO" : "SAIDA") as "DEVOLUCAO" | "SAIDA",
       };
+
+      if (!isCfopFaturamentoPermitido(faturamentoData.cfop)) {
+        continue;
+      }
       
       await db.insert(faturamento).values(faturamentoData);
       inseridos++;

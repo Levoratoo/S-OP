@@ -1,0 +1,915 @@
+{
+  "base": "http://192.168.1.82:3042",
+  "total": 151,
+  "ok": 151,
+  "fail": 0,
+  "failures": [],
+  "all": [
+    {
+      "name": "login",
+      "ok": true,
+      "detail": "cookie=app_session_id…",
+      "severity": "info"
+    },
+    {
+      "name": "auth.me",
+      "ok": true,
+      "detail": "user=Pedro Local nivel=3",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/ajuda",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/demanda/dashboard",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/demanda/acuracidade",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/demanda/previsoes",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/demanda/colaboracoes",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/demanda/consensos",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/demanda/orcamentos",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/capacidade/dashboard",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/capacidade/calculo",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/capacidade/vs-demanda",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/producao/metas",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/vendas/dashboard",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/vendas/historico",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/vendas/carteira",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/vendas/forecast",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/vendas/importar",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/cadastros/familias",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/cadastros/produtos",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/cadastros/clientes",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/cadastros/recursos",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/cadastros/dias-uteis",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/cadastros/roteiros",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/cadastros/status",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/cadastros/tipo-negocio",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/cadastros/tipo-estoque",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/cadastros/linhas",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/cadastros/modelos",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/cadastros/tamanhos",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/cadastros/membros",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/cadastros/paradas",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/cadastros/tabelas-auxiliares",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/cadastros/gestor-marca",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/cadastros/depara",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/cadastros/turnos",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/cadastros/fluxos",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/cadastros/importacao-base",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/cadastros/sazonalidade-marca",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/integracao/sharepoint",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/previsao-python",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/previsao-python/ciclo-13",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/admin/usuarios",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "spa:/admin/marcas",
+      "ok": true,
+      "detail": "HTTP 200, bytes=1068",
+      "severity": "info"
+    },
+    {
+      "name": "list:auth.me",
+      "ok": true,
+      "detail": "ok keys=['id', 'openId', 'name', 'email', 'loginMethod', 'role', 'nivelAcesso', 'ativo']",
+      "severity": "info"
+    },
+    {
+      "name": "list:familias.list",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:subfamilias.list",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:produtos.list",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:clientes.list",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:recursos.list",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:diasUteis.list",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:hierarquias.list",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:membros.list",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:paradas.list",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:roteiros.list",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:vendas.list",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:carteiraPedidos.list",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:forecasts.list",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:orcamentos.list",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:previsoes.list",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:colaboracoes.list",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:cicloComercial.list",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:sazonalidadeMarca.list",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:consensos.list",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:metasProducao.list",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:faturamento.list",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:faturamento.stats",
+      "ok": true,
+      "detail": "ok keys=['totalRegistros', 'totalValor', 'totalQtd']",
+      "severity": "info"
+    },
+    {
+      "name": "list:statusCadastro.list",
+      "ok": true,
+      "detail": "ok rows=2",
+      "severity": "info"
+    },
+    {
+      "name": "list:tiposNegocio.list",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:tiposEstoque.list",
+      "ok": true,
+      "detail": "ok rows=2",
+      "severity": "info"
+    },
+    {
+      "name": "list:linhas.list",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:modelos.list",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:tamanhos.list",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:marcas.list",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:gestores.list",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:gestorMarca.list",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:deParaCodigos.list",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:turnos.list",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:fluxos.list",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:usuarios.list",
+      "ok": true,
+      "detail": "ok rows=1",
+      "severity": "info"
+    },
+    {
+      "name": "list:niveisAcesso.list",
+      "ok": true,
+      "detail": "ok rows=3",
+      "severity": "info"
+    },
+    {
+      "name": "list:previsaoPython.list",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:sharepoint.getConfig",
+      "ok": true,
+      "detail": "ok",
+      "severity": "info"
+    },
+    {
+      "name": "list:dashboard.demanda",
+      "ok": true,
+      "detail": "ok keys=['totalVendas', 'totalClientes', 'totalProdutos']",
+      "severity": "info"
+    },
+    {
+      "name": "list:dashboard.acuracidade",
+      "ok": true,
+      "detail": "ok keys=['mape', 'wmape', 'bias', 'acuracidade', 'irog', 'totalPrevisoes']",
+      "severity": "info"
+    },
+    {
+      "name": "list:dashboard.vendasPorMes",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:capacidade.calcular",
+      "ok": true,
+      "detail": "ok keys=['ano', 'diasUteisPorMes', 'recursos']",
+      "severity": "info"
+    },
+    {
+      "name": "list:pesquisa.buscarRecursos",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "list:fluxos.listComRecursos",
+      "ok": true,
+      "detail": "ok rows=0",
+      "severity": "info"
+    },
+    {
+      "name": "crud:statusCadastro:create",
+      "ok": true,
+      "detail": "id=3",
+      "severity": "info"
+    },
+    {
+      "name": "crud:statusCadastro:update",
+      "ok": true,
+      "detail": "id=3",
+      "severity": "info"
+    },
+    {
+      "name": "crud:statusCadastro:delete",
+      "ok": true,
+      "detail": "id=3",
+      "severity": "info"
+    },
+    {
+      "name": "crud:tiposNegocio:create",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "crud:tiposNegocio:update",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "crud:tiposNegocio:delete",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "crud:tiposEstoque:create",
+      "ok": true,
+      "detail": "id=3",
+      "severity": "info"
+    },
+    {
+      "name": "crud:tiposEstoque:update",
+      "ok": true,
+      "detail": "id=3",
+      "severity": "info"
+    },
+    {
+      "name": "crud:tiposEstoque:delete",
+      "ok": true,
+      "detail": "id=3",
+      "severity": "info"
+    },
+    {
+      "name": "crud:linhas:create",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "crud:linhas:update",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "crud:linhas:delete",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "crud:modelos:create",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "crud:modelos:update",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "crud:modelos:delete",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "crud:tamanhos:create",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "crud:tamanhos:update",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "crud:tamanhos:delete",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "crud:familias:create",
+      "ok": true,
+      "detail": "id=2",
+      "severity": "info"
+    },
+    {
+      "name": "crud:familias:update",
+      "ok": true,
+      "detail": "id=2",
+      "severity": "info"
+    },
+    {
+      "name": "crud:familias:delete",
+      "ok": true,
+      "detail": "id=2",
+      "severity": "info"
+    },
+    {
+      "name": "crud:clientes:create",
+      "ok": true,
+      "detail": "id=2",
+      "severity": "info"
+    },
+    {
+      "name": "crud:clientes:update",
+      "ok": true,
+      "detail": "id=2",
+      "severity": "info"
+    },
+    {
+      "name": "crud:clientes:delete",
+      "ok": true,
+      "detail": "id=2",
+      "severity": "info"
+    },
+    {
+      "name": "crud:turnos:create",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "crud:turnos:update",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "crud:turnos:delete",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "crud:recursos:create",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "crud:recursos:update",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "crud:recursos:delete",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "crud:produtos:create",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "crud:produtos:update",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "crud:produtos:delete",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "crud:diasUteis:create",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "crud:diasUteis:update",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "crud:diasUteis:delete",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "crud:membros:create",
+      "ok": true,
+      "detail": "id=2",
+      "severity": "info"
+    },
+    {
+      "name": "crud:membros:update",
+      "ok": true,
+      "detail": "id=2",
+      "severity": "info"
+    },
+    {
+      "name": "crud:membros:delete",
+      "ok": true,
+      "detail": "id=2",
+      "severity": "info"
+    },
+    {
+      "name": "crud:consensos:create",
+      "ok": true,
+      "detail": "id=2",
+      "severity": "info"
+    },
+    {
+      "name": "crud:consensos:update",
+      "ok": true,
+      "detail": "id=2",
+      "severity": "info"
+    },
+    {
+      "name": "crud:consensos:delete",
+      "ok": true,
+      "detail": "id=2",
+      "severity": "info"
+    },
+    {
+      "name": "crud:deParaCodigos:create",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "crud:deParaCodigos:update",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "crud:deParaCodigos:delete",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "crud:marcas:create",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "crud:marcas:update",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "crud:marcas:delete",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "crud:gestores:create",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "crud:gestores:update",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "crud:gestores:delete",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "mutation:sazonalidade.seedUniforme",
+      "ok": true,
+      "detail": "{'inserted': 0}",
+      "severity": "info"
+    },
+    {
+      "name": "screen:cap-vs-demanda:ciclos",
+      "ok": true,
+      "detail": "ciclos=0",
+      "severity": "info"
+    },
+    {
+      "name": "screen:cap-vs-demanda:produtos",
+      "ok": true,
+      "detail": "ok",
+      "severity": "info"
+    },
+    {
+      "name": "screen:cap-vs-demanda:fluxos",
+      "ok": true,
+      "detail": "ok",
+      "severity": "info"
+    },
+    {
+      "name": "screen:cap-vs-demanda:capacidade",
+      "ok": true,
+      "detail": "ok",
+      "severity": "info"
+    },
+    {
+      "name": "screen:colaboracao:list",
+      "ok": true,
+      "detail": "ok",
+      "severity": "info"
+    },
+    {
+      "name": "mutation:previsaoPython.createFromSistema",
+      "ok": true,
+      "detail": "HTTP 500: {\"json\": {\"message\": \"Nenhum faturamento SAIDA encontrado. Importe faturamento em /vendas/importar antes de gerar as bases.\", \"code\": -32603, \"data\": {\"code\": \"INTERNAL_SERVER_ERROR\", \"httpStatus\": 500, \"path\": \"previsaoPython.createFromSistema\"}}}",
+      "severity": "warn"
+    },
+    {
+      "name": "crud:fluxos:create",
+      "ok": true,
+      "detail": "{'id': 1}",
+      "severity": "info"
+    },
+    {
+      "name": "crud:fluxos:update",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    },
+    {
+      "name": "crud:fluxos:delete",
+      "ok": true,
+      "detail": "id=1",
+      "severity": "info"
+    }
+  ]
+}

@@ -6,7 +6,7 @@ import { eq } from "drizzle-orm";
 import { carteiraPedidos } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { queryErpCarteiraPedidosAbertos } from "./erp-mssql";
-import { importCarteiraBySku } from "./ciclo-colab-extras";
+import { importCarteiraBySku, syncPvFromCarteiraEmCiclosAbertos } from "./ciclo-colab-extras";
 
 export type CarteiraSqlSyncResult = {
   fetched: number;
@@ -15,6 +15,8 @@ export type CarteiraSqlSyncResult = {
   source: string;
   erros: string[];
   avisos: string[];
+  ciclosPv: number;
+  pvItens: number;
 };
 
 export async function syncCarteiraFromErp(): Promise<CarteiraSqlSyncResult> {
@@ -34,6 +36,7 @@ export async function syncCarteiraFromErp(): Promise<CarteiraSqlSyncResult> {
   }
 
   if (!rows.length) {
+    const pvCiclos = await syncPvFromCarteiraEmCiclosAbertos();
     return {
       fetched: 0,
       importados: 0,
@@ -41,6 +44,8 @@ export async function syncCarteiraFromErp(): Promise<CarteiraSqlSyncResult> {
       source,
       erros: [],
       avisos: ["ERP não retornou pedidos Liberado+PRG em aberto"],
+      ciclosPv: pvCiclos.length,
+      pvItens: pvCiclos.reduce((sum, item) => sum + item.itensCriados, 0),
     };
   }
 
@@ -56,6 +61,8 @@ export async function syncCarteiraFromErp(): Promise<CarteiraSqlSyncResult> {
     }))
   );
 
+  const pvCiclos = await syncPvFromCarteiraEmCiclosAbertos();
+
   return {
     fetched,
     importados: importResult.importados,
@@ -63,5 +70,7 @@ export async function syncCarteiraFromErp(): Promise<CarteiraSqlSyncResult> {
     source,
     erros: importResult.erros,
     avisos: importResult.avisos,
+    ciclosPv: pvCiclos.length,
+    pvItens: pvCiclos.reduce((sum, item) => sum + item.itensCriados, 0),
   };
 }

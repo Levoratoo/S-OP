@@ -7,15 +7,18 @@ import {
   getCicloComercial,
   getDb,
   listCicloComercialItens,
+  monthEffectiveQty,
   sumItemMonths,
 } from "../db";
 import {
   carteiraPedidos,
   cicloComercialItens,
+  ciclosComerciais,
   familias,
   faturamento,
   gestorMarca,
   gestores,
+  marcas,
   produtos,
   type InsertCicloComercialItem,
 } from "../../drizzle/schema";
@@ -52,6 +55,19 @@ function mesIndexNoCiclo(anoInicio: number, mesInicio: number, ano: number, mes:
   const idx = abs - absInicio;
   if (idx < 0 || idx > 11) return null;
   return idx;
+}
+
+/** Competência da carteira é data de calendário (mysql DATE em meia-noite UTC). */
+export function competenciaYearMonth(value: unknown): { year: number; month: number } | null {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return { year: value.getUTCFullYear(), month: value.getUTCMonth() + 1 };
+  }
+  const s = String(value ?? "").trim();
+  const iso = s.match(/^(\d{4})-(\d{1,2})(?:-\d{1,2})?/);
+  if (iso) return { year: Number(iso[1]), month: Number(iso[2]) };
+  const parsed = new Date(s);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return { year: parsed.getUTCFullYear(), month: parsed.getUTCMonth() + 1 };
 }
 
 async function loadProdutoMaps() {
@@ -104,17 +120,18 @@ export async function syncPvFromCarteira(cicloId: number) {
   const ciclo = await getCicloComercial(cicloId);
   if (!ciclo) throw new Error("Ciclo não encontrado");
 
+  if (ciclo.status === "FECHADO") {
+    throw new Error("Ciclo fechado não recebe atualização da carteira.");
+  }
+
   const { byId, dimensionsByProductId } = await loadProdutoMaps();
   const pedidos = await db.select().from(carteiraPedidos).where(eq(carteiraPedidos.faturado, false));
 
+  // A aba PV MTO é a carteira de PV em aberto (pedidos Liberado + PRG), não a previsão estatística.
   await db
     .delete(cicloComercialItens)
     .where(
-      and(
-        eq(cicloComercialItens.cicloId, cicloId),
-        eq(cicloComercialItens.planoColab, "PV_MTO"),
-        eq(cicloComercialItens.origem, "PV")
-      )
+      and(eq(cicloComercialItens.cicloId, cicloId), eq(cicloComercialItens.planoColab, "PV_MTO"))
     );
 
   type Agg = {
@@ -130,19 +147,21 @@ export async function syncPvFromCarteira(cicloId: number) {
   };
   const bySku = new Map<string, Agg>();
 
+  let pedidosForaDoCiclo = 0;
+  let pedidosNoCiclo = 0;
   for (const ped of pedidos) {
     const prod = byId.get(ped.produtoId);
     if (!prod) continue;
-    const isPvEligible =
-      prod.tipoEstoque === "MTO" ||
-      (prod.tipoNegocio || "").trim().toUpperCase() === "VAR";
-    if (!isPvEligible) continue;
     const sku = (prod.codItem || prod.codigo || "").trim();
     if (!sku) continue;
-    const d = new Date(String(ped.competencia));
-    if (Number.isNaN(d.getTime())) continue;
-    const idx = mesIndexNoCiclo(ciclo.anoInicio, ciclo.mesInicio, d.getFullYear(), d.getMonth() + 1);
-    if (idx == null) continue;
+    const ym = competenciaYearMonth(ped.competencia);
+    if (!ym) continue;
+    const idx = mesIndexNoCiclo(ciclo.anoInicio, ciclo.mesInicio, ym.year, ym.month);
+    if (idx == null) {
+      pedidosForaDoCiclo += 1;
+      continue;
+    }
+    pedidosNoCiclo += 1;
 
     if (!bySku.has(sku)) {
       bySku.set(sku, {
@@ -150,7 +169,7 @@ export async function syncPvFromCarteira(cicloId: number) {
         descricao: prod.descricao || prod.nome || null,
         marca: prod.marca,
         linha: prod.linha,
-        tipoEstoque: (prod.tipoEstoque || "MTO") as "MTS" | "MTO",
+        tipoEstoque: prod.tipoEstoque === "MTO" ? "MTO" : "MTS",
         valorVenda: prod.valorVenda,
         familia: dimensionsByProductId.get(prod.id)?.familia ?? null,
         gestor: dimensionsByProductId.get(prod.id)?.gestor ?? null,
@@ -193,7 +212,32 @@ export async function syncPvFromCarteira(cicloId: number) {
     await db.insert(cicloComercialItens).values(itens.slice(i, i + 200));
   }
 
-  return { itensCriados: itens.length, pedidosLidos: pedidos.length };
+  return {
+    itensCriados: itens.length,
+    pedidosLidos: pedidos.length,
+    pedidosNoCiclo,
+    pedidosForaDoCiclo,
+  };
+}
+
+/** Recarrega PV MTO em todo ciclo que ainda aceita edição. */
+export async function syncPvFromCarteiraEmCiclosAbertos() {
+  const db = await getDb();
+  if (!db) return [];
+  const ciclos = await db
+    .select({ id: ciclosComerciais.id, status: ciclosComerciais.status })
+    .from(ciclosComerciais);
+  const resultados: Array<{ cicloId: number; itensCriados: number; pedidosLidos: number }> = [];
+  for (const ciclo of ciclos) {
+    if (ciclo.status === "FECHADO") continue;
+    const synced = await syncPvFromCarteira(ciclo.id);
+    resultados.push({
+      cicloId: ciclo.id,
+      itensCriados: synced.itensCriados,
+      pedidosLidos: synced.pedidosLidos,
+    });
+  }
+  return resultados;
 }
 
 export type CrmImportRow = {
@@ -294,12 +338,16 @@ export async function importCrmParaCiclo(cicloId: number, rows: CrmImportRow[]) 
     }
     const sku = resolveCodigoAtual(skuRaw, dePara);
     const crmTipo = normalizeCrmTipo(row.tipo || "");
-    const crmTemperatura = (row.temperatura || "").trim().toUpperCase();
+    const crmTemperatura = (row.temperatura || "")
+      .trim()
+      .toUpperCase()
+      .normalize("NFD")
+      .replace(/\p{M}/gu, "");
     if (!["COLABORACAO", "APOSTA", "OPORTUNIDADE"].includes(crmTipo)) {
       erros.push(`${skuRaw}: tipo deve ser Colaboração, Aposta ou Oportunidade`);
       continue;
     }
-    if (!["QUENTE", "MORNO", "FRIO"].includes(crmTemperatura)) {
+    if (crmTemperatura && !["QUENTE", "MORNO", "FRIO"].includes(crmTemperatura)) {
       erros.push(`${skuRaw}: temperatura deve ser Quente, Morno ou Frio`);
       continue;
     }
@@ -422,7 +470,7 @@ export async function importCrmParaCiclo(cicloId: number, rows: CrmImportRow[]) 
     });
   }
 
-  if (erros.length > 0) {
+  if (!itens.length) {
     return { itensCriados: 0, erros: erros.slice(0, 100), avisos: avisos.slice(0, 50) };
   }
 
@@ -441,7 +489,7 @@ export async function importCrmParaCiclo(cicloId: number, rows: CrmImportRow[]) 
     }
   });
 
-  return { itensCriados: itens.length, erros, avisos: avisos.slice(0, 50) };
+  return { itensCriados: itens.length, erros: erros.slice(0, 100), avisos: avisos.slice(0, 50) };
 }
 
 export async function getPvVsCrmDetalhado(cicloId: number) {
@@ -562,6 +610,226 @@ export async function getBaseCicloFull(cicloId: number) {
       });
     }
   }
+  return { ciclo, rows };
+}
+
+function normKey(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase();
+}
+
+type PrecoGestorCache = {
+  at: number;
+  precoBySku: Map<string, number>;
+  gestorByMarca: Map<string, string>;
+};
+
+let precoGestorCache: PrecoGestorCache | null = null;
+const PRECO_GESTOR_TTL_MS = 5 * 60 * 1000;
+
+/** Preço unitário (faturamento recente) e gestor mais frequente por marca, quando o cadastro não tem. */
+async function loadPrecoEGestorFaturamento(): Promise<PrecoGestorCache> {
+  if (precoGestorCache && Date.now() - precoGestorCache.at < PRECO_GESTOR_TTL_MS) {
+    return precoGestorCache;
+  }
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const dePara = await loadDeParaMap();
+  const since = new Date();
+  since.setUTCFullYear(since.getUTCFullYear() - 2);
+  const sinceIso = since.toISOString().slice(0, 10);
+
+  const [precoResult, gestorResult] = await Promise.all([
+    db.execute(sql`
+      SELECT TRIM(codMaterial) AS sku, SUM(valorTotal) AS valor, SUM(qtd) AS qtd
+      FROM faturamento
+      WHERE tipoFaturamento = 'SAIDA'
+        AND qtd > 0
+        AND valorTotal <> 0
+        AND dataEmissao >= ${sinceIso}
+        AND codMaterial IS NOT NULL AND TRIM(codMaterial) <> ''
+      GROUP BY TRIM(codMaterial)
+    `),
+    db.execute(sql`
+      SELECT TRIM(marca) AS marca, TRIM(gestor) AS gestor, COUNT(*) AS n
+      FROM faturamento
+      WHERE tipoFaturamento = 'SAIDA'
+        AND dataEmissao >= ${sinceIso}
+        AND marca IS NOT NULL AND TRIM(marca) <> ''
+        AND gestor IS NOT NULL AND TRIM(gestor) <> ''
+      GROUP BY TRIM(marca), TRIM(gestor)
+    `),
+  ]);
+
+  const priceAcc = new Map<string, { valor: number; qtd: number }>();
+  for (const row of (precoResult[0] as unknown as Array<{ sku: string; valor: unknown; qtd: unknown }>) ?? []) {
+    const sku = resolveCodigoAtual(String(row.sku || ""), dePara).trim().toUpperCase();
+    if (!sku) continue;
+    const acc = priceAcc.get(sku) ?? { valor: 0, qtd: 0 };
+    acc.valor += toNum(row.valor);
+    acc.qtd += toNum(row.qtd);
+    priceAcc.set(sku, acc);
+  }
+  const precoBySku = new Map<string, number>();
+  for (const [sku, acc] of priceAcc) {
+    if (acc.qtd > 0) precoBySku.set(sku, Math.round((acc.valor / acc.qtd) * 10000) / 10000);
+  }
+
+  const gestorByMarca = new Map<string, string>();
+  const gestorCount = new Map<string, number>();
+  for (const row of (gestorResult[0] as unknown as Array<{ marca: string; gestor: string; n: unknown }>) ?? []) {
+    const key = normKey(String(row.marca || ""));
+    const nome = String(row.gestor || "").trim();
+    const n = toNum(row.n);
+    if (!key || !nome) continue;
+    if (n > (gestorCount.get(key) ?? -1)) {
+      gestorCount.set(key, n);
+      gestorByMarca.set(key, nome);
+    }
+  }
+
+  precoGestorCache = { at: Date.now(), precoBySku, gestorByMarca };
+  return precoGestorCache;
+}
+
+function properName(value: string): string {
+  return value
+    .trim()
+    .toLocaleLowerCase("pt-BR")
+    .split(/(\s+|-)/)
+    .map(part =>
+      /^\s+$|^-$/.test(part) ? part : part.charAt(0).toLocaleUpperCase("pt-BR") + part.slice(1)
+    )
+    .join("");
+}
+
+function crmTipoLabel(value: string | null | undefined): string {
+  const tipo = String(value || "").trim().toUpperCase();
+  if (tipo === "APOSTA") return "Aposta";
+  if (tipo === "OPORTUNIDADE") return "Oportunidade";
+  return "Colaboração";
+}
+
+function tipoComercialDe(tipoNegocio: string | null | undefined): "JIT" | "PRG" | "VAR" | null {
+  const tipo = String(tipoNegocio || "").trim().toUpperCase();
+  if (tipo === "JIT" || tipo === "PRG" || tipo === "VAR") return tipo;
+  return null;
+}
+
+export type ConsolidadoArquivoRow = {
+  skuMarca: string;
+  sku: string;
+  descricao: string;
+  linha: string;
+  marca: string;
+  venda: number;
+  mes: string;
+  qtd: number;
+  valorTotal: number;
+  relatorio: "MTS" | "MTO PV" | "CRM";
+  tipoComercial: string;
+  tipo: string;
+  tp: string;
+  gestor: string;
+};
+
+/** Uma linha por SKU × mês, no layout do arquivo Consolidado (modelo padrão). */
+export async function getConsolidadoArquivo(cicloId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const ciclo = await getCicloComercial(cicloId);
+  if (!ciclo) throw new Error("Ciclo não encontrado");
+
+  const [itens, produtoMaps, marcaRows, relRows, gestorRows, fatLookup] = await Promise.all([
+    listCicloComercialItens(cicloId),
+    loadProdutoMaps(),
+    db.select({ id: marcas.id, nome: marcas.nome }).from(marcas),
+    db
+      .select({ marcaId: gestorMarca.marcaId, gestorId: gestorMarca.gestorId })
+      .from(gestorMarca)
+      .where(eq(gestorMarca.ativo, true)),
+    db
+      .select({ id: gestores.id, nome: gestores.nome })
+      .from(gestores)
+      .where(eq(gestores.ativo, true)),
+    loadPrecoEGestorFaturamento(),
+  ]);
+
+  const gestorNome = new Map(gestorRows.map(row => [row.id, row.nome]));
+  const gestorByMarcaId = new Map<number, string>();
+  for (const rel of relRows) {
+    const nome = gestorNome.get(rel.gestorId);
+    if (nome) gestorByMarcaId.set(rel.marcaId, nome);
+  }
+  const gestorByMarcaNome = new Map<string, string>();
+  for (const marca of marcaRows) {
+    const gestor = gestorByMarcaId.get(marca.id);
+    if (gestor && marca.nome) gestorByMarcaNome.set(normKey(marca.nome), gestor);
+  }
+
+  const rows: ConsolidadoArquivoRow[] = [];
+  for (const item of itens) {
+    const sku = (item.sku || "").trim();
+    const prod = sku ? produtoMaps.byCode.get(sku.toUpperCase()) : undefined;
+    const marca = (item.marca || prod?.marca || "").trim();
+    const descricao = (item.descricao || prod?.descricao || prod?.nome || "").trim();
+    const linha = (item.linha || prod?.linha || "").trim();
+    const relatorio =
+      item.planoColab === "PV_MTO" ? "MTO PV" : item.planoColab === "CRM" ? "CRM" : "MTS";
+    const tipoCadastro = tipoComercialDe(prod?.tipoNegocio);
+    const tp =
+      relatorio === "MTS" ? "JIT" : relatorio === "MTO PV" ? "PRG" : tipoCadastro ?? "PRG";
+    const tipoComercial = tipoCadastro ?? tp;
+    const tipo = relatorio === "CRM" ? crmTipoLabel(item.crmTipo) : "Colaboração";
+    const gestorFonte =
+      gestorByMarcaNome.get(normKey(marca)) ||
+      item.gestorSnapshot ||
+      fatLookup.gestorByMarca.get(normKey(marca)) ||
+      "";
+    const gestor = gestorFonte ? properName(gestorFonte) : "";
+    const vendaCadastro = toNum(prod?.valorVenda);
+    const vendaInformada = toNum(item.valorVendaSnapshot);
+    const venda =
+      vendaCadastro > 0
+        ? vendaCadastro
+        : vendaInformada > 0
+          ? vendaInformada
+          : fatLookup.precoBySku.get(sku.toUpperCase()) ?? 0;
+
+    for (let i = 0; i < 12; i++) {
+      const qtd = monthEffectiveQty(
+        item as unknown as Record<string, string | number | null | undefined>,
+        i
+      );
+      if (!qtd) continue;
+      const mesAbs = ciclo.mesInicio + i;
+      const ano = ciclo.anoInicio + Math.floor((mesAbs - 1) / 12);
+      const mes = ((mesAbs - 1) % 12) + 1;
+      rows.push({
+        skuMarca: marca ? `${sku}-${marca}` : sku,
+        sku,
+        descricao,
+        linha,
+        marca,
+        venda,
+        mes: `${ano}-${String(mes).padStart(2, "0")}-01`,
+        qtd,
+        valorTotal: Math.round(qtd * venda * 100) / 100,
+        relatorio,
+        tipoComercial,
+        tipo,
+        tp,
+        gestor,
+      });
+    }
+  }
+
+  rows.sort(
+    (a, b) => a.sku.localeCompare(b.sku) || a.mes.localeCompare(b.mes) || a.relatorio.localeCompare(b.relatorio)
+  );
   return { ciclo, rows };
 }
 

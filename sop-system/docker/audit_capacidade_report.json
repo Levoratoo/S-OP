@@ -1,0 +1,393 @@
+{
+  "ciclo": {
+    "id": 2,
+    "nome": "Ciclo 09/26 (job 2)",
+    "status": "EM_COLABORACAO",
+    "anoInicio": 2026,
+    "mesInicio": 9,
+    "itens": 1264
+  },
+  "baseline": {
+    "recursos": 39,
+    "recursosComVelocidade": 39,
+    "recursosComCapacidadeCalculada": 39,
+    "recursosSemConfigMensal": 0,
+    "fluxos": 73,
+    "fluxosComRecursos": 11,
+    "turnos": 8,
+    "diasUteisRegistros": 38,
+    "diasUteisMeses": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+    ],
+    "diasUteisTipos": {
+      "seg-sex": 38
+    },
+    "capacidadeTotalAno": 402802428,
+    "mesesComAlgumaCapacidade": {
+      "1": 39,
+      "2": 39,
+      "3": 39,
+      "4": 39,
+      "5": 39,
+      "6": 39,
+      "7": 39,
+      "8": 39,
+      "9": 39,
+      "10": 39,
+      "11": 39,
+      "12": 39
+    }
+  },
+  "produtos": {
+    "total": 1269,
+    "comFluxoId": 1168,
+    "comLinha": 1269
+  },
+  "matchCiclo": {
+    "viaFluxo": 1166,
+    "viaLinha": 98,
+    "skuSemProduto": 0,
+    "itensLinhaSemCapacidade": 98,
+    "chavesDemandaSemCapacidade": 40,
+    "chavesComEstouro": 40
+  },
+  "demandaVsCapacidadeMensal": [
+    {
+      "mes": 1,
+      "demanda": 23885592,
+      "capacidade": 29737092,
+      "gap": 5851500,
+      "utilizacao": 0.803
+    },
+    {
+      "mes": 2,
+      "demanda": 23885592,
+      "capacidade": 27033720,
+      "gap": 3148128,
+      "utilizacao": 0.884
+    },
+    {
+      "mes": 3,
+      "demanda": 23885592,
+      "capacidade": 41902266,
+      "gap": 18016674,
+      "utilizacao": 0.57
+    },
+    {
+      "mes": 4,
+      "demanda": 23885592,
+      "capacidade": 35143836,
+      "gap": 11258244,
+      "utilizacao": 0.68
+    },
+    {
+      "mes": 5,
+      "demanda": 23885592,
+      "capacidade": 41902266,
+      "gap": 18016674,
+      "utilizacao": 0.57
+    },
+    {
+      "mes": 6,
+      "demanda": 23885592,
+      "capacidade": 29737092,
+      "gap": 5851500,
+      "utilizacao": 0.803
+    },
+    {
+      "mes": 7,
+      "demanda": 23885592,
+      "capacidade": 31088778,
+      "gap": 7203186,
+      "utilizacao": 0.768
+    },
+    {
+      "mes": 8,
+      "demanda": 23885592,
+      "capacidade": 35143836,
+      "gap": 11258244,
+      "utilizacao": 0.68
+    },
+    {
+      "mes": 9,
+      "demanda": 23885592,
+      "capacidade": 29737092,
+      "gap": 5851500,
+      "utilizacao": 0.803
+    },
+    {
+      "mes": 10,
+      "demanda": 23885592,
+      "capacidade": 36495522,
+      "gap": 12609930,
+      "utilizacao": 0.654
+    },
+    {
+      "mes": 11,
+      "demanda": 23885592,
+      "capacidade": 33792150,
+      "gap": 9906558,
+      "utilizacao": 0.707
+    },
+    {
+      "mes": 12,
+      "demanda": 23885592,
+      "capacidade": 31088778,
+      "gap": 7203186,
+      "utilizacao": 0.768
+    }
+  ],
+  "topChaves": [
+    {
+      "chave": "fluxo:66",
+      "demanda": 134142087,
+      "capacidade": 178845296,
+      "utilizacao": 0.75,
+      "mesesEstouro": 0
+    },
+    {
+      "chave": "fluxo:67",
+      "demanda": 64006611,
+      "capacidade": 85342432,
+      "utilizacao": 0.75,
+      "mesesEstouro": 0
+    },
+    {
+      "chave": "fluxo:74",
+      "demanda": 28077905,
+      "capacidade": 37435356,
+      "utilizacao": 0.75,
+      "mesesEstouro": 0
+    },
+    {
+      "chave": "fluxo:76",
+      "demanda": 26336951,
+      "capacidade": 35115724,
+      "utilizacao": 0.75,
+      "mesesEstouro": 0
+    },
+    {
+      "chave": "fluxo:70",
+      "demanda": 16382000,
+      "capacidade": 21844592,
+      "utilizacao": 0.75,
+      "mesesEstouro": 0
+    },
+    {
+      "chave": "fluxo:68",
+      "demanda": 6761725,
+      "capacidade": 9015692,
+      "utilizacao": 0.75,
+      "mesesEstouro": 0
+    },
+    {
+      "chave": "fluxo:71",
+      "demanda": 3544783,
+      "capacidade": 4722704,
+      "utilizacao": 0.751,
+      "mesesEstouro": 0
+    },
+    {
+      "chave": "linha:alca sintetica",
+      "demanda": 2343749,
+      "capacidade": 0,
+      "utilizacao": null,
+      "mesesEstouro": 12
+    },
+    {
+      "chave": "fluxo:73",
+      "demanda": 2209038,
+      "capacidade": 2945432,
+      "utilizacao": 0.75,
+      "mesesEstouro": 0
+    },
+    {
+      "chave": "linha:bobina impressa terceiro",
+      "demanda": 1038846,
+      "capacidade": 0,
+      "utilizacao": null,
+      "mesesEstouro": 12
+    },
+    {
+      "chave": "linha:alca algodao (und)",
+      "demanda": 494950,
+      "capacidade": 0,
+      "utilizacao": null,
+      "mesesEstouro": 12
+    },
+    {
+      "chave": "linha:alca dalva (metros)",
+      "demanda": 422125,
+      "capacidade": 0,
+      "utilizacao": null,
+      "mesesEstouro": 12
+    },
+    {
+      "chave": "linha:alca gorgurao (metros)",
+      "demanda": 248180,
+      "capacidade": 0,
+      "utilizacao": null,
+      "mesesEstouro": 12
+    },
+    {
+      "chave": "linha:cola fria",
+      "demanda": 197400,
+      "capacidade": 0,
+      "utilizacao": null,
+      "mesesEstouro": 12
+    },
+    {
+      "chave": "linha:cola quente",
+      "demanda": 94404,
+      "capacidade": 0,
+      "utilizacao": null,
+      "mesesEstouro": 12
+    }
+  ],
+  "linhasSemCapacidade": [
+    [
+      "alca sintetica",
+      6
+    ],
+    [
+      "cola fria",
+      6
+    ],
+    [
+      "informatica",
+      6
+    ],
+    [
+      "maquinas e equipamentos",
+      6
+    ],
+    [
+      "baloes / cardernos / lapis / suportes",
+      5
+    ],
+    [
+      "palete",
+      5
+    ],
+    [
+      "patch",
+      5
+    ],
+    [
+      "cola quente",
+      4
+    ],
+    [
+      "correia",
+      4
+    ],
+    [
+      "bobina impressa terceiro",
+      3
+    ],
+    [
+      "papelaria portal",
+      3
+    ],
+    [
+      "apara folhas para corte",
+      3
+    ],
+    [
+      "veiculos",
+      3
+    ],
+    [
+      "verniz",
+      3
+    ],
+    [
+      "caixa cartucho",
+      2
+    ]
+  ],
+  "amostras": {
+    "viaFluxo": [
+      {
+        "sku": "80.02.000947",
+        "fluxo": "Linha: Elegance",
+        "demanda12m": 1650
+      },
+      {
+        "sku": "80.01.000987",
+        "fluxo": "Linha: Classic",
+        "demanda12m": 90000
+      },
+      {
+        "sku": "80.04.000119",
+        "fluxo": "Linha: Evolution",
+        "demanda12m": 220200
+      },
+      {
+        "sku": "80.04.000120",
+        "fluxo": "Linha: Evolution",
+        "demanda12m": 314800
+      },
+      {
+        "sku": "80.06.000981",
+        "fluxo": "Linha: Automática",
+        "demanda12m": 51464
+      }
+    ],
+    "viaLinhaOk": [],
+    "viaLinhaSemCap": [
+      {
+        "sku": "81.02.000092",
+        "linha": "CAIXA CARTUCHO",
+        "demanda12m": 1200
+      },
+      {
+        "sku": "83.02.000002",
+        "linha": "BOBINA IMPRESSA TERCEIRO",
+        "demanda12m": 466955
+      },
+      {
+        "sku": "83.02.000001",
+        "linha": "BOBINA IMPRESSA TERCEIRO",
+        "demanda12m": 488815
+      },
+      {
+        "sku": "83.02.000003",
+        "linha": "BOBINA IMPRESSA TERCEIRO",
+        "demanda12m": 83076
+      },
+      {
+        "sku": "81.02.000063",
+        "linha": "CAIXA CARTUCHO",
+        "demanda12m": 19400
+      },
+      {
+        "sku": "82.51.000004",
+        "linha": "PAPELARIA PORTAL",
+        "demanda12m": 2000
+      },
+      {
+        "sku": "82.51.000001",
+        "linha": "PAPELARIA PORTAL",
+        "demanda12m": 14000
+      },
+      {
+        "sku": "82.51.000003",
+        "linha": "PAPELARIA PORTAL",
+        "demanda12m": 2000
+      }
+    ],
+    "skuSemProduto": []
+  }
+}

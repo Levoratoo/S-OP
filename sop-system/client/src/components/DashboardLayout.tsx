@@ -80,7 +80,9 @@ import {
   CircleHelp,
   Play,
   Sparkles,
+  Loader2,
 } from "lucide-react";
+import { useRefreshFaturamentoRecent } from "@/pages/vendas/useRefreshFaturamentoRecent";
 import {
   CSSProperties,
   useCallback,
@@ -286,6 +288,12 @@ const menuItems: MenuItem[] = [
         icon: Users,
         tourId: "nav-admin-usuarios",
       },
+      {
+        label: "Permissoes",
+        path: "/admin/permissoes",
+        icon: Shield,
+        tourId: "nav-admin-permissoes",
+      },
     ],
   },
   {
@@ -365,6 +373,7 @@ function DashboardLayoutContent({
   const [openSections, setOpenSections] = useState<string[]>([]);
   const [helpOpen, setHelpOpen] = useState(false);
   const startTourRef = useRef<((steps: TourStep[]) => void) | null>(null);
+  const refreshFaturamento = useRefreshFaturamentoRecent({ notifySuccess: false });
 
   const ensureMenuOpen = useCallback(
     (menuLabel: string, sectionLabel?: string) => {
@@ -814,8 +823,12 @@ function DashboardLayoutContent({
               </div>
             </div>
             <div className="flex items-center gap-2 rounded-full border border-emerald-200/70 bg-emerald-50/80 px-3 py-1.5 text-xs font-semibold text-emerald-700">
-              <span className="h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_0_3px_rgba(16,185,129,0.12)]" />
-              Sistema operacional
+              {refreshFaturamento.isPending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <span className="h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_0_3px_rgba(16,185,129,0.12)]" />
+              )}
+              {refreshFaturamento.isPending ? "Atualizando faturamento" : "Sistema operacional"}
             </div>
           </header>
         )}

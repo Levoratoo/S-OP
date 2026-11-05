@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { trpc } from "@/lib/trpc";
 import { Plus, Pencil, Trash2, Loader2, ArrowRight, Upload, Download, Search } from "lucide-react";
@@ -26,11 +27,16 @@ export default function DeParaCodigos() {
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
           <TabsTrigger value="lista">Lista De-Para</TabsTrigger>
+          <TabsTrigger value="novos">Skus Novos</TabsTrigger>
           <TabsTrigger value="importar">Importar Excel</TabsTrigger>
         </TabsList>
 
         <TabsContent value="lista">
           <ListaTab />
+        </TabsContent>
+
+        <TabsContent value="novos">
+          <SkusNovosTab />
         </TabsContent>
 
         <TabsContent value="importar">
@@ -371,6 +377,85 @@ function ImportarTab() {
                 </TableBody>
               </Table>
             </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function SkusNovosTab() {
+  const utils = trpc.useUtils();
+  const { data: pendingSkus = [], isLoading } = trpc.cadastrosSistema.pendingSkusFromFaturamento.useQuery();
+  const acceptMutation = trpc.cadastrosSistema.acceptPendingSku.useMutation({
+    onSuccess: () => {
+      utils.cadastrosSistema.pendingSkusFromFaturamento.invalidate();
+      utils.produtos.list.invalidate();
+      toast.success("SKU aceito no cadastro de produtos");
+    },
+    onError: error => toast.error(error.message),
+  });
+  const preview = pendingSkus.slice(0, 80);
+  const acceptingCod = acceptMutation.isPending ? acceptMutation.variables?.codMaterial : null;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          Skus Novos
+          {!isLoading && <Badge variant="secondary">{pendingSkus.length}</Badge>}
+        </CardTitle>
+        <CardDescription>
+          SKUs que estão em Bases/Faturamento e ainda não estão em Produtos. Aceitar inclui o código no cadastro.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <div className="flex justify-center py-8">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : pendingSkus.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Nenhum SKU novo no faturamento.</p>
+        ) : (
+          <div className="max-h-[60vh] overflow-auto rounded-md border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Código</TableHead>
+                  <TableHead>Marca</TableHead>
+                  <TableHead>Descrição</TableHead>
+                  <TableHead className="w-[120px]">Ação</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {preview.map(sku => (
+                  <TableRow key={sku.codMaterial}>
+                    <TableCell className="font-mono text-sm">{sku.codMaterial}</TableCell>
+                    <TableCell>{sku.marca || "—"}</TableCell>
+                    <TableCell className="max-w-md truncate">{sku.descricaoItem || "—"}</TableCell>
+                    <TableCell>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={acceptMutation.isPending}
+                        onClick={() => acceptMutation.mutate({ codMaterial: sku.codMaterial })}
+                      >
+                        {acceptingCod === sku.codMaterial ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          "Aceitar"
+                        )}
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+            {pendingSkus.length > preview.length && (
+              <p className="border-t px-3 py-2 text-xs text-muted-foreground">
+                Exibindo {preview.length} de {pendingSkus.length} SKUs
+              </p>
+            )}
           </div>
         )}
       </CardContent>

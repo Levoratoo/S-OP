@@ -1,0 +1,70 @@
+Segue abaixo Passo a Passo de como gerar a Previsão de Demanda:
+Pré-etapa, informações importantes
+Importante antes validar se todos os skus que estão cadastrados no sistema está no Relatório "1 - Relação SKUs ativos ou inativos" no caminho "C:\Users\vinicius.araujo\OneDrive - PRINTBAG EMBALAGENS LTDA\S&OP Planejamento\0 - Arquivos Compartilhados\Relatórios Diários"
+Importante validar tbm se atualizado a tabela de sku De Para onde efetua a conversão de todas as bases
+Tanto na aba Fat Linha quanto Fat Sku MTS precisa ajustar a fórmula para sempre pegar os ultimos 6M e 12M
+Atualizar Relatórios Bases
+Atualizar todas as querys da planilha "1 - Estatística IA" no caminho "C:\Users\vinicius.araujo\OneDrive - PRINTBAG EMBALAGENS LTDA\S&OP Planejamento\4 - S&OP Printbag\Estatística\PrevisaoDemandaAtual"
+No arquivo "1 - Estatística IA" possui 3 abas em vermelho, esses 3 arquivos são para copiar os dados e colar nos arquivos onde será rodado o script de Previsão de Demanda
+Base Vendas
+Após atualizar a query é importante sempre adicionar o último mês, exemplo estamos em fev/26 precisa adicionar os dados ref a jan/26 que estará fechado.
+Sempre o cabeçalho desse novo mês que será a data do mês estar formatado como texto ex: fev-26
+Adicionar essa nova coluna basta arrastar a fórmula para o lado
+Fat CNPJ
+Apenas atualizar a query e o novo mês já está puxando
+Projeção Itens
+Aqui mensalmente precisa ajustar na query adicionando o mês, exemplo vamos fazer a demanda de fev26 precisa pegar o previsto de Jan/26
+Após atualizar as 3 bases apenas clicar no executor que está na pasta "executar_previsao_v5_2_COMPLETO" ele irá executar o script em cmd
+Após isso será gerado um arquivo automaticamente chamado: "relatorio_previsao_demanda_com a data"
+Atualizar Arquivo novo Colaboração
+Copiar o arquivo "0 - Novo Modelo Colaboração Comercial" e criar uma pasta do Ciclo S&OP no caminho: "C:\Users\vinicius.araujo\OneDrive - PRINTBAG EMBALAGENS LTDA\S&OP Planejamento\0 - Arquivos Compartilhados\Colaboração Comercial\" e salvar uma nova versão dele.
+Copiar o arquivo de Previsão de Demanda Estatística e colar também na pasta para ficar como histórico
+No arquivo de Colaboração precisa ajustar, tem arquivos ocultos que precisam ajustar:
+Aba Dias e Data - Oculto: Precisa alterar todo novo ciclo para o 1º dia do mês do ciclo, célula C2 em amarelo
+Aba Skus Estatistica IA - Oculto: é uma query do controle Estatística IA onde trás o sku e etc
+Aba PV VAR - Oculto: é uma query do relatório de PVs em aberto de skus Printbag
+Aba Gestor Comercial - Oculto: é uma query do controle do comercial Gestor x Marca
+Aba Família Oculto: é uma query do controle S&OP
+Aba Valor Venda Oculto: é uma query do relatório do sistema do controle "1 - Relação Preço Venda" na pasta de Relatórios Diários
+Aba Acompanhamento sku - Oculto: Precisa adicionar o mês que se encerrou na query "Acompanhamento sku" estamos em fev/26 exemplo, precisamos trazer o projetado para Jan/26, essa query está vinculada a aba de Fat. Qtd Sku na planilha S&OP
+Aba Relação SKUs Oculto: é uma query do controle S&OP aba Skus
+Aba Estatística em Azul:
+Coluna B até R são rateio da sazonalidade da Marca - se necessário pode ajustar, essa revisão é feita geralmente anualmente, validado pelo Comercial. Quando é uma marca nova e talvez não tenha a sazonalidade dela mês a mês pode considerar na coluna C projetar como não, ai ele não irá projetar, respeitando assim a previsão que o cliente passou. Quando houver uma nova marca JIT/MTS é importante adicionar aqui a sazonalidade da marca
+Coluna T a AP é o cálculo por skus da previsão de demanda para os próximos 12M, importante que as abas MTS e JITO puxam dessa aba. Aqui são apenas fórmulas para distribuir a qtde total melhor cenário do script respeitando a sazonalidade da marca e o rateio do sku/peso que ele tem. Na coluna Y se der erro é pq o item precisa ser ajustado na aba de colaboração, possivelmente tenha mudado, é um sku novo e etc. Importante todo mês precisa ajustar a fórmula para pegar o % correto da sazonalidade da marca
+Coluna AR pra frente é só colar a aba "Visao_Executiva" do arquivo gerado do script em python.
+Aba MTS
+Grande parte do arquivo é fórmula, mas precisa fazer alguns ajustes:
+Coluna C sempre precisa ser o sku mais atualizado, se tiver com erro é porque precisa ajustar o sku para o novo
+Coluna P validar se deve projetar a estatística no sku ou não, tem itens que são novos que ai considera a projeção que o cliente passou, até ele ter histórico
+Atualizar fórmula box Comparativo Acumulado, colunas BF a BM, sempre adicionando o mês fechado
+Precisa Adicionar o comparativo mês a mês referente ao mês fechado, no caso se o ciclo é mar/26 precisa adicionar os dados de jan/26 (A.A + Previsto e Real Jan/26), ajustar a fórmula da Projeção do mês atual, no caso Fev/26
+No box de projeção estatística importante validar na fórmula se está puxando da coluna certa da aba "Estatística"
+No box de Colaboração é importante trazer exatamente a colaboração do ciclo anterior sinalizado pelo time Comercial
+Aba Resumo MTS Oculto - Query para formatar os dados para aba 1-Consolidado
+Aba JITO
+Grande parte é fórmula, a estrutura desse arquivo é igual a aba MTS
+Sugestão após ajustar a aa MTS, recorta essa aba desatualizada, cria uma cópia da aba MTS e renomei a aba para JITO, renomei a tabela para JITO e ai as querys não terão problemas de atualizar
+Aba Resumo JITO Oculto - Query para formatar os dados para aba 1-Consolidado
+Aba PV-MTO
+Aqui é query vinculada ao relatório que gera automático "11. Pedidos em Aberto S&OP" na pasta  "\\192.168.30.58\sistemaprintbag\Relatorios Planejamento\PCP - PCM"
+Aba Resumo MTO PV Oculto - Query para formatar os dados para aba 1-Consolidado
+Aba CRM
+Aqui é o time Comercial que preenche, vem do Pipe drive, são os cards dos gestores comerciais
+Importante fazer algumas validações:
+Cards só devem contemplam o período do Ciclo, os 12M
+São influenciados Colaboração, Apostas e Oportunidades
+Precisa constar a temperatura da aposta (Quente, morno ou frio)
+Não pode ter colaboração considerando sku genérico, nesse caso precisa ser aposta
+Apostas de curto prazo, skus genéricos precisam constar cálculo de orçamento
+Não pode ter sobreposição de PV MTO com cards CRM
+Os volumes precisam estar distribuído no mês a mês
+Aba Resumo CRM Oculto - Query para formatar os dados para aba 1-Consolidado
+Aba PV Aberto Oculto: PV para o mês + grid p/ análise de MTO variação
+Abas Resumo na planilha de colaboração Comercial
+1-Consolidado: Query que consolida todas as abas MTS, JITO, PV-MTO e CRM
+2-Resumo R$: é tabela dinâmica que traz resumo de valor em algumas dimensões
+3-PVxCRM: Query c/ tabela dinâmica no qual confronta PV c/ CRM para validar sobreposição de colaboração
+4-Resumo PROD: base que utilizamos para fazer análises de capacidade/operações
+5-Resumo Base Ciclo: base para salvar no controle "1 - BD Ciclos S&OP" na pasta C:\Users\vinicius.araujo\OneDrive - PRINTBAG EMBALAGENS LTDA\S&OP Planejamento\4 - S&OP Printbag
+6-MTO Variação: analisar itens que venderam no ano anterior e que não contempla seja do faturado do ano atual ou que não foi apontado no ciclo
+7-Relatório RFS: Relatório consolidado para colar na aba RFS do S&OP

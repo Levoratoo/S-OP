@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { formatCalendarDate } from "@shared/calendar-date";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -7,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { trpc } from "@/lib/trpc";
 import { Loader2, FileSpreadsheet, Upload } from "lucide-react";
+import { useRefreshFaturamentoRecent } from "./useRefreshFaturamentoRecent";
 
 const MESES = [
   { value: "0", label: "Todos" },
@@ -30,6 +32,7 @@ export default function HistoricoVendas() {
   const [year, setYear] = useState(String(anoAtual));
   const [month, setMonth] = useState("0");
 
+  const refreshRecent = useRefreshFaturamentoRecent();
   const yearNum = parseInt(year, 10);
   const monthNum = month === "0" ? undefined : parseInt(month, 10);
 
@@ -54,10 +57,7 @@ export default function HistoricoVendas() {
     return `R$ ${parseFloat(value).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`;
   };
 
-  const formatDate = (date: Date | string | null | undefined) => {
-    if (!date) return "-";
-    return new Date(date).toLocaleDateString("pt-BR");
-  };
+  const formatDate = (date: Date | string | null | undefined) => formatCalendarDate(date);
 
   return (
     <div className="space-y-6">
@@ -65,7 +65,7 @@ export default function HistoricoVendas() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Histórico de Vendas</h1>
           <p className="text-muted-foreground">
-            Notas fiscais carregadas do ERP (faturamento)
+            Notas fiscais do ERP, só com os CFOP da lista. A tela atualiza as datas mais novas ao abrir.
           </p>
         </div>
         <Button variant="outline" onClick={() => setLocation("/vendas/importar")}>
@@ -73,6 +73,13 @@ export default function HistoricoVendas() {
           Importar / Atualizar
         </Button>
       </div>
+
+      {refreshRecent.isPending ? (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Atualizando notas novas do ERP e removendo CFOP fora da lista...
+        </div>
+      ) : null}
 
       <div className="grid gap-4 md:grid-cols-3">
         <Card>

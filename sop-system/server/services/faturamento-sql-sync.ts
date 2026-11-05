@@ -1,10 +1,30 @@
 import type { InsertFaturamento } from "../../drizzle/schema";
+import { isCfopFaturamentoPermitido } from "@shared/cfop-faturamento";
+import { addCalendarDays, calendarToday } from "@shared/calendar-date";
 import * as db from "../db";
 import {
   defaultDesdeDate,
   queryErpFaturamentoRowsInRange,
   testErpConnection,
 } from "./erp-mssql";
+import { acceptPendingMarcasFromFaturamento } from "./seed-from-faturamento";
+
+async function autoAcceptMarcasPendentes() {
+  try {
+    const result = await acceptPendingMarcasFromFaturamento();
+    if (result.created > 0) {
+      console.log(`[faturamento] ${result.created} marca(s) nova(s) incluída(s) no cadastro`);
+    }
+    return result.created;
+  } catch (error) {
+    console.warn(
+      `[faturamento] falha ao incluir marcas novas: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+    return 0;
+  }
+}
 
 function asText(value: unknown): string {
   if (value === null || value === undefined) return "";
@@ -77,9 +97,9 @@ function inferTipoFaturamento(row: Record<string, unknown>): "DEVOLUCAO" | "SAID
   const motivo = asText(row.Motivo_Canc || row["Motivo Canc."] || row.MOTIVOCANCELNF).toUpperCase();
   if (motivo) return "DEVOLUCAO";
 
-  const cfop = asText(row.CFOP).replace(/\D/g, "");
-  // CFOPs de devolução comuns (entrada/saída)
-  if (/^(1|2)2\d{2}$/.test(cfop) || /^(5|6)2\d{2}$/.test(cfop)) return "DEVOLUCAO";
+  const cfop4 = asText(row.CFOP).replace(/\D/g, "").slice(0, 4);
+  // CFOPs de devolução comuns (entrada/saída), inclusive sufixos como 1.201.01
+  if (/^(1|2)2\d{2}$/.test(cfop4) || /^(5|6)2\d{2}$/.test(cfop4)) return "DEVOLUCAO";
 
   const qtd = Number(asNumberString(row.Qtd));
   const total = Number(asNumberString(row.Total));
@@ -98,6 +118,7 @@ function pick(row: Record<string, unknown>, ...keys: string[]): unknown {
 export function mapErpRowToFaturamento(row: Record<string, unknown>): InsertFaturamento | null {
   const dataEmissao = parseEmissao(pick(row, "Emissao", "Emissão", "DATAEMISSAO", "dataEmissao"));
   if (!dataEmissao) return null;
+  if (!isCfopFaturamentoPermitido(pick(row, "CFOP"))) return null;
 
   const qtd = asNumberString(pick(row, "Qtd", "Qtd.", "QUANTIDADE"));
   const valorTotal = asNumberString(pick(row, "Total", "VALORITEMLIQUIDO", "Valor Total"));
@@ -219,6 +240,7 @@ export async function syncFaturamentoFromSql(options?: {
   }
 
   await db.rebuildFaturamentoResumo();
+  await autoAcceptMarcasPendentes();
 
   return {
     fetched,
@@ -230,6 +252,232 @@ export async function syncFaturamentoFromSql(options?: {
     source,
     years,
     connection,
+  };
+}
+
+export type FaturamentoYearsSyncResult = {
+  source: string;
+  years: FaturamentoSqlSyncYearResult[];
+};
+
+/**
+ * Recarrega anos específicos do ERP com o mesmo mapeamento da carga corrente
+ * (CFOP, data de calendário). Só apaga o ano depois que o ERP devolveu notas.
+ */
+export async function syncFaturamentoYears(years: number[]): Promise<FaturamentoYearsSyncResult> {
+  const currentYear = new Date().getFullYear();
+  const unique = Array.from(new Set(years))
+    .filter(year => Number.isInteger(year) && year >= 2000 && year <= currentYear)
+    .sort((a, b) => a - b);
+  if (unique.length === 0) {
+    throw new Error("Nenhum ano válido para recarregar.");
+  }
+
+  const connection = await testErpConnection();
+  const results: FaturamentoSqlSyncYearResult[] = [];
+
+  for (const year of unique) {
+    const inicio = `${year}-01-01`;
+    const fim = `${year + 1}-01-01`;
+    const { rows } = await queryErpFaturamentoRowsInRange(inicio, fim);
+    const batch: InsertFaturamento[] = [];
+    let yearSkipped = 0;
+    for (const row of rows) {
+      const item = mapErpRowToFaturamento(row);
+      if (!item) {
+        yearSkipped += 1;
+        continue;
+      }
+      batch.push(item);
+    }
+    if (batch.length === 0) {
+      throw new Error(
+        `ERP não retornou notas de ${year}. A base local desse ano não foi alterada.`
+      );
+    }
+    console.log(`[faturamento] ${year}: ${batch.length} notas do ERP, substituindo o ano local`);
+    await db.clearFaturamentoYear(year);
+    const insertResult = await db.createFaturamentoBatch(batch);
+    results.push({
+      year,
+      fetched: rows.length,
+      mapped: batch.length,
+      skipped: yearSkipped,
+      inserted: insertResult.count,
+    });
+  }
+
+  await db.rebuildFaturamentoResumo();
+  await autoAcceptMarcasPendentes();
+  return { source: connection.source, years: results };
+}
+
+export type FaturamentoYearsSyncStatus = {
+  status: "idle" | "running" | "done" | "error";
+  years: number[];
+  startedAt: string | null;
+  finishedAt: string | null;
+  error: string | null;
+  result: FaturamentoYearsSyncResult | null;
+};
+
+let yearSyncStatus: FaturamentoYearsSyncStatus = {
+  status: "idle",
+  years: [],
+  startedAt: null,
+  finishedAt: null,
+  error: null,
+  result: null,
+};
+
+export function getFaturamentoYearsSyncStatus(): FaturamentoYearsSyncStatus {
+  return yearSyncStatus;
+}
+
+/** Dispara a recarga e devolve na hora. O ERP de um ano inteiro não cabe no tempo de uma requisição. */
+export function startFaturamentoYearsSync(years: number[]): FaturamentoYearsSyncStatus {
+  if (yearSyncStatus.status === "running") return yearSyncStatus;
+  yearSyncStatus = {
+    status: "running",
+    years,
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    error: null,
+    result: null,
+  };
+  syncFaturamentoYears(years)
+    .then(result => {
+      yearSyncStatus = {
+        ...yearSyncStatus,
+        status: "done",
+        finishedAt: new Date().toISOString(),
+        result,
+        error: null,
+      };
+      console.log(`[faturamento] anos recarregados ${result.years.map(y => y.year).join(",")}`);
+    })
+    .catch(error => {
+      const message = error instanceof Error ? error.message : String(error);
+      yearSyncStatus = {
+        ...yearSyncStatus,
+        status: "error",
+        finishedAt: new Date().toISOString(),
+        error: message,
+      };
+      console.error(`[faturamento] falha ao recarregar anos: ${message}`);
+    });
+  return yearSyncStatus;
+}
+
+export type FaturamentoRecentSyncResult = {
+  refreshed: boolean;
+  upToDate: boolean;
+  removedCfop: number;
+  inserted: number;
+  fetched: number;
+  skipped: number;
+  desde: string | null;
+  ate: string | null;
+  maxAntes: string | null;
+  maxDepois: string | null;
+  today: string;
+};
+
+const FORCE_REUSE_MS = 20_000;
+let recentSyncInflight: Promise<FaturamentoRecentSyncResult> | null = null;
+let lastRecentSync: { at: number; result: FaturamentoRecentSyncResult } | null = null;
+
+/**
+ * Tira da base o CFOP fora da lista e puxa do ERP o que ainda não está gravado,
+ * inclusive as notas de ontem e de hoje.
+ * `force` é o passo anterior à previsão: se uma carga acabou de terminar, reutiliza
+ * esse resultado em vez de baixar o ERP duas vezes seguidas.
+ */
+export function syncFaturamentoRecent(options?: {
+  force?: boolean;
+}): Promise<FaturamentoRecentSyncResult> {
+  const force = options?.force === true;
+  if (recentSyncInflight) return recentSyncInflight;
+  if (force && lastRecentSync && Date.now() - lastRecentSync.at < FORCE_REUSE_MS) {
+    return Promise.resolve(lastRecentSync.result);
+  }
+
+  recentSyncInflight = runSyncFaturamentoRecent()
+    .then(result => {
+      lastRecentSync = { at: Date.now(), result };
+      return result;
+    })
+    .finally(() => {
+      recentSyncInflight = null;
+    });
+  return recentSyncInflight;
+}
+
+async function runSyncFaturamentoRecent(): Promise<FaturamentoRecentSyncResult> {
+  const today = calendarToday();
+  const removedCfop = await db.purgeFaturamentoCfopIndevido();
+  const maxAntes = await db.getFaturamentoMaxDataIso();
+
+  if (maxAntes == null) {
+    if (removedCfop > 0) await db.rebuildFaturamentoResumo();
+    return {
+      refreshed: false,
+      upToDate: false,
+      removedCfop,
+      inserted: 0,
+      fetched: 0,
+      skipped: 0,
+      desde: null,
+      ate: null,
+      maxAntes,
+      maxDepois: null,
+      today,
+    };
+  }
+
+  const inicio = maxAntes >= today ? addCalendarDays(today, -1) : addCalendarDays(maxAntes, -2);
+  const fim = addCalendarDays(today, 1);
+  const { rows } = await queryErpFaturamentoRowsInRange(inicio, fim);
+  if (rows.length === 0) {
+    throw new Error(
+      `ERP não retornou notas entre ${inicio} e ${fim}. A base local desse período não foi alterada.`
+    );
+  }
+
+  const batch: InsertFaturamento[] = [];
+  let skipped = 0;
+  for (const row of rows) {
+    const item = mapErpRowToFaturamento(row);
+    if (!item) {
+      skipped += 1;
+      continue;
+    }
+    batch.push(item);
+  }
+  if (batch.length === 0) {
+    throw new Error(
+      `Nenhuma nota do período ${inicio} a ${fim} passou no filtro de CFOP. A base local não foi alterada.`
+    );
+  }
+
+  await db.clearFaturamentoDateRange(inicio, fim);
+  const insertResult = await db.createFaturamentoBatch(batch);
+  await db.rebuildFaturamentoResumo();
+  await autoAcceptMarcasPendentes();
+  const maxDepois = await db.getFaturamentoMaxDataIso();
+
+  return {
+    refreshed: true,
+    upToDate: (maxDepois ?? "") >= today,
+    removedCfop,
+    inserted: insertResult.count,
+    fetched: rows.length,
+    skipped,
+    desde: inicio,
+    ate: fim,
+    maxAntes,
+    maxDepois,
+    today,
   };
 }
 

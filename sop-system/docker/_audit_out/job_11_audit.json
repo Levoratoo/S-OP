@@ -1,0 +1,78 @@
+{
+  "sheets": [
+    "Visao_Executiva",
+    "Geral",
+    "Detalhado",
+    "Backtest",
+    "Backtest_Sku",
+    "Modelos_Estatisticos",
+    "Sazonalidade",
+    "Analise_Cenarios",
+    "Acuracidade",
+    "Acuracidade_Detalhada",
+    "Clientes",
+    "Cliente_detalhado",
+    "Clientes_Por_Marca",
+    "Metodologia"
+  ],
+  "missing_required": [
+    "Clientes_Analise",
+    "Projeção Itens",
+    "Resumo"
+  ],
+  "sheet_rows": {
+    "Cliente_detalhado": 49097
+  },
+  "headers": {
+    "Cliente_detalhado": [
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      ""
+    ]
+  },
+  "en_month_headers": {
+    "Cliente_detalhado": []
+  },
+  "pt_month_headers": {
+    "Cliente_detalhado": []
+  },
+  "ok": false,
+  "notes": []
+}

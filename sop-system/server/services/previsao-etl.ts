@@ -11,6 +11,7 @@
  * - Previsto: Previsto / Codificação (= sku_marca) + meses (previsoes / ciclo / seed SKU)
  * Granularidade oficial (comercial): SKU da aba Skus Projetar — não TML.
  */
+import { isSkuAcabado } from "@shared/sku-acabado";
 import fs from "node:fs";
 import path from "node:path";
 import XLSX from "xlsx";
@@ -334,10 +335,57 @@ function parseMesColLabel(label: string): { ano: number; mes: number } | null {
   return { ano: 2000 + Number(m[2]), mes: mi + 1 };
 }
 
+/**
+ * Se a competência fechada ainda não existe no seed (atualização mensal pendente),
+ * estende as colunas até o mês exigido repetindo o último valor conhecido.
+ */
+function extendMonthHeadersThrough(
+  monthHeaders: string[],
+  requiredMonth?: string
+): { months: string[]; carried: boolean } | null {
+  if (!requiredMonth) return { months: monthHeaders, carried: false };
+  if (monthHeaders.includes(requiredMonth)) {
+    return { months: monthHeaders, carried: false };
+  }
+  if (monthHeaders.length === 0) return null;
+  const last = parseMesColLabel(monthHeaders[monthHeaders.length - 1]);
+  const req = parseMesColLabel(requiredMonth);
+  if (!last || !req) return null;
+  const lastKey = last.ano * 12 + last.mes;
+  const reqKey = req.ano * 12 + req.mes;
+  if (reqKey <= lastKey) return null;
+  let y = last.ano;
+  let m = last.mes + 1;
+  if (m > 12) {
+    m = 1;
+    y += 1;
+  }
+  const startNext = `${y}-${String(m).padStart(2, "0")}-01`;
+  const endIso = `${req.ano}-${String(req.mes).padStart(2, "0")}-28`;
+  const extra = buildMonthRange(startNext, endIso);
+  if (extra.length === 0 || !extra.includes(requiredMonth)) return null;
+  return { months: [...monthHeaders, ...extra], carried: true };
+}
+
+function carryForwardNumericSeries(values: number[], targetLen: number): number[] {
+  if (targetLen <= values.length) return values.slice(0, targetLen);
+  const last = values.length > 0 ? values[values.length - 1] : 0;
+  return [...values, ...Array(targetLen - values.length).fill(last)];
+}
+
+function carryForwardSheetValues(
+  values: Array<string | number>,
+  targetLen: number
+): Array<string | number> {
+  if (targetLen <= values.length) return values.slice(0, targetLen);
+  const last = values.length > 0 ? values[values.length - 1] : "";
+  return [...values, ...Array(targetLen - values.length).fill(last)];
+}
+
 /** Histórico Previsto (Projeção Itens) em dados-sistema/estatistica_previsto.csv. */
 function buildPrevistoFromSeedFile(
   requiredMonth?: string
-): { base64: string; grupos: number } | null {
+): { base64: string; grupos: number; atrasado: boolean } | null {
   const seedPath = path.join(resolveDadosSistemaDir(), "estatistica_previsto.csv");
   if (!fs.existsSync(seedPath)) return null;
   const rows = parseCsvSimple(fs.readFileSync(seedPath, "utf8"));
@@ -347,16 +395,18 @@ function buildPrevistoFromSeedFile(
   // Seed TML antigo não serve para previsão por SKU.
   const firstCode = String(rows[1]?.[0] ?? "").trim();
   if (isTmlCodificacao(firstCode)) return null;
-  const monthHeaders = headers.slice(1).filter(h => parseMesColLabel(h));
-  if (monthHeaders.length === 0) return null;
-  if (requiredMonth && !monthHeaders.includes(requiredMonth)) return null;
+  const baseMonths = headers.slice(1).filter(h => parseMesColLabel(h));
+  if (baseMonths.length === 0) return null;
+  const extended = extendMonthHeadersThrough(baseMonths, requiredMonth);
+  if (!extended) return null;
+  const monthHeaders = extended.months;
 
   const sheetRows: Array<Array<string | number>> = [];
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i];
     const cod = (row[0] || "").trim();
     if (!cod) continue;
-    const values: Array<string | number> = [cod];
+    const values: Array<string | number> = [];
     for (let c = 1; c < headers.length; c++) {
       if (!parseMesColLabel(headers[c])) continue;
       const raw = String(row[c] ?? "").trim();
@@ -366,7 +416,7 @@ function buildPrevistoFromSeedFile(
         values.push(Math.round(toNumber(raw) * 10000) / 10000);
       }
     }
-    sheetRows.push(values);
+    sheetRows.push([cod, ...carryForwardSheetValues(values, monthHeaders.length)]);
   }
   if (sheetRows.length === 0) return null;
 
@@ -376,7 +426,11 @@ function buildPrevistoFromSeedFile(
     sheetFromRows(["Codificação", ...monthHeaders], sheetRows),
     "Previsto"
   );
-  return { base64: workbookToBase64(wbPrev), grupos: sheetRows.length };
+  return {
+    base64: workbookToBase64(wbPrev),
+    grupos: sheetRows.length,
+    atrasado: extended.carried,
+  };
 }
 
 /**
@@ -388,16 +442,18 @@ function buildPrevistoSkuFromTmlSeedRateado(
   skuCodigos: string[],
   skuToTml: Map<string, string>,
   volume12m: Map<string, number>
-): { base64: string; grupos: number } | null {
+): { base64: string; grupos: number; atrasado: boolean } | null {
   const seedPath = path.join(resolveDadosSistemaDir(), "estatistica_previsto.csv");
   if (!fs.existsSync(seedPath) || skuCodigos.length === 0) return null;
   const rows = parseCsvSimple(fs.readFileSync(seedPath, "utf8"));
   if (rows.length < 2) return null;
   const headers = rows[0].map(h => h.trim());
   if (!headers[0] || !/codifica/i.test(headers[0])) return null;
-  const monthHeaders = headers.slice(1).filter(h => parseMesColLabel(h));
-  if (monthHeaders.length === 0) return null;
-  if (requiredMonth && !monthHeaders.includes(requiredMonth)) return null;
+  const baseMonths = headers.slice(1).filter(h => parseMesColLabel(h));
+  if (baseMonths.length === 0) return null;
+  const extended = extendMonthHeadersThrough(baseMonths, requiredMonth);
+  if (!extended) return null;
+  const monthHeaders = extended.months;
 
   const tmlValues = new Map<string, number[]>();
   for (let i = 1; i < rows.length; i++) {
@@ -409,7 +465,7 @@ function buildPrevistoSkuFromTmlSeedRateado(
       if (!parseMesColLabel(headers[c])) continue;
       vals.push(toNumber(row[c]));
     }
-    tmlValues.set(cod, vals);
+    tmlValues.set(cod, carryForwardNumericSeries(vals, monthHeaders.length));
   }
   if (tmlValues.size === 0) return null;
 
@@ -456,7 +512,11 @@ function buildPrevistoSkuFromTmlSeedRateado(
     sheetFromRows(["Codificação", ...monthHeaders], sheetRows),
     "Previsto"
   );
-  return { base64: workbookToBase64(wbPrev), grupos: sheetRows.length };
+  return {
+    base64: workbookToBase64(wbPrev),
+    grupos: sheetRows.length,
+    atrasado: extended.carried,
+  };
 }
 
 /** Último dia do mês fechado (exclui mês vigente — regra do guia técnico). */
@@ -759,7 +819,7 @@ export async function gerarBasesPrevisaoPython(options?: {
 
     // Excel: inner join skus_projetar — só entra quem está marcado para projetar.
     // Não filtrar INATIVO: Skus Projetar inclui SKUs inativos com histórico (Power Query).
-    if (!prod || prod.projetarEstatistica !== true) {
+    if (!prod || prod.projetarEstatistica !== true || !isSkuAcabado(prod.codItem || prod.codigo || skuAtual || skuOriginal)) {
       linhasSemSkuProjetar += 1;
       continue;
     }
@@ -806,7 +866,7 @@ export async function gerarBasesPrevisaoPython(options?: {
 
   // Garante 1 linha por SKU de Skus Projetar (mesmo sem faturamento no período).
   for (const prod of produtosRows) {
-    if (prod.projetarEstatistica !== true) continue;
+    if (prod.projetarEstatistica !== true || !isSkuAcabado(prod.codItem || prod.codigo)) continue;
     const skuKey = (prod.codItem || prod.codigo || "").trim();
     if (!skuKey) continue;
     const tipo = prod.tipoEstoque || "MTS";
@@ -891,7 +951,7 @@ export async function gerarBasesPrevisaoPython(options?: {
 
     for (const p of prevRowsDb) {
       const prod = p.produtoId ? byId.get(p.produtoId) : undefined;
-      if (!prod || prod.projetarEstatistica !== true) continue;
+      if (!prod || prod.projetarEstatistica !== true || !isSkuAcabado(prod.codItem || prod.codigo)) continue;
       if (marcasInativas.has(normalizeKey(prod.marca))) continue;
       if (isTipoOutros(prod.tipoEstoque, prod.tipoNegocio, prod.linha)) continue;
       const skuKey = (prod.codItem || prod.codigo || "").trim();
@@ -958,6 +1018,7 @@ export async function gerarBasesPrevisaoPython(options?: {
       gruposPrevisto = fromSeed.grupos;
       previstoOrigem = "seed_previsto";
       previstoCompetenciaUsada = expectedCol;
+      previstoAtrasado = fromSeed.atrasado;
     }
   }
 
@@ -994,7 +1055,7 @@ export async function gerarBasesPrevisaoPython(options?: {
       previstoOrigem =
         todasOficiais && fromTml.grupos === vendasAgg.size ? "seed_sku" : "seed_tml_rateado";
       previstoCompetenciaUsada = expectedCol;
-      previstoAtrasado = false;
+      previstoAtrasado = fromTml.atrasado;
     }
   }
 

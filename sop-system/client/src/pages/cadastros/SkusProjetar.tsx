@@ -1,3 +1,4 @@
+import { isSkuAcabado } from "@shared/sku-acabado";
 import { useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,6 +16,7 @@ import * as XLSX from "xlsx";
 
 /**
  * Equivalente à aba "Skus Projetar" do arquivo "1 - Estatística IA".
+ * Lista os produtos acabados (prefixo 80 a 86) aceitos no cadastro.
  * Só SKUs com projetarEstatistica=true entram no script de demanda.
  */
 export default function SkusProjetar() {
@@ -41,8 +43,13 @@ export default function SkusProjetar() {
     onError: e => toast.error(e.message),
   });
 
+  const acabados = useMemo(
+    () => (produtos ?? []).filter(p => isSkuAcabado(p.codItem || p.codigo)),
+    [produtos]
+  );
+
   const rows = useMemo(() => {
-    let list = produtos ?? [];
+    let list = acabados;
     if (somenteProjetar) list = list.filter(p => p.projetarEstatistica !== false);
     if (filtroTipo !== "all") list = list.filter(p => p.tipoEstoque === filtroTipo);
     const term = search.trim().toLowerCase();
@@ -54,13 +61,12 @@ export default function SkusProjetar() {
       );
     }
     return list;
-  }, [produtos, search, somenteProjetar, filtroTipo]);
+  }, [acabados, search, somenteProjetar, filtroTipo]);
 
   const stats = useMemo(() => {
-    const all = produtos ?? [];
-    const projetar = all.filter(p => p.projetarEstatistica !== false).length;
-    return { total: all.length, projetar, nao: all.length - projetar };
-  }, [produtos]);
+    const projetar = acabados.filter(p => p.projetarEstatistica !== false).length;
+    return { total: acabados.length, projetar, nao: acabados.length - projetar };
+  }, [acabados]);
 
   const handleImportLista = async (file: File, somenteEstes: boolean) => {
     try {
@@ -97,15 +103,15 @@ export default function SkusProjetar() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Skus Projetar</h1>
         <p className="text-muted-foreground">
-          Equivalente à aba do “1 - Estatística IA”: só estes SKUs entram no script de previsão
-          (MTS ativos + MTO alinhados com o Comercial).
+          Produtos acabados (códigos 80 a 86) aceitos no cadastro. A chave Projetar liga ou
+          desliga a entrada desse SKU na previsão estatística.
         </p>
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm text-muted-foreground">Total cadastro</CardTitle>
+            <CardTitle className="text-sm text-muted-foreground">Acabados no cadastro</CardTitle>
           </CardHeader>
           <CardContent className="text-2xl font-semibold">{stats.total}</CardContent>
         </Card>

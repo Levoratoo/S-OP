@@ -1,4 +1,5 @@
 import sql from "mssql";
+import { erpCfopPermitidoSql } from "@shared/cfop-faturamento";
 
 export type ErpMssqlConfig = {
   server: string;
@@ -177,6 +178,7 @@ SELECT
 ${FATURAMENTO_SELECT}
 FROM ${FATURAMENTO_ERP_SOURCE}
 WHERE DATAEMISSAO >= @desde
+  AND ${erpCfopPermitidoSql()}
 ORDER BY DATAEMISSAO DESC
 `;
   return { sqlText, desde };
@@ -189,6 +191,7 @@ SELECT
 ${FATURAMENTO_SELECT}
 FROM ${FATURAMENTO_ERP_SOURCE}
 WHERE DATAEMISSAO >= @inicio AND DATAEMISSAO < @fim
+  AND ${erpCfopPermitidoSql()}
 ORDER BY DATAEMISSAO DESC
 `;
   return { sqlText };
@@ -249,6 +252,7 @@ export async function countErpFaturamentoByYear(desde?: string): Promise<ErpYear
         COUNT(*) AS qtd
       FROM ${FATURAMENTO_ERP_SOURCE}
       WHERE DATAEMISSAO >= @desde
+        AND ${erpCfopPermitidoSql()}
       GROUP BY YEAR(DATAEMISSAO)
       ORDER BY ano
     `);
@@ -383,6 +387,7 @@ export async function testErpConnection(): Promise<{
         QUANTIDADE AS qtd
       FROM ${FATURAMENTO_ERP_SOURCE}
       WHERE DATAEMISSAO >= @desde
+        AND ${erpCfopPermitidoSql()}
       ORDER BY DATAEMISSAO DESC
     `);
 

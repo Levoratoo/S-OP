@@ -374,3 +374,37 @@ export async function acceptPendingClienteFromFaturamento(chave: string) {
   const created = await db.createCliente(built);
   return { created: true, clienteId: Number(created.id ?? 0) };
 }
+
+export type PendingMarcaFromFaturamento = { nome: string; notas: number };
+
+/** Marcas que aparecem no faturamento e ainda não estão no cadastro de Marcas. */
+export async function listPendingMarcasFromFaturamento(): Promise<PendingMarcaFromFaturamento[]> {
+  const conn = await db.getDb();
+  if (!conn) return [];
+  const result = await conn.execute(sql`
+    SELECT TRIM(f.marca) AS nome, COUNT(*) AS notas
+    FROM faturamento f
+    WHERE f.marca IS NOT NULL AND TRIM(f.marca) <> ''
+      AND NOT EXISTS (
+        SELECT 1 FROM marcas m
+        WHERE LOWER(TRIM(m.nome)) = LOWER(TRIM(f.marca))
+      )
+    GROUP BY TRIM(f.marca)
+    ORDER BY notas DESC
+  `);
+  const rows = (result[0] as unknown as PendingMarcaFromFaturamento[]) ?? [];
+  return rows
+    .map(row => ({ nome: String(row.nome || "").trim(), notas: Number(row.notas) || 0 }))
+    .filter(row => row.nome.length > 0);
+}
+
+export async function acceptPendingMarcasFromFaturamento(nomes?: string[]) {
+  const pending = await listPendingMarcasFromFaturamento();
+  const wanted = nomes?.length
+    ? new Set(nomes.map(nome => nome.trim().toLowerCase()).filter(Boolean))
+    : null;
+  const toCreate = pending.filter(row => !wanted || wanted.has(row.nome.toLowerCase()));
+  if (toCreate.length === 0) return { created: 0 };
+  await db.createMarcasBatch(toCreate.map(row => ({ nome: row.nome, ativo: true })));
+  return { created: toCreate.length };
+}

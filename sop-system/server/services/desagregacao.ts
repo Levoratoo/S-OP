@@ -19,6 +19,7 @@ import {
 } from "../../drizzle/schema";
 import * as previsaoPython from "../previsaoPython";
 import { loadDeParaMap, resolveCodigoAtual } from "./de-para-map";
+import { syncPvFromCarteira } from "./ciclo-colab-extras";
 
 const MES_KEYS = ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12"] as const;
 type PlanoColab = "MTS" | "JITO" | "PV_MTO" | "CRM";
@@ -792,10 +793,14 @@ export async function desagregarJobParaCicloComercial(input: DesagregarInput) {
     await db.insert(cicloComercialItens).values(itens.slice(i, i + chunk));
   }
 
+  const pv = await syncPvFromCarteira(cicloId);
+  const itensSemPvEstatistico = itens.filter(item => item.planoColab !== "PV_MTO").length;
+
   return {
     cicloId,
-    itensCriados: itens.length,
+    itensCriados: itensSemPvEstatistico + pv.itensCriados,
     grupos: totaisPorGrupo.size,
+    pvMtoDaCarteira: pv.itensCriados,
   };
 }
 

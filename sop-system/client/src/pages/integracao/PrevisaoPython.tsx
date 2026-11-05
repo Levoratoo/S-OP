@@ -17,6 +17,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import { formatCalendarDate } from "@shared/calendar-date";
 import { trpc } from "@/lib/trpc";
 import {
   Loader2,
@@ -270,6 +271,8 @@ export default function PrevisaoPython() {
     });
 
   const [gerandoPrevisao, setGerandoPrevisao] = useState(false);
+  const [etapaGeracao, setEtapaGeracao] = useState<"base" | "previsao" | null>(null);
+  const refreshFaturamento = trpc.faturamento.refreshRecent.useMutation();
 
   const desagregarMutation = trpc.cicloComercial.desagregarDoJob.useMutation({
     onSuccess: result => {
@@ -281,7 +284,7 @@ export default function PrevisaoPython() {
     onError: error => toast.error(error.message),
   });
 
-  /** Um clique = sync cadastros + ETL das 3 bases + script Python (Word: executar_previsao). */
+  /** Primeiro atualiza o faturamento no ERP; depois cadastros, bases e o script Python. */
   const handleGerarPrevisao = async () => {
     if (mesFechado?.ok === false) {
       toast.error(
@@ -290,7 +293,23 @@ export default function PrevisaoPython() {
       return;
     }
     setGerandoPrevisao(true);
+    setEtapaGeracao("base");
     try {
+      const sync = await refreshFaturamento.mutateAsync({ force: true });
+      void utils.faturamento.list.invalidate();
+      void utils.faturamento.stats.invalidate();
+      void utils.faturamento.porMes.invalidate();
+      void utils.faturamento.mesFechadoCheck.invalidate();
+      if (!sync.maxDepois) {
+        toast.error(
+          "Base de faturamento vazia. Carregue o histórico do ERP em Bases / Faturamento antes de gerar a previsão."
+        );
+        return;
+      }
+      toast.message(
+        `Faturamento atualizado até ${formatCalendarDate(sync.maxDepois)}. Gerando a previsão…`
+      );
+      setEtapaGeracao("previsao");
       const result = await createFromSistemaMutation.mutateAsync({});
       utils.produtos.list.invalidate();
       if (result.sourceSync.avisos?.length) {
@@ -300,6 +319,7 @@ export default function PrevisaoPython() {
       toast.error(error instanceof Error ? error.message : String(error));
     } finally {
       setGerandoPrevisao(false);
+      setEtapaGeracao(null);
     }
   };
 
@@ -411,7 +431,11 @@ export default function PrevisaoPython() {
               ) : (
                 <Play className="mr-2 h-5 w-5" />
               )}
-              Gerar Previsão
+              {etapaGeracao === "base"
+                ? "Atualizando base…"
+                : etapaGeracao === "previsao"
+                  ? "Gerando previsão…"
+                  : "Gerar Previsão"}
               {!gerandoPrevisao &&
               !createFromSistemaMutation.isPending ? (
                 <ArrowRight className="ml-1 h-4 w-4" />
@@ -454,10 +478,15 @@ export default function PrevisaoPython() {
         <div className="flex items-center gap-3 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-950 shadow-sm">
           <Loader2 className="h-5 w-5 shrink-0 animate-spin text-sky-600" />
           <div>
-            <p className="font-semibold">Gerando previsão…</p>
+            <p className="font-semibold">
+              {etapaGeracao === "base"
+                ? "Atualizando a base de faturamento…"
+                : "Gerando previsão…"}
+            </p>
             <p className="text-xs text-sky-800/80">
-              Sincronizando cadastros, consolidando bases e rodando o motor
-              estatístico. Isso pode levar alguns minutos — não feche a página.
+              {etapaGeracao === "base"
+                ? "Buscando as notas novas no ERP. A previsão só começa depois dessa atualização."
+                : "Cadastros, bases e motor estatístico. Isso pode levar alguns minutos — não feche a página."}
             </p>
           </div>
         </div>
@@ -473,7 +502,7 @@ export default function PrevisaoPython() {
             Atualize em Bases / Faturamento até o mês anterior (Jan/2020 → mês
             fechado). Última data:{" "}
             {mesFechado.maxDataEmissao
-              ? new Date(mesFechado.maxDataEmissao).toLocaleDateString("pt-BR")
+              ? formatCalendarDate(mesFechado.maxDataEmissao)
               : "—"}
             .
           </AlertDescription>

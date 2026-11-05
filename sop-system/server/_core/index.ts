@@ -6,6 +6,7 @@ import net from "net";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
 import { appRouter } from "../routers";
+import { syncFaturamentoYears } from "../services/faturamento-sql-sync";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { sdk } from "./sdk";
@@ -106,4 +107,21 @@ async function startServer() {
   });
 }
 
-startServer().catch(console.error);
+const syncYearsOnly = process.env.SNOP_SYNC_FAT_ONLY === "1" ? process.env.SNOP_SYNC_FAT_YEARS : "";
+if (syncYearsOnly) {
+  const years = syncYearsOnly
+    .split(",")
+    .map(value => Number(value.trim()))
+    .filter(year => Number.isInteger(year));
+  syncFaturamentoYears(years)
+    .then(result => {
+      console.log(JSON.stringify(result));
+      process.exit(0);
+    })
+    .catch(error => {
+      console.error(error);
+      process.exit(1);
+    });
+} else {
+  startServer().catch(console.error);
+}
