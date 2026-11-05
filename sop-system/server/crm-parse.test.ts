@@ -51,13 +51,13 @@ describe("parseCrmExcel layout TI", () => {
       ],
     ]);
     const rows = parseCrmExcel(buffer);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.sku).toBe("80.03.002154");
-    expect(rows[0]?.gestor).toBe("Gestor A");
-    expect(rows[0]?.tipo).toBe("Colaboração");
-    expect(rows[0]?.qtdMes).toBe(50);
-    expect(rows[0]?.dataFaturamento).toBe("2026-03-15");
-    expect(rows[0]?.modalidade).toBe("PRG");
-    expect(rows[0]?.tipoNegocio).toBe("JIT");
+    expect(rows.rows).toHaveLength(1);
+    expect(rows.rows[0]?.sku).toBe("80.03.002154");
+    expect(rows.rows[0]?.gestor).toBe("Gestor A");
+    expect(rows.rows[0]?.tipo).toBe("Colaboração");
+    expect(rows.rows[0]?.qtdMes).toBe(50);
+    expect(rows.rows[0]?.dataFaturamento).toBe("2026-03-15");
+    expect(rows.rows[0]?.modalidade).toBe("PRG");
+    expect(rows.rows[0]?.tipoNegocio).toBe("JIT");
   });
 });

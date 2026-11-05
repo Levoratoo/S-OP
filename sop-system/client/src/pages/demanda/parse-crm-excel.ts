@@ -1,30 +1,11 @@
 import * as XLSX from "xlsx";
+import {
+  CRM_EXCEL_HEADERS,
+  CrmExcelLayoutError,
+  validateCrmExcelHeaders,
+} from "@shared/crm-excel-layout";
 
-/** Layout CRM Ciclo (15 colunas, ordem fixa). */
-export const CRM_EXCEL_HEADERS = [
-  "Marca",
-  "Gestor",
-  "Produto",
-  "R$ Venda",
-  "Qtde Total",
-  "R$ Total",
-  "Cálculo OR",
-  "Qtde Entregas",
-  "Qtd Mês",
-  "R$ Total Mês",
-  "Data de Faturamento",
-  "Modalidade",
-  "Tipo",
-  "ColaboracaoAposta/Oportunidade",
-  "Temperatura",
-] as const;
-
-export class CrmExcelLayoutError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "CrmExcelLayoutError";
-  }
-}
+export { CRM_EXCEL_HEADERS, CrmExcelLayoutError, validateCrmExcelHeaders };
 
 export type CrmExcelRow = {
   sku: string;
@@ -58,39 +39,6 @@ export type CrmExcelRow = {
   m11: number;
   m12: number;
 };
-
-function normalizeHeader(value: unknown) {
-  return String(value ?? "")
-    .trim()
-    .normalize("NFD")
-    .replace(/\p{M}/gu, "")
-    .toLowerCase()
-    .replace(/\s+/g, " ");
-}
-
-const EXPECTED_NORMALIZED = CRM_EXCEL_HEADERS.map(normalizeHeader);
-
-export function validateCrmExcelHeaders(headers: string[]) {
-  const trimmed = headers.map(h => String(h ?? "").trim());
-  if (trimmed.length !== CRM_EXCEL_HEADERS.length) {
-    throw new CrmExcelLayoutError(
-      `O CRM deve ter exatamente ${CRM_EXCEL_HEADERS.length} colunas nesta ordem: ${CRM_EXCEL_HEADERS.join(", ")}. Encontradas: ${trimmed.length}.`
-    );
-  }
-  const mismatches: string[] = [];
-  for (let i = 0; i < CRM_EXCEL_HEADERS.length; i++) {
-    const got = normalizeHeader(trimmed[i]);
-    const expected = EXPECTED_NORMALIZED[i]!;
-    if (got !== expected) {
-      mismatches.push(`coluna ${i + 1}: esperado "${CRM_EXCEL_HEADERS[i]}", recebido "${trimmed[i]}"`);
-    }
-  }
-  if (mismatches.length) {
-    throw new CrmExcelLayoutError(
-      `Layout CRM inválido. ${mismatches.join("; ")}. Ordem esperada: ${CRM_EXCEL_HEADERS.join(" | ")}.`
-    );
-  }
-}
 
 function num(value: unknown) {
   if (value instanceof Date) return 0;
@@ -134,7 +82,7 @@ function classificacaoColaboracao(row: Record<string, unknown>) {
   return "";
 }
 
-export function parseCrmExcel(buffer: ArrayBuffer): CrmExcelRow[] {
+export function parseCrmExcel(buffer: ArrayBuffer): { headers: string[]; rows: CrmExcelRow[] } {
   const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   const matrix = XLSX.utils.sheet_to_json<(string | number)[]>(sheet, {
@@ -196,5 +144,5 @@ export function parseCrmExcel(buffer: ArrayBuffer): CrmExcelRow[] {
     });
   }
 
-  return rows.filter(row => row.sku);
+  return { headers: headerRow, rows: rows.filter(row => row.sku) };
 }

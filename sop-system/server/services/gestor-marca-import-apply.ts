@@ -135,3 +135,19 @@ export async function reconcileGestorMarcaImportMapAfterFaturamento() {
   }
   return { applied };
 }
+
+/** Marcas novas no faturamento com gestor no mapa de importação → cadastro + vínculo automático. */
+export async function autoCreateMarcasWithGestorFromImportMap() {
+  const { listPendingMarcasFromFaturamento } = await import("./seed-from-faturamento");
+  const pending = await listPendingMarcasFromFaturamento();
+  let created = 0;
+  let linked = 0;
+  for (const row of pending) {
+    const gestorNome = await getGestorNomeFromImportMap(row.nome);
+    if (!gestorNome) continue;
+    await db.createMarcasBatch([{ nome: row.nome, ativo: true }]);
+    created += 1;
+    if (await applyImportMapLinkForMarcaNome(row.nome)) linked += 1;
+  }
+  return { created, linked, scanned: pending.length };
+}

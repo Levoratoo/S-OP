@@ -5,6 +5,7 @@
 import { sql } from "drizzle-orm";
 import * as db from "../db";
 import type { InsertCliente, InsertProduto } from "../../drizzle/schema";
+import { isSkuAcabado } from "@shared/sku-acabado";
 import { invalidateDeParaCache } from "./de-para-map";
 
 export type SeedFromFaturamentoResult = {
@@ -158,12 +159,15 @@ function buildCliente(row: FatClienteRow): InsertCliente | null {
 
 export async function seedProdutosClientesFromFaturamento(options?: {
   dryRun?: boolean;
+  /** Só clientes (sync automático pós-faturamento). */
+  clientesOnly?: boolean;
 }): Promise<SeedFromFaturamentoResult> {
   const dryRun = Boolean(options?.dryRun);
-  const fatProdutos = await loadDistinctProdutos();
+  const clientesOnly = Boolean(options?.clientesOnly);
+  const fatProdutos = clientesOnly ? [] : await loadDistinctProdutos();
   const fatClientes = await loadDistinctClientes();
 
-  const existingProdutos = await db.listProdutos();
+  const existingProdutos = clientesOnly ? [] : await db.listProdutos();
   const existingCodes = new Set<string>();
   for (const p of existingProdutos) {
     if (p.codItem) existingCodes.add(p.codItem.trim());
@@ -178,15 +182,17 @@ export async function seedProdutosClientesFromFaturamento(options?: {
 
   const produtosToCreate: InsertProduto[] = [];
   let produtosSkipped = 0;
-  for (const row of fatProdutos) {
-    const cod = clean(row.codMaterial);
-    if (!cod) {
-      produtosSkipped += 1;
-      continue;
+  if (!clientesOnly) {
+    for (const row of fatProdutos) {
+      const cod = clean(row.codMaterial);
+      if (!cod) {
+        produtosSkipped += 1;
+        continue;
+      }
+      if (existingCodes.has(cod)) continue;
+      produtosToCreate.push(buildProduto(row, marcaIdByName));
+      existingCodes.add(cod);
     }
-    if (existingCodes.has(cod)) continue;
-    produtosToCreate.push(buildProduto(row, marcaIdByName));
-    existingCodes.add(cod);
   }
 
   const existingClientes = await db.listClientes();
@@ -220,8 +226,10 @@ export async function seedProdutosClientesFromFaturamento(options?: {
   }
 
   if (!dryRun) {
-    for (const batch of batchSlice(produtosToCreate, 500)) {
-      await db.createProdutosBatch(batch);
+    if (!clientesOnly) {
+      for (const batch of batchSlice(produtosToCreate, 500)) {
+        await db.createProdutosBatch(batch);
+      }
     }
     for (const batch of batchSlice(clientesToCreate, 500)) {
       await db.createClientesBatch(batch);
@@ -277,7 +285,7 @@ export async function listPendingSkusFromFaturamento(): Promise<PendingSkuFromFa
   return fatProdutos
     .filter(r => {
       const cod = clean(r.codMaterial);
-      return Boolean(cod && !existingCodes.has(cod.toUpperCase()));
+      return Boolean(cod && isSkuAcabado(cod) && !existingCodes.has(cod.toUpperCase()));
     })
     .map(r => ({
       ...r,

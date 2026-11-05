@@ -101,12 +101,12 @@ export function ColaboracaoResumos({ cicloId, consolidado, marcasConsolidado }: 
 
   const handleCrmFile = async (file: File) => {
     try {
-      const rows = parseCrmExcel(await file.arrayBuffer());
-      if (!rows.length) {
+      const parsed = parseCrmExcel(await file.arrayBuffer());
+      if (!parsed.rows.length) {
         toast.error("Nenhuma linha com SKU no Excel.");
         return;
       }
-      importCrm.mutate({ cicloId, rows });
+      importCrm.mutate({ cicloId, headers: parsed.headers, rows: parsed.rows });
     } catch (e) {
       toast.error(`Falha ao ler CRM: ${String(e)}`);
     }

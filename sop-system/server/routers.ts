@@ -7,7 +7,6 @@ import { z } from "zod";
 import path from "node:path";
 import fs from "node:fs";
 import * as db from "./db";
-import { isCfopFaturamentoPermitido } from "@shared/cfop-faturamento";
 import {
   getFaturamentoYearsSyncStatus,
   startFaturamentoYearsSync,
@@ -30,12 +29,12 @@ import {
   seedProdutosClientesFromFaturamento,
 } from "./services/seed-from-faturamento";
 import { applyGestorMarcaImportMerge } from "./services/gestor-marca-import-apply";
+import { assertCrmExcelHeaders, assertCrmImportRows } from "./services/crm-import-validate";
+import { legacyApiDisabled } from "./legacy-api-disabled";
 import { seedCapacidadeBaseline } from "./services/seed-capacidade";
 import { invalidateDeParaCache } from "./services/de-para-map";
 import {
-  calcularSazonalidadeDoFaturamento,
   desagregarJobParaCicloComercial,
-  parseSazonalidadeWorkbook,
   seedSazonalidadeUniformeSeVazia,
 } from "./services/desagregacao";
 import {
@@ -48,8 +47,6 @@ import {
   getRelatorioRfs,
   getResumoProd,
   getResumoRs,
-  getSazonalidadeInvalidas,
-  importCarteiraBySku,
   importCrmParaCiclo,
   syncPvFromCarteira,
 } from "./services/ciclo-colab-extras";
@@ -98,36 +95,10 @@ export const appRouter = router({
   // ==================== FAMÍLIAS ====================
   familias: router({
     list: protectedProcedure.query(() => db.listFamilias()),
-    
+
     getById: protectedProcedure
       .input(z.object({ id: z.number() }))
       .query(({ input }) => db.getFamiliaById(input.id)),
-    
-    create: protectedProcedure
-      .input(z.object({
-        nome: z.string().min(1),
-        descricao: z.string().optional(),
-        tipo: z.enum(["MTS", "MTO"]).default("MTS"),
-        ativo: z.boolean().default(true),
-      }))
-      .mutation(({ input }) => db.createFamilia(input)),
-    
-    update: protectedProcedure
-      .input(z.object({
-        id: z.number(),
-        nome: z.string().min(1).optional(),
-        descricao: z.string().optional(),
-        tipo: z.enum(["MTS", "MTO"]).optional(),
-        ativo: z.boolean().optional(),
-      }))
-      .mutation(({ input }) => {
-        const { id, ...data } = input;
-        return db.updateFamilia(id, data);
-      }),
-    
-    delete: protectedProcedure
-      .input(z.object({ id: z.number() }))
-      .mutation(({ input }) => db.deleteFamilia(input.id)),
   }),
 
   // ==================== SUBFAMÍLIAS ====================
@@ -654,43 +625,6 @@ export const appRouter = router({
       .input(z.object({ id: z.number() }))
       .mutation(({ input }) => db.deleteCarteiraPedido(input.id)),
 
-    importBatch: protectedProcedure
-      .input(z.array(z.object({
-        codigo: z.string().min(1),
-        sequencia: z.number().default(1),
-        competencia: z.string(),
-        quantidade: z.string(),
-        receitaBruta: z.string(),
-        produtoId: z.number(),
-        clienteId: z.number().nullable().optional(),
-        faturado: z.boolean().optional(),
-      })))
-      .mutation(({ input }) => {
-        const data = input.map(item => ({
-          ...item,
-          competencia: new Date(item.competencia),
-          faturado: item.faturado ?? false,
-        }));
-        return db.createCarteiraPedidosBatch(data);
-      }),
-
-    /** PV Aberto: Excel com coluna SKU (resolve produto via cadastro + De-Para). */
-    importBySku: protectedProcedure
-      .input(
-        z.array(
-          z.object({
-            codigo: z.string().min(1),
-            sequencia: z.number().optional(),
-            competencia: z.string(),
-            sku: z.string().min(1),
-            quantidade: z.union([z.string(), z.number()]),
-            receitaBruta: z.union([z.string(), z.number()]).optional(),
-            faturado: z.boolean().optional(),
-          })
-        )
-      )
-      .mutation(({ input }) => importCarteiraBySku(input)),
-
     /**
      * PV Aberto direto do ERP (MetricsPROD): Status Liberado + tipo PRG,
      * uma linha por pedido × SKU × mês de entrega.
@@ -1028,6 +962,7 @@ export const appRouter = router({
       .input(
         z.object({
           cicloId: z.number(),
+          headers: z.array(z.string()).length(15),
           rows: z.array(
             z.object({
               sku: z.string(),
@@ -1042,7 +977,10 @@ export const appRouter = router({
               dataFaturamento: z.string().optional(),
               qtdMes: z.number().optional(),
               valorVenda: z.number().optional(),
+              valorTotal: z.number().optional(),
+              qtdeTotal: z.number().optional(),
               modalidade: z.string().optional(),
+              tipoNegocio: z.string().optional(),
               m1: z.number().optional(),
               m2: z.number().optional(),
               m3: z.number().optional(),
@@ -1059,7 +997,58 @@ export const appRouter = router({
           ),
         })
       )
-      .mutation(({ input }) => importCrmParaCiclo(input.cicloId, input.rows)),
+      .mutation(({ input }) => {
+        assertCrmExcelHeaders(input.headers);
+        assertCrmImportRows(input.rows);
+        return importCrmParaCiclo(input.cicloId, input.rows);
+      }),
+
+    fecharCiclo: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        const ciclo = await db.getCicloComercial(input.id);
+        if (!ciclo) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Ciclo não encontrado." });
+        }
+        if (ciclo.status === "FECHADO") {
+          return { status: "FECHADO" as const };
+        }
+        const [pvCrm, resumoRs, itens] = await Promise.all([
+          getPvVsCrmDetalhado(input.id),
+          getResumoRs(input.id),
+          db.listCicloComercialItens(input.id),
+        ]);
+        if (itens.length === 0) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "O ciclo não possui itens para fechar.",
+          });
+        }
+        if (pvCrm.sobrepostos > 0) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `Corrija ${pvCrm.sobrepostos} sobreposições PV x CRM antes de fechar.`,
+          });
+        }
+        if (resumoRs.skusSemPreco.length > 0) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              "Existem SKUs sem preço de venda: " + resumoRs.skusSemPreco.slice(0, 20).join(", "),
+          });
+        }
+        const crmIncompletos = itens.filter(
+          item => item.planoColab === "CRM" && (!item.crmTipo || !item.crmTemperatura)
+        );
+        if (crmIncompletos.length > 0) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `Reimporte ${crmIncompletos.length} itens CRM sem tipo/temperatura.`,
+          });
+        }
+        await db.updateCicloComercial(input.id, { status: "FECHADO" });
+        return { status: "FECHADO" as const };
+      }),
 
     pvVsCrm: protectedProcedure
       .input(z.object({ cicloId: z.number() }))
@@ -1095,57 +1084,7 @@ export const appRouter = router({
   }),
 
   sazonalidadeMarca: router({
-    list: protectedProcedure
-      .input(z.object({ marcaNome: z.string().optional() }).optional())
-      .query(({ input }) => db.listSazonalidadeMarca(input?.marcaNome)),
-
-    invalidas: protectedProcedure.query(() => getSazonalidadeInvalidas()),
-
-    seedUniforme: protectedProcedure.mutation(() => seedSazonalidadeUniformeSeVazia()),
-
-    calcularDoFaturamento: protectedProcedure
-      .input(z.object({ anosHistorico: z.number().min(1).max(10).default(3) }).optional())
-      .mutation(({ input }) =>
-        calcularSazonalidadeDoFaturamento(input?.anosHistorico ?? 3)
-      ),
-
-    upsertBatch: protectedProcedure
-      .input(
-        z.object({
-          rows: z.array(
-            z.object({
-              marcaNome: z.string().min(1),
-              mes: z.number().min(1).max(12),
-              percentual: z.string(),
-              marcaId: z.number().optional(),
-              observacoes: z.string().optional(),
-            })
-          ),
-        })
-      )
-      .mutation(({ input }) => db.upsertSazonalidadeMarcaBatch(input.rows)),
-
-    importExcel: protectedProcedure
-      .input(
-        z.object({
-          fileName: z.string().min(1),
-          contentBase64: z.string().min(1),
-        })
-      )
-      .mutation(async ({ input }) => {
-        const raw = input.contentBase64.includes(",")
-          ? input.contentBase64.split(",")[1]
-          : input.contentBase64;
-        const buffer = Buffer.from(raw, "base64");
-        const parsed = parseSazonalidadeWorkbook(buffer);
-        await db.upsertSazonalidadeMarcaBatch(parsed.rows);
-        return {
-          fileName: input.fileName,
-          sheetName: parsed.sheetName,
-          marcas: parsed.marcas,
-          rows: parsed.rows.length,
-        };
-      }),
+    list: protectedProcedure.query(() => legacyApiDisabled("Cadastro Sazonalidade Marca")),
   }),
 
   // ==================== CONSENSOS ====================
@@ -1270,39 +1209,10 @@ export const appRouter = router({
 
     /** Pré-check: mês fechado (anterior ao vigente) tem faturamento? */
     mesFechadoCheck: protectedProcedure.query(() => db.getFaturamentoMesFechadoCheck()),
-    
+
     importBatch: protectedProcedure
-      .input(z.array(z.object({
-        dataEmissao: z.string(),
-        nfNumero: z.string().optional(),
-        codCliente: z.string().optional(),
-        cnpj: z.string().optional(),
-        unidade: z.string().optional(),
-        cidade: z.string().optional(),
-        uf: z.string().optional(),
-        marca: z.string().optional(),
-        codMaterial: z.string().optional(),
-        descricaoItem: z.string().optional(),
-        tipoNegocio: z.string().optional(),
-        tipoEstoque: z.enum(["MTS", "MTO"]).optional(),
-        linhaProduto: z.string().optional(),
-        qtd: z.string(),
-        valorTotal: z.string(),
-        gestor: z.string().optional(),
-        cfop: z.string().optional(),
-        descCfop: z.string().optional(),
-        tipoFaturamento: z.enum(["DEVOLUCAO", "SAIDA"]).optional(),
-      })))
-      .mutation(async ({ input }) => {
-        const allowed = input.filter(item => isCfopFaturamentoPermitido(item.cfop));
-        const data = allowed.map(item => ({
-          ...item,
-          dataEmissao: new Date(item.dataEmissao),
-        }));
-        const result = await db.createFaturamentoBatch(data);
-        if (result.count > 0) await db.rebuildFaturamentoResumo();
-        return { ...result, skippedCfop: input.length - allowed.length };
-      }),
+      .input(z.array(z.object({ dataEmissao: z.string() })))
+      .mutation(() => legacyApiDisabled("Importação manual de faturamento")),
     
     clear: protectedProcedure.mutation(() => db.clearFaturamento()),
 

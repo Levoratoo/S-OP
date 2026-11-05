@@ -127,8 +127,20 @@ export default function Colaboracoes() {
   const { data: produtosCarteira } = trpc.produtos.list.useQuery(undefined, {
     enabled: abaGrade === "PV_MTO",
   });
+  const { data: clientesCarteira } = trpc.clientes.list.useQuery(undefined, {
+    enabled: abaGrade === "PV_MTO",
+  });
 
   const { data: jobs } = trpc.previsaoPython.list.useQuery({ limit: 20 });
+
+  const fecharCicloMutation = trpc.cicloComercial.fecharCiclo.useMutation({
+    onSuccess: () => {
+      toast.success("Ciclo fechado.");
+      utils.cicloComercial.list.invalidate();
+      if (selectedCicloId) utils.cicloComercial.getById.invalidate({ id: selectedCicloId });
+    },
+    onError: error => toast.error(error.message),
+  });
 
   const desagregarMutation = trpc.cicloComercial.desagregarDoJob.useMutation({
     onSuccess: result => {
@@ -144,15 +156,6 @@ export default function Colaboracoes() {
     onSuccess: () => {
       utils.cicloComercial.itens.invalidate();
       utils.cicloComercial.consolidado.invalidate();
-    },
-    onError: error => toast.error(error.message),
-  });
-
-  const updateStatusMutation = trpc.cicloComercial.updateStatus.useMutation({
-    onSuccess: () => {
-      toast.success("Status do ciclo atualizado.");
-      utils.cicloComercial.list.invalidate();
-      if (selectedCicloId) utils.cicloComercial.getById.invalidate({ id: selectedCicloId });
     },
     onError: error => toast.error(error.message),
   });
@@ -197,12 +200,12 @@ export default function Colaboracoes() {
   const handleCrmFile = async (file: File) => {
     if (!selectedCicloId) return;
     try {
-      const rows = parseCrmExcel(await file.arrayBuffer());
-      if (!rows.length) {
+    const parsed = parseCrmExcel(await file.arrayBuffer());
+      if (!parsed.rows.length) {
         toast.error("Nenhuma linha com SKU no Excel.");
         return;
       }
-      importCrm.mutate({ cicloId: selectedCicloId, rows });
+      importCrm.mutate({ cicloId: selectedCicloId, headers: parsed.headers, rows: parsed.rows });
     } catch (error) {
       if (error instanceof CrmExcelLayoutError) {
         toast.error(error.message);
@@ -243,10 +246,8 @@ export default function Colaboracoes() {
   const carteiraNoCiclo = useMemo(() => {
     if (!carteiraPedidos || !ciclo) return [];
     const prodById = new Map((produtosCarteira ?? []).map(p => [p.id, p]));
-    let rows = carteiraPedidos.filter(
-      p =>
-        !p.faturado &&
-        competenciaNoHorizontoCiclo(p.competencia, ciclo.anoInicio, ciclo.mesInicio)
+    let rows = carteiraPedidos.filter(p =>
+      competenciaNoHorizontoCiclo(p.competencia, ciclo.anoInicio, ciclo.mesInicio)
     );
     if (!podeVerTodasMarcas) {
       rows = rows.filter(p => {
@@ -276,6 +277,11 @@ export default function Colaboracoes() {
     const p = produtosCarteira?.find(x => x.id === produtoId);
     return p?.nome || p?.codItem || p?.codigo || `Produto ${produtoId}`;
   };
+
+  const clienteLabel = (clienteId: number | null) =>
+    clienteId
+      ? clientesCarteira?.find(c => c.id === clienteId)?.razaoSocial || "-"
+      : "-";
 
   const marcasConsolidado = useMemo(() => {
     const entries = Object.entries(consolidado?.byMarca ?? {});
@@ -449,20 +455,6 @@ export default function Colaboracoes() {
                   {ciclo.jobId ? ` · job #${ciclo.jobId}` : ""}
                 </span>
               </div>
-            )}
-            {ciclo && ciclo.status !== "FECHADO" && (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() =>
-                  updateStatusMutation.mutate({
-                    id: ciclo.id,
-                    status: ciclo.status === "CONSOLIDADO" ? "FECHADO" : "CONSOLIDADO",
-                  })
-                }
-              >
-                {ciclo.status === "CONSOLIDADO" ? "Fechar ciclo" : "Marcar consolidado"}
-              </Button>
             )}
           </CardContent>
         </Card>
@@ -755,15 +747,17 @@ export default function Colaboracoes() {
                                   <TableHead>Código</TableHead>
                                   <TableHead>Competência</TableHead>
                                   <TableHead>Produto</TableHead>
+                                  <TableHead>Cliente</TableHead>
                                   <TableHead className="text-right">Quantidade</TableHead>
                                   <TableHead className="text-right">Receita</TableHead>
+                                  <TableHead className="text-center">Faturado</TableHead>
                                 </TableRow>
                               </TableHeader>
                               <TableBody>
                                 {carteiraNoCiclo.length === 0 ? (
                                   <TableRow>
                                     <TableCell
-                                      colSpan={5}
+                                      colSpan={7}
                                       className="py-8 text-center text-muted-foreground"
                                     >
                                       Nenhum pedido Liberado+PRG no horizonte — atualize em Carteira / PV
@@ -777,6 +771,7 @@ export default function Colaboracoes() {
                                       </TableCell>
                                       <TableCell>{formatDataBr(item.competencia)}</TableCell>
                                       <TableCell>{produtoLabel(item.produtoId)}</TableCell>
+                                      <TableCell>{clienteLabel(item.clienteId)}</TableCell>
                                       <TableCell className="text-right tabular-nums">
                                         {Number(item.quantidade || 0).toLocaleString("pt-BR")}
                                       </TableCell>
@@ -785,6 +780,9 @@ export default function Colaboracoes() {
                                         {Number(item.receitaBruta || 0).toLocaleString("pt-BR", {
                                           minimumFractionDigits: 2,
                                         })}
+                                      </TableCell>
+                                      <TableCell className="text-center">
+                                        {item.faturado ? "Sim" : "Não"}
                                       </TableCell>
                                     </TableRow>
                                   ))
@@ -857,7 +855,14 @@ export default function Colaboracoes() {
                     </TabsContent>
                   ))}
                   <TabsContent value="CONSOLIDADO" className="mt-4">
-                    {selectedCicloId ? <ColaboracaoArquivo cicloId={selectedCicloId} /> : null}
+                    {selectedCicloId ? (
+                      <ColaboracaoArquivo
+                        cicloId={selectedCicloId}
+                        cicloStatus={ciclo?.status}
+                        onFecharCiclo={() => fecharCicloMutation.mutate({ id: selectedCicloId })}
+                        fechando={fecharCicloMutation.isPending}
+                      />
+                    ) : null}
                   </TabsContent>
                 </Tabs>
               </CardContent>

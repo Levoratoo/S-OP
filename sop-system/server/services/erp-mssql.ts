@@ -128,11 +128,11 @@ export async function closeErpPool() {
 export const FATURAMENTO_ERP_SOURCE =
   process.env.ERP_FATURAMENTO_SOURCE?.trim() || "dbo.Usr_VIEW_MITRA_FAT_02";
 
-/** Data inicial do histórico (YYYY-MM-DD). Padrão: 2020-01-01. */
+/** Data inicial do histórico (YYYY-MM-DD). Padrão spec Parte 2: 2022-01-01. */
 export function defaultDesdeDate(): string {
   const env = process.env.ERP_FATURAMENTO_DESDE?.trim();
   if (env) return env;
-  return "2020-01-01";
+  return "2022-01-01";
 }
 
 const FATURAMENTO_SELECT = `
@@ -360,17 +360,10 @@ export function aggregateCarteiraPedidosPorPedidoSku(
   return rows;
 }
 
-/**
- * Pedidos em aberto: Status Liberado + tipo PRG.
- * Uma linha por pedido × SKU (quantidade total, competência = 1ª entrega).
- */
-export async function queryErpCarteiraPedidosAbertos(): Promise<{
-  rows: ErpCarteiraAbertoRow[];
-  source: string;
-  fetched: number;
-}> {
-  const erp = await getErpPool();
-  const sqlText = `
+export function buildCarteiraPedidosAbertoQuery(
+  source: string = CARTEIRA_ERP_SOURCE
+): string {
+  return `
 WITH abertos AS (
   SELECT
     LTRIM(RTRIM(CAST(NumPedido AS nvarchar(50)))) AS codigo,
@@ -379,7 +372,7 @@ WITH abertos AS (
     MONTH(DataEntrega) AS mesEnt,
     CAST(ISNULL(Qtde, 0) AS float) AS qtde,
     CAST(ISNULL(Qtde, 0) AS float) * CAST(ISNULL(PrecoUnitario, 0) AS float) AS receitaLinha
-  FROM ${CARTEIRA_ERP_SOURCE}
+  FROM ${source}
   WHERE StatusPedido = N'Liberado'
     AND UPPER(LTRIM(RTRIM(ISNULL(usr_acabado, N'')))) = N'PRG'
     AND ISNULL(Encerrado, N'N') = N'N'
@@ -397,6 +390,19 @@ FROM abertos
 WHERE codigo <> N'' AND sku <> N''
 ORDER BY codigo, sku, anoEnt, mesEnt
 `;
+}
+
+/**
+ * Pedidos em aberto: Status Liberado + tipo PRG.
+ * Uma linha por pedido × SKU (quantidade total, competência = 1ª entrega).
+ */
+export async function queryErpCarteiraPedidosAbertos(): Promise<{
+  rows: ErpCarteiraAbertoRow[];
+  source: string;
+  fetched: number;
+}> {
+  const erp = await getErpPool();
+  const sqlText = buildCarteiraPedidosAbertoQuery();
 
   const result = await erp.request().query(sqlText);
   const raw = (result.recordset || []) as Array<{

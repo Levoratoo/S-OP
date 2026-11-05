@@ -222,6 +222,12 @@ export async function syncFaturamentoFromSql(options?: {
   }
 
   await db.rebuildFaturamentoResumo();
+  try {
+    const { runAfterFaturamentoSync } = await import("./faturamento-post-sync");
+    await runAfterFaturamentoSync();
+  } catch (err) {
+    console.warn("[faturamento] pós-sync:", err);
+  }
   return {
     fetched,
     mapped,
@@ -288,6 +294,12 @@ export async function syncFaturamentoYears(years: number[]): Promise<Faturamento
   }
 
   await db.rebuildFaturamentoResumo();
+  try {
+    const { runAfterFaturamentoSync } = await import("./faturamento-post-sync");
+    await runAfterFaturamentoSync();
+  } catch (err) {
+    console.warn("[faturamento] pós-sync:", err);
+  }
   return { source: connection.source, years: results };
 }
 
@@ -334,14 +346,6 @@ export function startFaturamentoYearsSync(years: number[]): FaturamentoYearsSync
         error: null,
       };
       console.log(`[faturamento] anos recarregados ${result.years.map(y => y.year).join(",")}`);
-      try {
-        const { reconcileGestorMarcaImportMapAfterFaturamento } = await import(
-          "./gestor-marca-import-apply"
-        );
-        await reconcileGestorMarcaImportMapAfterFaturamento();
-      } catch (err) {
-        console.warn("[gestor-marca] reconcile após faturamento:", err);
-      }
     })
     .catch(error => {
       const message = error instanceof Error ? error.message : String(error);
@@ -450,6 +454,12 @@ async function runSyncFaturamentoRecent(): Promise<FaturamentoRecentSyncResult> 
   await db.clearFaturamentoDateRange(inicio, fim);
   const insertResult = await db.createFaturamentoBatch(batch);
   await db.rebuildFaturamentoResumo();
+  try {
+    const { runAfterFaturamentoSync } = await import("./faturamento-post-sync");
+    await runAfterFaturamentoSync();
+  } catch (err) {
+    console.warn("[faturamento] pós-sync recent:", err);
+  }
   const maxDepois = await db.getFaturamentoMaxDataIso();
 
   return {
