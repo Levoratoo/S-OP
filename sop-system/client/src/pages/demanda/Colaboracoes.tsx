@@ -556,7 +556,7 @@ export default function Colaboracoes() {
                           ? "Mesma grade da Carteira / PV: uma linha por pedido × SKU (Liberado + PRG)"
                           : abaGrade === "CRM"
                             ? "Cards do comercial. Importe o Excel para preencher a grade deste ciclo."
-                            : "MTS: realizado 2025/2026 e, em cada mês do ciclo, previsão estatística ao lado da Colab do vendedor (em branco = usa a previsão)"}
+                            : "MTS: total 12M do script redistribuído por fator % do SKU (badge “Fator %”); sem fator, sazonalidade histórica. Colab do vendedor sobrepõe a estatística (e*)."}
                     </CardDescription>
                   </div>
                   {abaGrade === "PV_MTO" && ciclo?.status !== "FECHADO" && (
@@ -686,7 +686,14 @@ export default function Colaboracoes() {
                                   return (
                                     <TableRow key={item.id} className="text-sm">
                                       <TableCell className="sticky left-0 z-10 bg-background max-w-[140px] truncate font-medium">
-                                        {item.sku}
+                                        <span className="inline-flex items-center gap-1">
+                                          {item.sku}
+                                          {(item as { estatUsouFatorSku?: boolean }).estatUsouFatorSku ? (
+                                            <Badge variant="outline" className="text-[10px] px-1 py-0">
+                                              Fator %
+                                            </Badge>
+                                          ) : null}
+                                        </span>
                                       </TableCell>
                                       <TableCell className="max-w-[100px] truncate">{item.marca}</TableCell>
                                       {r25.map((q, i) => (

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -10,9 +10,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { trpc } from "@/lib/trpc";
-import { Plus, Pencil, Trash2, Loader2, Download } from "lucide-react";
+import { Plus, Pencil, Trash2, Loader2, Download, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { exportToCsv } from "@/lib/exportCsv";
+import { ProdutoFatoresSazonaisSection } from "@/components/ProdutoFatoresSazonaisSection";
+import { FATOR_MESES_LABEL } from "@shared/sku-fator-sazonalidade";
+import * as XLSX from "xlsx";
 
 export default function Produtos() {
   const [isOpen, setIsOpen] = useState(false);
@@ -51,9 +54,24 @@ export default function Produtos() {
   // Filter states
   const [searchTerm, setSearchTerm] = useState("");
   const [filterFluxo, setFilterFluxo] = useState<string>("all");
+  const [filterFator, setFilterFator] = useState<"all" | "com" | "sem">("all");
 
   const utils = trpc.useUtils();
   const { data: produtos, isLoading } = trpc.produtos.list.useQuery();
+  const { data: idsComFator = [] } = trpc.produtos.idsComFatorSazonal.useQuery();
+  const comFatorSet = useMemo(() => new Set(idsComFator), [idsComFator]);
+
+  const importFatoresMutation = trpc.produtos.importSazonalidadeFatores.useMutation({
+    onSuccess: result => {
+      utils.produtos.idsComFatorSazonal.invalidate();
+      toast.success(`${result.atualizados} SKU(s) com fatores importados`);
+      if (result.erros.length) {
+        toast.error(`${result.erros.length} linha(s) com erro — veja o console`);
+        console.warn("[import fatores]", result.erros);
+      }
+    },
+    onError: e => toast.error(e.message),
+  });
   const { data: pendingSkus = [], isLoading: loadingPendingSkus } =
     trpc.cadastrosSistema.pendingSkusFromFaturamento.useQuery();
   
@@ -84,8 +102,11 @@ export default function Produtos() {
       produto.marca?.toLowerCase().includes(searchTerm.toLowerCase());
     
     const matchesFluxo = filterFluxo === "all" || produto.fluxo === filterFluxo;
-    
-    return matchesSearch && matchesFluxo;
+    const temFator = comFatorSet.has(produto.id);
+    const matchesFator =
+      filterFator === "all" || (filterFator === "com" ? temFator : !temFator);
+
+    return matchesSearch && matchesFluxo && matchesFator;
   });
 
   // Obter lista única de fluxos para o filtro
@@ -182,6 +203,41 @@ export default function Produtos() {
       tamanhoId: value,
       tamanho: selected?.nome || ""
     });
+  };
+
+  const handleImportFatores = async (file: File) => {
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array" });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
+      const rows: Array<{ sku: string; fatores: number[] }> = [];
+      for (const row of json) {
+        const sku = String(
+          row.SKU ?? row.sku ?? row["Cod Item"] ?? row.CodItem ?? Object.values(row)[0] ?? ""
+        ).trim();
+        if (!sku) continue;
+        const fatores: number[] = [];
+        for (let i = 0; i < 12; i++) {
+          const label = FATOR_MESES_LABEL[i];
+          const raw =
+            row[label] ??
+            row[label.toLowerCase()] ??
+            row[`M${i + 1}`] ??
+            row[`m${i + 1}`];
+          const n = Number(String(raw ?? "0").replace(",", "."));
+          fatores.push(Number.isFinite(n) ? n : 0);
+        }
+        rows.push({ sku, fatores });
+      }
+      if (rows.length === 0) {
+        toast.error("Nenhuma linha no arquivo.");
+        return;
+      }
+      importFatoresMutation.mutate(rows);
+    } catch (e) {
+      toast.error(`Falha ao ler planilha: ${String(e)}`);
+    }
   };
 
   const handleMarcaChange = (value: string) => {
@@ -380,9 +436,36 @@ export default function Produtos() {
                 </SelectContent>
               </Select>
             </div>
+            <Select
+              value={filterFator}
+              onValueChange={v => setFilterFator(v as "all" | "com" | "sem")}
+            >
+              <SelectTrigger className="w-44">
+                <SelectValue placeholder="Fator %" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Fator: todos</SelectItem>
+                <SelectItem value="com">Com fator %</SelectItem>
+                <SelectItem value="sem">Sem fator %</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
 
-          <div className="flex justify-end gap-2">
+          <div className="flex flex-wrap justify-end gap-2">
+            <Label className="inline-flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm hover:bg-accent">
+              <Upload className="h-4 w-4" />
+              Importar fatores % (SKU + Jan…Dez)
+              <input
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                className="hidden"
+                onChange={e => {
+                  const f = e.target.files?.[0];
+                  if (f) void handleImportFatores(f);
+                  e.target.value = "";
+                }}
+              />
+            </Label>
             <Button variant="outline" onClick={() => {
               if (produtos && produtos.length > 0) {
                 exportToCsv(produtos, "produtos", [
@@ -669,6 +752,8 @@ export default function Produtos() {
                     </div>
                   </div>
 
+                  <ProdutoFatoresSazonaisSection produtoId={editingId} enabled={isOpen} />
+
                   <div className="flex justify-end gap-2 pt-4">
                     <Button type="button" variant="outline" onClick={resetForm}>
                       Cancelar
@@ -701,6 +786,7 @@ export default function Produtos() {
                       <TableHead>Linha</TableHead>
                       <TableHead>Modelo</TableHead>
                       <TableHead>Fluxo</TableHead>
+                      <TableHead>Fator %</TableHead>
                       <TableHead>Projetar</TableHead>
                       <TableHead className="w-[100px]">Ações</TableHead>
                     </TableRow>
@@ -708,7 +794,7 @@ export default function Produtos() {
                   <TableBody>
                     {filteredProdutos?.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
+                        <TableCell colSpan={10} className="text-center text-muted-foreground py-8">
                           {searchTerm || filterFluxo !== "all" ? "Nenhum produto encontrado com os filtros aplicados" : "Nenhum produto cadastrado"}
                         </TableCell>
                       </TableRow>
@@ -727,6 +813,11 @@ export default function Produtos() {
                           <TableCell>{produto.linha || "-"}</TableCell>
                           <TableCell>{produto.modelo || "-"}</TableCell>
                           <TableCell>{produto.fluxo || "-"}</TableCell>
+                          <TableCell>
+                            <Badge variant={comFatorSet.has(produto.id) ? "default" : "secondary"}>
+                              {comFatorSet.has(produto.id) ? "Com fator %" : "Sem fator %"}
+                            </Badge>
+                          </TableCell>
                           <TableCell>
                             <Badge variant={produto.projetarEstatistica !== false ? "default" : "secondary"}>
                               {produto.projetarEstatistica !== false ? "Sim" : "Não"}

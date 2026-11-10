@@ -199,6 +199,27 @@ export const produtos = mysqlTable("produtos", {
 export type Produto = typeof produtos.$inferSelect;
 export type InsertProduto = typeof produtos.$inferInsert;
 
+/** Fatores % sazonais cadastrados por SKU (jan-dez, soma ~100%). */
+export const produtoSazonalidadeFatores = mysqlTable("produto_sazonalidade_fatores", {
+  produtoId: int("produtoId").primaryKey(),
+  fatorJan: decimal("fatorJan", { precision: 8, scale: 4 }).notNull(),
+  fatorFev: decimal("fatorFev", { precision: 8, scale: 4 }).notNull(),
+  fatorMar: decimal("fatorMar", { precision: 8, scale: 4 }).notNull(),
+  fatorAbr: decimal("fatorAbr", { precision: 8, scale: 4 }).notNull(),
+  fatorMai: decimal("fatorMai", { precision: 8, scale: 4 }).notNull(),
+  fatorJun: decimal("fatorJun", { precision: 8, scale: 4 }).notNull(),
+  fatorJul: decimal("fatorJul", { precision: 8, scale: 4 }).notNull(),
+  fatorAgo: decimal("fatorAgo", { precision: 8, scale: 4 }).notNull(),
+  fatorSet: decimal("fatorSet", { precision: 8, scale: 4 }).notNull(),
+  fatorOut: decimal("fatorOut", { precision: 8, scale: 4 }).notNull(),
+  fatorNov: decimal("fatorNov", { precision: 8, scale: 4 }).notNull(),
+  fatorDez: decimal("fatorDez", { precision: 8, scale: 4 }).notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type ProdutoSazonalidadeFatores = typeof produtoSazonalidadeFatores.$inferSelect;
+export type InsertProdutoSazonalidadeFatores = typeof produtoSazonalidadeFatores.$inferInsert;
+
 // ==================== CLIENTES ====================
 export const clientes = mysqlTable("clientes", {
   id: int("id").autoincrement().primaryKey(),
@@ -746,6 +767,8 @@ export const cicloComercialItens = mysqlTable("ciclo_comercial_itens", {
   rateio6m: decimal("rateio6m", { precision: 10, scale: 6 }),
   rateioConsiderar: decimal("rateioConsiderar", { precision: 10, scale: 6 }),
   qtdeTotalEstatistica: decimal("qtdeTotalEstatistica", { precision: 15, scale: 2 }),
+  /** Estatística mensal redistribuída com fatores % cadastrados do SKU. */
+  estatUsouFatorSku: boolean("estatUsouFatorSku").default(false).notNull(),
   /** Previsão estatística mensal (snapshot na desagregação). */
   e1: decimal("e1", { precision: 15, scale: 2 }),
   e2: decimal("e2", { precision: 15, scale: 2 }),

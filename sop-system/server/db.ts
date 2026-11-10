@@ -10,6 +10,7 @@ import {
   familias, InsertFamilia, Familia,
   subfamilias, InsertSubfamilia, Subfamilia,
   produtos, InsertProduto, Produto,
+  produtoSazonalidadeFatores, InsertProdutoSazonalidadeFatores, ProdutoSazonalidadeFatores,
   clientes, InsertCliente, Cliente,
   recursos, InsertRecurso, Recurso,
   diasUteis, InsertDiaUtil, DiaUtil,
@@ -275,6 +276,32 @@ export async function setProjetarEstatisticaBatch(input: {
     naoEncontrados,
     totalProjetar: Number(countRow?.n ?? 0),
   };
+}
+
+/** Define projetar por IDs (Skus Projetar — seleção filtrada). */
+export async function setProjetarByProductIds(input: {
+  productIds: number[];
+  projetar: boolean;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const ids = Array.from(new Set(input.productIds.filter(id => Number.isInteger(id) && id > 0)));
+  if (ids.length === 0) {
+    const [countRow] = await db
+      .select({ n: sql<number>`count(*)` })
+      .from(produtos)
+      .where(eq(produtos.projetarEstatistica, true));
+    return { atualizados: 0, totalProjetar: Number(countRow?.n ?? 0) };
+  }
+  await db
+    .update(produtos)
+    .set({ projetarEstatistica: input.projetar })
+    .where(inArray(produtos.id, ids));
+  const [countRow] = await db
+    .select({ n: sql<number>`count(*)` })
+    .from(produtos)
+    .where(eq(produtos.projetarEstatistica, true));
+  return { atualizados: ids.length, totalProjetar: Number(countRow?.n ?? 0) };
 }
 
 /** Cobertura do faturamento vs mês fechado (passo a passo: até o mês anterior). */

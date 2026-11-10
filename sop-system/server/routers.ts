@@ -30,6 +30,15 @@ import {
 } from "./services/seed-from-faturamento";
 import { applyGestorMarcaImportMerge } from "./services/gestor-marca-import-apply";
 import { assertCrmExcelHeaders, assertCrmImportRows } from "./services/crm-import-validate";
+import {
+  clearSazonalidadeFatores,
+  getSazonalidadeFatoresByProdutoId,
+  importSazonalidadeFatoresBatch,
+  listProdutoIdsComFatorValido,
+  parseImportFatorSpreadsheetRows,
+  setSazonalidadeFatores,
+} from "./services/produto-sazonalidade-fator";
+import { validateFatoresPercentuais } from "@shared/sku-fator-sazonalidade";
 import { legacyApiDisabled } from "./legacy-api-disabled";
 import { assertCicloStatusTransition } from "./services/ciclo-status-flow";
 import { seedCapacidadeBaseline } from "./services/seed-capacidade";
@@ -239,6 +248,51 @@ export const appRouter = router({
         })
       )
       .mutation(({ input }) => db.setProjetarEstatisticaBatch(input)),
+
+    setProjetarByIds: protectedProcedure
+      .input(
+        z.object({
+          productIds: z.array(z.number().int().positive()),
+          projetar: z.boolean(),
+        })
+      )
+      .mutation(({ input }) => db.setProjetarByProductIds(input)),
+
+    idsComFatorSazonal: protectedProcedure.query(async () =>
+      Array.from(await listProdutoIdsComFatorValido())
+    ),
+
+    getSazonalidadeFatores: protectedProcedure
+      .input(z.object({ produtoId: z.number().int().positive() }))
+      .query(({ input }) => getSazonalidadeFatoresByProdutoId(input.produtoId)),
+
+    setSazonalidadeFatores: protectedProcedure
+      .input(
+        z.object({
+          produtoId: z.number().int().positive(),
+          fatores: z.array(z.number()).length(12),
+        })
+      )
+      .mutation(({ input }) => setSazonalidadeFatores(input.produtoId, input.fatores)),
+
+    clearSazonalidadeFatores: protectedProcedure
+      .input(z.object({ produtoId: z.number().int().positive() }))
+      .mutation(({ input }) => clearSazonalidadeFatores(input.produtoId)),
+
+    importSazonalidadeFatores: protectedProcedure
+      .input(
+        z.array(
+          z.object({
+            sku: z.string().min(1),
+            fatores: z.array(z.number()).length(12),
+          })
+        )
+      )
+      .mutation(({ input }) => importSazonalidadeFatoresBatch(input)),
+
+    validateSazonalidadeFatores: protectedProcedure
+      .input(z.object({ fatores: z.array(z.number()).length(12) }))
+      .query(({ input }) => validateFatoresPercentuais(input.fatores)),
   }),
 
   // ==================== CLIENTES ====================

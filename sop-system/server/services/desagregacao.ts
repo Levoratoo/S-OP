@@ -20,6 +20,13 @@ import {
 import * as previsaoPython from "../previsaoPython";
 import { loadDeParaMap, resolveCodigoAtual } from "./de-para-map";
 import { syncPvFromCarteira } from "./ciclo-colab-extras";
+import {
+  getSeasonalityIndex,
+  redistribuirTotalComFatores,
+} from "@shared/sku-fator-sazonalidade";
+import { loadSkuFatorPercentMap } from "./produto-sazonalidade-fator";
+
+export { getSeasonalityIndex } from "@shared/sku-fator-sazonalidade";
 
 const MES_KEYS = ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12"] as const;
 type PlanoColab = "MTS" | "JITO" | "PV_MTO" | "CRM";
@@ -135,10 +142,6 @@ export function getClosedWindowBounds(now = new Date()) {
     cutoff12: new Date(endExclusive.getFullYear(), endExclusive.getMonth() - 12, 1),
     endExclusive,
   };
-}
-
-export function getSeasonalityIndex(mesInicio: number, offset: number) {
-  return ((mesInicio - 1 + offset) % 12 + 12) % 12;
 }
 
 export function netSalesQuantity(
@@ -554,6 +557,7 @@ export async function desagregarJobParaCicloComercial(input: DesagregarInput) {
   }
 
   const sazonalidadeSku = await loadSazonalidadeSkuMap();
+  const fatorCadastroMap = await loadSkuFatorPercentMap();
   const rateios = await computeRateiosPorSku();
 
   type SkuRateio = NonNullable<ReturnType<typeof rateios.get>>;
@@ -658,7 +662,7 @@ export async function desagregarJobParaCicloComercial(input: DesagregarInput) {
 
     base.forEach((skuInfo, idx) => {
       const rateio = pesos[idx] / somaPesos;
-      const saz = resolveSazonalidadeForSku(skuInfo.sku, sazonalidadeSku);
+      const fatoresCadastro = fatorCadastroMap.get(skuInfo.sku.trim().toUpperCase());
       const plano = resolvePlanoColab(
         skuInfo.tipoEstoque,
         "tipoNegocio" in skuInfo ? skuInfo.tipoNegocio : null
@@ -679,6 +683,7 @@ export async function desagregarJobParaCicloComercial(input: DesagregarInput) {
       };
 
       let totalSku = 0;
+      let usouFatorSku = false;
       const prev = colabAnterior.get(previousCollaborationKey(plano, skuInfo.sku));
 
       if (!skuInfo.projetar && !usingFallback && prev) {
@@ -688,13 +693,24 @@ export async function desagregarJobParaCicloComercial(input: DesagregarInput) {
           totalSku += toNumber(meses[k]);
         }
       } else {
-        for (let i = 0; i < 12; i++) {
-          const seasonalityIndex = getSeasonalityIndex(mesInicio, i);
-          const allocate = skuInfo.projetar || usingFallback;
-          const q = allocate ? total12m * saz[seasonalityIndex] * rateio : 0;
-          const rounded = Math.round(q * 100) / 100;
-          meses[MES_KEYS[i]] = String(rounded);
-          totalSku += rounded;
+        const allocate = skuInfo.projetar || usingFallback;
+        const totalSkuLine = allocate ? total12m * rateio : 0;
+        if (allocate && fatoresCadastro) {
+          usouFatorSku = true;
+          const dist = redistribuirTotalComFatores(totalSkuLine, fatoresCadastro, mesInicio);
+          for (const k of MES_KEYS) {
+            meses[k] = String(dist[k]);
+            totalSku += dist[k];
+          }
+        } else if (allocate) {
+          const saz = resolveSazonalidadeForSku(skuInfo.sku, sazonalidadeSku);
+          for (let i = 0; i < 12; i++) {
+            const seasonalityIndex = getSeasonalityIndex(mesInicio, i);
+            const q = totalSkuLine * saz[seasonalityIndex];
+            const rounded = Math.round(q * 100) / 100;
+            meses[MES_KEYS[i]] = String(rounded);
+            totalSku += rounded;
+          }
         }
       }
 
@@ -745,6 +761,7 @@ export async function desagregarJobParaCicloComercial(input: DesagregarInput) {
         rateio6m: String(Math.round(skuInfo.rateio6 * 1e6) / 1e6),
         rateioConsiderar: String(Math.round(rateio * 1e6) / 1e6),
         qtdeTotalEstatistica: String(Math.round(total12m * rateio * 100) / 100),
+        estatUsouFatorSku: usouFatorSku,
         valorVendaSnapshot: String(toNumber(skuInfo.valorVenda)),
         familiaSnapshot: skuInfo.familia,
         gestorSnapshot: skuInfo.gestor,
