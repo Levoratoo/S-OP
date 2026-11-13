@@ -10,6 +10,7 @@ import { eq } from "drizzle-orm";
 import type { InsertCliente, InsertProduto } from "../../drizzle/schema";
 import { isSkuAcabado } from "@shared/sku-acabado";
 import { invalidateDeParaCache } from "./de-para-map";
+import { normalizeTipoNegocioComercial } from "@shared/tipo-negocio";
 
 export type SeedFromFaturamentoResult = {
   dryRun: boolean;
@@ -39,6 +40,7 @@ type FatProdutoRow = {
   linhaProduto: string | null;
   tipoNegocio: string | null;
   tipoEstoque: string | null;
+  grupoProduto: string | null;
 };
 
 type FatClienteRow = {
@@ -79,7 +81,8 @@ async function loadDistinctProdutos(): Promise<FatProdutoRow[]> {
       MAX(marca) AS marca,
       MAX(linhaProduto) AS linhaProduto,
       MAX(tipoNegocio) AS tipoNegocio,
-      MAX(tipoEstoque) AS tipoEstoque
+      MAX(tipoEstoque) AS tipoEstoque,
+      MAX(grupoProduto) AS grupoProduto
     FROM faturamento
     WHERE codMaterial IS NOT NULL AND TRIM(codMaterial) <> ''
     GROUP BY TRIM(codMaterial)
@@ -118,8 +121,9 @@ function buildProduto(
   const desc = clean(row.descricaoItem) || cod;
   const marca = clean(row.marca);
   const linha = clean(row.linhaProduto);
-  const tipoNegocio = clean(row.tipoNegocio);
+  const tipoNegocio = normalizeTipoNegocioComercial(clean(row.tipoNegocio)) ?? undefined;
   const tipoEstoque = normalizeTipoEstoque(clean(row.tipoEstoque));
+  const grupo = clean(row.grupoProduto);
   const marcaId = marca ? marcaIdByName.get(marca.toLowerCase()) : undefined;
 
   return {
@@ -130,7 +134,8 @@ function buildProduto(
     marca: marca ?? undefined,
     marcaId: marcaId ?? undefined,
     linha: linha ?? undefined,
-    tipoNegocio: tipoNegocio ?? undefined,
+    grupo: grupo ?? undefined,
+    tipoNegocio,
     tipoEstoque: tipoEstoque ?? "MTS",
     status: "ATIVO",
     projetarEstatistica: true,

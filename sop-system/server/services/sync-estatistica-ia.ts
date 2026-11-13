@@ -8,6 +8,7 @@ import { eq, inArray } from "drizzle-orm";
 import { getDb } from "../db";
 import { deParaCodigos, marcas, produtos } from "../../drizzle/schema";
 import { invalidateDeParaCache } from "./de-para-map";
+import { normalizeTipoNegocioComercial } from "@shared/tipo-negocio";
 
 function resolveDadosDir(explicit?: string): string {
   if (explicit?.trim()) return path.resolve(explicit.trim());
@@ -77,9 +78,7 @@ function normalizeStatus(value: string): "ATIVO" | "INATIVO" {
 }
 
 function normalizeTipoNegocio(value: string): string | null {
-  const u = value.trim().toUpperCase();
-  if (u === "JIT" || u === "PRG" || u === "VAR") return u;
-  return value.trim() || null;
+  return normalizeTipoNegocioComercial(value);
 }
 
 function pickSkuCode(row: Record<string, string>): string {

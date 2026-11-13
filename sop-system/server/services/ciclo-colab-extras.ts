@@ -38,6 +38,8 @@ import {
   resolveConsolidadoRelatorio,
   type ConsolidadoRelatorio,
 } from "@shared/consolidado-arquivo";
+import { resolveProdutoFamilia } from "@shared/produto-familia";
+import { resolveGestorPorMarca } from "@shared/gestor-marca-resolve";
 
 const MES_KEYS = ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12"] as const;
 
@@ -80,7 +82,7 @@ export function competenciaYearMonth(value: unknown): { year: number; month: num
 async function loadProdutoMaps() {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const [rows, familyRows, managerRows, managerBrandRows] = await Promise.all([
+  const [rows, familyRows, managerRows, managerBrandRows, marcaRows] = await Promise.all([
     db.select().from(produtos),
     db.select({ id: familias.id, nome: familias.nome }).from(familias),
     db
@@ -91,6 +93,7 @@ async function loadProdutoMaps() {
       .select({ marcaId: gestorMarca.marcaId, gestorId: gestorMarca.gestorId })
       .from(gestorMarca)
       .where(eq(gestorMarca.ativo, true)),
+    db.select({ id: marcas.id, nome: marcas.nome }).from(marcas),
   ]);
   const byId = new Map(rows.map(p => [p.id, p]));
   const byCode = new Map<string, (typeof rows)[number]>();
@@ -105,16 +108,22 @@ async function loadProdutoMaps() {
     const manager = managerById.get(relation.gestorId);
     if (manager) managerByBrandId.set(relation.marcaId, manager);
   }
+  const gestorByMarcaNome = new Map<string, string>();
+  for (const marca of marcaRows) {
+    const gestor = managerByBrandId.get(marca.id);
+    if (gestor && marca.nome) gestorByMarcaNome.set(normKey(marca.nome), gestor);
+  }
   const dimensionsByProductId = new Map(
     rows.map(product => [
       product.id,
       {
-        familia: product.familiaId
-          ? familyById.get(product.familiaId) ?? null
-          : null,
-        gestor: product.marcaId
-          ? managerByBrandId.get(product.marcaId) ?? null
-          : null,
+        familia:
+          (product.familiaId ? familyById.get(product.familiaId) ?? null : null) ||
+          resolveProdutoFamilia(product) ||
+          null,
+        gestor:
+          resolveGestorPorMarca(product.marca, gestorByMarcaNome) ||
+          (product.marcaId ? managerByBrandId.get(product.marcaId) ?? null : null),
       },
     ])
   );
@@ -783,15 +792,16 @@ export async function getConsolidadoArquivo(cicloId: number) {
     const familia =
       (item.familiaSnapshot || "").trim() ||
       (prod ? produtoMaps.dimensionsByProductId.get(prod.id)?.familia?.trim() : "") ||
+      (prod ? resolveProdutoFamilia(prod) : "") ||
       "";
     const relatorio = resolveConsolidadoRelatorio(item.planoColab);
     const tipoComercial = consolidadoTipoComercial(relatorio, prod?.tipoNegocio);
     const tp = consolidadoTp(relatorio, prod?.tipoNegocio);
     const tipo = consolidadoTipoLinha(relatorio, item.crmTipo);
     const gestorFonte =
-      gestorByMarcaNome.get(normKey(marca)) ||
-      item.gestorSnapshot ||
-      fatLookup.gestorByMarca.get(normKey(marca)) ||
+      resolveGestorPorMarca(marca, gestorByMarcaNome) ||
+      (item.gestorSnapshot || "").trim() ||
+      resolveGestorPorMarca(marca, fatLookup.gestorByMarca) ||
       "";
     const gestor = gestorFonte ? properName(gestorFonte) : "";
     const vendaCadastro = toNum(prod?.valorVenda);

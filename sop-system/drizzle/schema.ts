@@ -403,7 +403,9 @@ export const faturamento = mysqlTable("faturamento", {
   codMaterial: varchar("codMaterial", { length: 50 }),
   descricaoItem: varchar("descricaoItem", { length: 300 }),
   // Classificação
-  tipoNegocio: varchar("tipoNegocio", { length: 50 }), // JIT, PRG, VAR
+  tipoNegocio: varchar("tipoNegocio", { length: 50 }), // JIT, ATD, PRG, VAR (usr_acabado)
+  /** usr_grupo do ERP — família/tipo de produto (Sacola, Envelope…). */
+  grupoProduto: varchar("grupoProduto", { length: 100 }),
   tipoEstoque: mysqlEnum("tipoEstoque", ["MTS", "MTO"]),
   linhaProduto: varchar("linhaProduto", { length: 100 }), // Automática, Classic, Elegance
   // Valores

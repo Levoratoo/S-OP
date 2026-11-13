@@ -26,6 +26,10 @@ import {
   redistribuirTotalComFatores,
 } from "@shared/sku-fator-sazonalidade";
 import { loadSkuFatorPercentMap } from "./produto-sazonalidade-fator";
+import { resolvePlanoColab } from "@shared/plano-colab";
+import { normalizeTipoNegocioComercial } from "@shared/tipo-negocio";
+import { resolveProdutoFamilia } from "@shared/produto-familia";
+import { resolveGestorPorMarca } from "@shared/gestor-marca-resolve";
 
 export { getSeasonalityIndex } from "@shared/sku-fator-sazonalidade";
 
@@ -71,6 +75,37 @@ function extractSkuFromCodigo(codigo: string) {
   if (m) return m[1];
   const dash = codigo.indexOf("-");
   return dash > 0 ? codigo.slice(0, dash).trim() : codigo.trim();
+}
+
+function normMarcaKey(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase();
+}
+
+/** Total do job para SKU (TML, sku-marca ou só sku). */
+function lookupVisaoTotalForSku(
+  visaoTotais: Map<string, number>,
+  sku: string,
+  prod: { tipoEstoque: string | null; marca: string | null; linha: string | null }
+): number {
+  const candidates = [
+    buildCodificacao(prod.tipoEstoque, prod.marca, prod.linha),
+    `${sku.trim()}-${(prod.marca || "").trim()}`.replace(/-$/, ""),
+    sku.trim(),
+  ];
+  for (const key of candidates) {
+    const v = visaoTotais.get(key);
+    if (v && v > 0) return v;
+  }
+  const skuU = sku.trim().toUpperCase();
+  for (const [key, v] of visaoTotais) {
+    if (v <= 0) continue;
+    if (extractSkuFromCodigo(key).toUpperCase() === skuU) return v;
+  }
+  return 0;
 }
 
 function defaultSazonalidade() {
@@ -229,6 +264,8 @@ async function computeRateiosPorSku(now = new Date()) {
       nome: produtos.nome,
       marca: produtos.marca,
       linha: produtos.linha,
+      modelo: produtos.modelo,
+      grupo: produtos.grupo,
       tipoEstoque: produtos.tipoEstoque,
       tipoNegocio: produtos.tipoNegocio,
       projetarEstatistica: produtos.projetarEstatistica,
@@ -238,7 +275,7 @@ async function computeRateiosPorSku(now = new Date()) {
       status: produtos.status,
     })
     .from(produtos);
-  const [familiasRows, gestoresRows, gestorMarcaRows] = await Promise.all([
+  const [familiasRows, gestoresRows, gestorMarcaRows, marcasRows] = await Promise.all([
     db.select({ id: familias.id, nome: familias.nome }).from(familias),
     db
       .select({ id: gestores.id, nome: gestores.nome })
@@ -248,6 +285,7 @@ async function computeRateiosPorSku(now = new Date()) {
       .select({ marcaId: gestorMarca.marcaId, gestorId: gestorMarca.gestorId })
       .from(gestorMarca)
       .where(eq(gestorMarca.ativo, true)),
+    db.select({ id: marcas.id, nome: marcas.nome }).from(marcas),
   ]);
   const familiaById = new Map(familiasRows.map(row => [row.id, row.nome]));
   const gestorById = new Map(gestoresRows.map(row => [row.id, row.nome]));
@@ -255,6 +293,11 @@ async function computeRateiosPorSku(now = new Date()) {
   for (const relation of gestorMarcaRows) {
     const gestor = gestorById.get(relation.gestorId);
     if (gestor) gestorByMarcaId.set(relation.marcaId, gestor);
+  }
+  const gestorByMarcaNome = new Map<string, string>();
+  for (const m of marcasRows) {
+    const gestor = gestorByMarcaId.get(m.id);
+    if (gestor && m.nome) gestorByMarcaNome.set(normMarcaKey(m.nome), gestor);
   }
 
   const byCode = new Map<string, (typeof produtosRows)[number]>();
@@ -309,7 +352,12 @@ async function computeRateiosPorSku(now = new Date()) {
     const tipo = (prod.tipoEstoque || row.tipoEstoque || "MTS") as "MTS" | "MTO";
     const marca = prod.marca || row.marca || "SEM-MARCA";
     const linha = prod.linha || row.linha || "SEM-LINHA";
-    const tipoNegocio = prod.tipoNegocio || row.tipoNegocio || null;
+    const tipoNegocio =
+      normalizeTipoNegocioComercial(prod.tipoNegocio) ??
+      normalizeTipoNegocioComercial(row.tipoNegocio) ??
+      prod.tipoNegocio ??
+      row.tipoNegocio ??
+      null;
     if ((tipo || "").toUpperCase() === "OUTROS" || (tipoNegocio || "").toUpperCase() === "OUTROS") {
       continue;
     }
@@ -331,8 +379,13 @@ async function computeRateiosPorSku(now = new Date()) {
         tipoMarcaLinha: tml,
         projetar: prod.projetarEstatistica === true,
         valorVenda: prod.valorVenda,
-        familia: prod.familiaId ? familiaById.get(prod.familiaId) ?? null : null,
-        gestor: prod.marcaId ? gestorByMarcaId.get(prod.marcaId) ?? null : null,
+        familia:
+          (prod.familiaId ? familiaById.get(prod.familiaId) ?? null : null) ||
+          resolveProdutoFamilia(prod) ||
+          null,
+        gestor:
+          resolveGestorPorMarca(marca, gestorByMarcaNome) ||
+          (prod.marcaId ? gestorByMarcaId.get(prod.marcaId) ?? null : null),
         q12: 0,
         q6: 0,
       });
@@ -371,15 +424,6 @@ async function computeRateiosPorSku(now = new Date()) {
   });
 
   return result;
-}
-
-function resolvePlanoColab(
-  tipoEstoque: "MTS" | "MTO",
-  _tipoNegocioHint?: string | null
-): "MTS" | "PV_MTO" {
-  // TI: aba JIT deixa de existir e passa a fazer parte da MTS.
-  if (tipoEstoque === "MTO") return "PV_MTO";
-  return "MTS";
 }
 
 function previousCollaborationKey(plano: PlanoColab, sku: string) {
@@ -556,6 +600,8 @@ export async function desagregarJobParaCicloComercial(input: DesagregarInput) {
       `Visao_Executiva sem linhas utilizáveis para desagregação (coluna usada: ${totalColName}).`
     );
   }
+
+  const visaoTotaisCompleto = new Map(totaisPorGrupo);
 
   const sazonalidadeSku = await loadSazonalidadeSkuMap();
   const fatorCadastroMap = await loadSkuFatorPercentMap();
@@ -829,6 +875,124 @@ export async function desagregarJobParaCicloComercial(input: DesagregarInput) {
       ...meses,
       qtdeColaborada: String(Math.round(totalSku * 100) / 100),
       origem: "MANUAL",
+    });
+  }
+
+  // ATD com Projetar: inclui na MTS quando o job trouxe previsão (SKU/TML) mas não caiu no rateio da Visão.
+  const atdProjetar = await db
+    .select()
+    .from(produtos)
+    .where(eq(produtos.projetarEstatistica, true));
+
+  for (const prod of atdProjetar) {
+    if (normalizeTipoNegocioComercial(prod.tipoNegocio) !== "ATD") continue;
+    const sku = (prod.codItem || prod.codigo || "").trim();
+    if (!sku || skusJaIncluidos.has(sku)) continue;
+    const total12m = lookupVisaoTotalForSku(visaoTotaisCompleto, sku, prod);
+    if (total12m <= 0) continue;
+
+    const tipoEstoque = (prod.tipoEstoque || "MTS") as "MTS" | "MTO";
+    const marca = prod.marca || "SEM-MARCA";
+    const linha = prod.linha || "SEM-LINHA";
+    const fromRateio = rateios.get(sku) || rateios.get(sku.toUpperCase());
+    const skuInfo: SkuRateio =
+      fromRateio ??
+      ({
+        rateio12: 1,
+        rateio6: 0,
+        tipoMarcaLinha: buildCodificacao(tipoEstoque, marca, linha),
+        sku,
+        descricao: prod.descricao || prod.nome || null,
+        marca,
+        linha,
+        tipoEstoque,
+        tipoNegocio: "ATD",
+        projetar: true,
+        valorVenda: prod.valorVenda,
+        familia: resolveProdutoFamilia(prod) || null,
+        gestor: null,
+      } satisfies SkuRateio);
+    const plano = resolvePlanoColab(tipoEstoque, prod.tipoNegocio);
+    const fatoresCadastro = fatorCadastroMap.get(sku.trim().toUpperCase());
+    const meses: Record<(typeof MES_KEYS)[number], string> = {
+      m1: "0",
+      m2: "0",
+      m3: "0",
+      m4: "0",
+      m5: "0",
+      m6: "0",
+      m7: "0",
+      m8: "0",
+      m9: "0",
+      m10: "0",
+      m11: "0",
+      m12: "0",
+    };
+    let totalSku = 0;
+    let usouFatorSku = false;
+    if (fatoresCadastro) {
+      usouFatorSku = true;
+      const mesHorizonte0 = cicloHorizonCalendar(anoInicio, mesInicio, 0).month;
+      const dist = redistribuirTotalComFatores(total12m, fatoresCadastro, mesHorizonte0);
+      for (const k of MES_KEYS) {
+        meses[k] = String(dist[k]);
+        totalSku += dist[k];
+      }
+    } else {
+      const saz = resolveSazonalidadeForSku(sku, sazonalidadeSku);
+      for (let i = 0; i < 12; i++) {
+        const seasonalityIndex = cicloHorizonCalendar(anoInicio, mesInicio, i).month - 1;
+        const q = total12m * saz[seasonalityIndex];
+        const rounded = Math.round(q * 100) / 100;
+        meses[MES_KEYS[i]] = String(rounded);
+        totalSku += rounded;
+      }
+    }
+    skusJaIncluidos.add(sku);
+    itens.push({
+      cicloId,
+      planoColab: plano,
+      sku,
+      descricao: skuInfo.descricao,
+      marca: skuInfo.marca,
+      linha: skuInfo.linha,
+      tipoEstoque: skuInfo.tipoEstoque,
+      tipoMarcaLinha: skuInfo.tipoMarcaLinha,
+      projetar: true,
+      e1: meses.m1,
+      e2: meses.m2,
+      e3: meses.m3,
+      e4: meses.m4,
+      e5: meses.m5,
+      e6: meses.m6,
+      e7: meses.m7,
+      e8: meses.m8,
+      e9: meses.m9,
+      e10: meses.m10,
+      e11: meses.m11,
+      e12: meses.m12,
+      rateio12m: "1",
+      rateio6m: String(skuInfo.rateio6 ?? 0),
+      rateioConsiderar: "1",
+      qtdeTotalEstatistica: String(Math.round(total12m * 100) / 100),
+      estatUsouFatorSku: usouFatorSku,
+      valorVendaSnapshot: String(toNumber(skuInfo.valorVenda)),
+      familiaSnapshot: skuInfo.familia,
+      gestorSnapshot: skuInfo.gestor,
+      m1: null,
+      m2: null,
+      m3: null,
+      m4: null,
+      m5: null,
+      m6: null,
+      m7: null,
+      m8: null,
+      m9: null,
+      m10: null,
+      m11: null,
+      m12: null,
+      qtdeColaborada: String(Math.round(totalSku * 100) / 100),
+      origem: "ESTATISTICA",
     });
   }
 

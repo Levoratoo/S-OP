@@ -1,5 +1,7 @@
 /** Layout do arquivo Consolidado (modelo padrão — uma linha por SKU × mês × origem). */
 
+import { normalizeTipoNegocioComercial } from "./tipo-negocio";
+
 export type ConsolidadoRelatorio = "MTS" | "MTO PV" | "CRM";
 
 export function resolveConsolidadoRelatorio(planoColab: string): ConsolidadoRelatorio {
@@ -15,10 +17,7 @@ export function consolidadoTipoComercial(
   tipoNegocioProduto: string | null | undefined
 ): string {
   if (relatorio === "MTO PV" || relatorio === "CRM") return "PRG";
-  const neg = String(tipoNegocioProduto || "")
-    .trim()
-    .toUpperCase();
-  if (neg === "ATD") return "ATD";
+  if (normalizeTipoNegocioComercial(tipoNegocioProduto) === "ATD") return "ATD";
   return "JIT";
 }
 
@@ -28,10 +27,7 @@ export function consolidadoTp(
   tipoNegocioProduto: string | null | undefined
 ): string {
   if (relatorio !== "MTS") return "PRG";
-  const neg = String(tipoNegocioProduto || "")
-    .trim()
-    .toUpperCase();
-  if (neg === "ATD") return "PRG";
+  if (normalizeTipoNegocioComercial(tipoNegocioProduto) === "ATD") return "PRG";
   return "JIT";
 }
 

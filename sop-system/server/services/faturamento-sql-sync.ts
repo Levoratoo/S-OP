@@ -1,5 +1,6 @@
 import type { InsertFaturamento } from "../../drizzle/schema";
 import { isCfopFaturamentoPermitido } from "@shared/cfop-faturamento";
+import { normalizeTipoNegocioComercial } from "@shared/tipo-negocio";
 import { addCalendarDays, calendarToday } from "@shared/calendar-date";
 import * as db from "../db";
 import {
@@ -124,8 +125,17 @@ export function mapErpRowToFaturamento(row: Record<string, unknown>): InsertFatu
       asText(pick(row, "Descricao_Item", "Descrição Item", "DescItem")),
       300
     ),
-    tipoNegocio: clip(asText(pick(row, "Grupo", "usr_grupo")), 50),
-    tipoEstoque: inferTipoEstoque(pick(row, "Tipo", "usr_Acabado")),
+    tipoNegocio: (() => {
+      const bruto = asText(
+        pick(row, "Tipo", "usr_acabado", "usr_Acabado", "Tipo_Negocio", "tipoNegocio")
+      );
+      const norm = normalizeTipoNegocioComercial(bruto);
+      return clip(norm, 50) ?? null;
+    })(),
+    grupoProduto: clip(asText(pick(row, "Grupo", "usr_grupo")), 100),
+    tipoEstoque: inferTipoEstoque(
+      pick(row, "Tipo_Estoque", "tipoEstoque", "Tipo", "usr_Acabado")
+    ),
     linhaProduto: clip(asText(pick(row, "Linha_Prod", "Linha Prod.", "Descricao")), 100),
     qtd,
     valorTotal,

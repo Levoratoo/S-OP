@@ -1,4 +1,5 @@
 import { seedProdutosClientesFromFaturamento } from "./seed-from-faturamento";
+import { enrichProdutoMetadataFromFaturamento } from "./enrich-produto-from-faturamento";
 import {
   autoCreateMarcasWithGestorFromImportMap,
   reconcileGestorMarcaImportMapAfterFaturamento,
@@ -11,6 +12,8 @@ export type FaturamentoPostSyncResult = {
   marcasAutoError?: string;
   gestorMarca?: unknown;
   gestorMarcaError?: string;
+  enrichProduto?: Awaited<ReturnType<typeof enrichProdutoMetadataFromFaturamento>>;
+  enrichProdutoError?: string;
 };
 
 /** Mensagens curtas para toast/UI após sync de faturamento. */
@@ -47,6 +50,12 @@ export async function runAfterFaturamentoSync(): Promise<FaturamentoPostSyncResu
   } catch (err) {
     console.warn("[faturamento] reconcile gestor×marca:", err);
     results.gestorMarcaError = err instanceof Error ? err.message : String(err);
+  }
+  try {
+    results.enrichProduto = await enrichProdutoMetadataFromFaturamento();
+  } catch (err) {
+    console.warn("[faturamento] enrich produtos:", err);
+    results.enrichProdutoError = err instanceof Error ? err.message : String(err);
   }
   return results;
 }
