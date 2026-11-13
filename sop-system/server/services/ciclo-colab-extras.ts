@@ -24,6 +24,15 @@ import {
 } from "../../drizzle/schema";
 import { loadDeParaMap, resolveCodigoAtual } from "./de-para-map";
 import { carteiraPvAbertoWhere } from "./carteira-pv-aberto";
+import {
+  consolidadoQtd,
+  consolidadoTipoComercial,
+  consolidadoTipoLinha,
+  consolidadoTp,
+  consolidadoValorTotal,
+  resolveConsolidadoRelatorio,
+  type ConsolidadoRelatorio,
+} from "@shared/consolidado-arquivo";
 
 const MES_KEYS = ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12"] as const;
 
@@ -648,7 +657,7 @@ async function loadPrecoEGestorFaturamento(): Promise<PrecoGestorCache> {
   if (!db) throw new Error("Database not available");
   const dePara = await loadDeParaMap();
   const since = new Date();
-  since.setUTCFullYear(since.getUTCFullYear() - 2);
+  since.setUTCMonth(since.getUTCMonth() - 12);
   const sinceIso = since.toISOString().slice(0, 10);
 
   const [precoResult, gestorResult] = await Promise.all([
@@ -715,19 +724,6 @@ function properName(value: string): string {
     .join("");
 }
 
-function crmTipoLabel(value: string | null | undefined): string {
-  const tipo = String(value || "").trim().toUpperCase();
-  if (tipo === "APOSTA") return "Aposta";
-  if (tipo === "OPORTUNIDADE") return "Oportunidade";
-  return "Colaboração";
-}
-
-function tipoComercialDe(tipoNegocio: string | null | undefined): "JIT" | "PRG" | "VAR" | null {
-  const tipo = String(tipoNegocio || "").trim().toUpperCase();
-  if (tipo === "JIT" || tipo === "PRG" || tipo === "VAR") return tipo;
-  return null;
-}
-
 export type ConsolidadoArquivoRow = {
   skuMarca: string;
   sku: string;
@@ -738,11 +734,12 @@ export type ConsolidadoArquivoRow = {
   mes: string;
   qtd: number;
   valorTotal: number;
-  relatorio: "MTS" | "MTO PV" | "CRM";
+  relatorio: ConsolidadoRelatorio;
   tipoComercial: string;
   tipo: string;
   tp: string;
   gestor: string;
+  familia: string;
 };
 
 /** Uma linha por SKU × mês, no layout do arquivo Consolidado (modelo padrão). */
@@ -786,13 +783,14 @@ export async function getConsolidadoArquivo(cicloId: number) {
     const marca = (item.marca || prod?.marca || "").trim();
     const descricao = (item.descricao || prod?.descricao || prod?.nome || "").trim();
     const linha = (item.linha || prod?.linha || "").trim();
-    const relatorio =
-      item.planoColab === "PV_MTO" ? "MTO PV" : item.planoColab === "CRM" ? "CRM" : "MTS";
-    const tipoCadastro = tipoComercialDe(prod?.tipoNegocio);
-    const tp =
-      relatorio === "MTS" ? "JIT" : relatorio === "MTO PV" ? "PRG" : tipoCadastro ?? "PRG";
-    const tipoComercial = tipoCadastro ?? tp;
-    const tipo = relatorio === "CRM" ? crmTipoLabel(item.crmTipo) : "Colaboração";
+    const familia =
+      (item.familiaSnapshot || "").trim() ||
+      (prod ? produtoMaps.dimensionsByProductId.get(prod.id)?.familia?.trim() : "") ||
+      "";
+    const relatorio = resolveConsolidadoRelatorio(item.planoColab, prod?.tipoNegocio);
+    const tipoComercial = consolidadoTipoComercial(relatorio);
+    const tp = consolidadoTp(relatorio);
+    const tipo = consolidadoTipoLinha(relatorio, item.crmTipo);
     const gestorFonte =
       gestorByMarcaNome.get(normKey(marca)) ||
       item.gestorSnapshot ||
@@ -809,8 +807,9 @@ export async function getConsolidadoArquivo(cicloId: number) {
           : fatLookup.precoBySku.get(sku.toUpperCase()) ?? 0;
 
     for (let i = 0; i < 12; i++) {
-      const qtd = monthEffectiveQty(item as Record<string, unknown>, i);
-      if (!qtd) continue;
+      const qtdRaw = monthEffectiveQty(item as Record<string, unknown>, i);
+      const qtd = consolidadoQtd(qtdRaw);
+      if (qtd <= 0) continue;
       const mesAbs = ciclo.mesInicio + i;
       const ano = ciclo.anoInicio + Math.floor((mesAbs - 1) / 12);
       const mes = ((mesAbs - 1) % 12) + 1;
@@ -823,12 +822,13 @@ export async function getConsolidadoArquivo(cicloId: number) {
         venda,
         mes: `${ano}-${String(mes).padStart(2, "0")}-01`,
         qtd,
-        valorTotal: Math.round(qtd * venda * 100) / 100,
+        valorTotal: consolidadoValorTotal(qtd, venda),
         relatorio,
         tipoComercial,
         tipo,
         tp,
         gestor,
+        familia,
       });
     }
   }
