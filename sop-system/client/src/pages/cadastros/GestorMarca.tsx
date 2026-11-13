@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { textMatchesSearch } from "@shared/text-search";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -92,7 +93,7 @@ export default function GestorMarca() {
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="grid grid-cols-3 w-full max-w-md">
-          <TabsTrigger value="relacionamento">Relacionamento</TabsTrigger>
+          <TabsTrigger value="relacionamento">Gestor vs Marcas</TabsTrigger>
           <TabsTrigger value="gestores">Gestores</TabsTrigger>
           <TabsTrigger value="marcas">Marcas</TabsTrigger>
         </TabsList>
@@ -118,6 +119,7 @@ function RelacionamentoTab() {
   const [isOpen, setIsOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [importingFile, setImportingFile] = useState(false);
+  const [marcaSearch, setMarcaSearch] = useState("");
   const [formData, setFormData] = useState({
     gestorId: "",
     marcaId: "",
@@ -230,6 +232,15 @@ function RelacionamentoTab() {
     setEditingId(item.id);
     setIsOpen(true);
   };
+
+  const filteredRelacionamentos = useMemo(() => {
+    const list = relacionamentos ?? [];
+  return list.filter(
+      item =>
+        textMatchesSearch(item.marcaNome ?? "", marcaSearch) ||
+        textMatchesSearch(item.gestorNome ?? "", marcaSearch)
+    );
+  }, [relacionamentos, marcaSearch]);
 
   return (
     <Card>
@@ -353,6 +364,21 @@ function RelacionamentoTab() {
             </ul>
           </AlertDescription>
         </Alert>
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="space-y-1 flex-1 min-w-[200px] max-w-md">
+            <Label htmlFor="busca-marca-gestor">Pesquisar marca (ou gestor)</Label>
+            <Input
+              id="busca-marca-gestor"
+              placeholder="Filtrar tabela em tempo real…"
+              value={marcaSearch}
+              onChange={e => setMarcaSearch(e.target.value)}
+            />
+          </div>
+          <p className="text-sm text-muted-foreground pb-2">
+            {filteredRelacionamentos.length.toLocaleString("pt-BR")} de{" "}
+            {(relacionamentos?.length ?? 0).toLocaleString("pt-BR")} vínculo(s)
+          </p>
+        </div>
         {isLoading ? (
           <div className="flex justify-center py-8"><Loader2 className="h-8 w-8 animate-spin" /></div>
         ) : (
@@ -365,7 +391,7 @@ function RelacionamentoTab() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {relacionamentos?.map((item) => (
+              {filteredRelacionamentos.map((item) => (
                 <TableRow key={item.id}>
                   <TableCell className="font-medium">{item.marcaNome}</TableCell>
                   <TableCell>{item.gestorNome}</TableCell>
@@ -393,8 +419,14 @@ function RelacionamentoTab() {
                   </TableCell>
                 </TableRow>
               ))}
-              {relacionamentos?.length === 0 && (
-                <TableRow><TableCell colSpan={3} className="text-center py-8 text-muted-foreground">Nenhum relacionamento cadastrado</TableCell></TableRow>
+              {filteredRelacionamentos.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={3} className="text-center py-8 text-muted-foreground">
+                    {marcaSearch.trim()
+                      ? "Nenhum vínculo encontrado para esta pesquisa"
+                      : "Nenhum relacionamento cadastrado"}
+                  </TableCell>
+                </TableRow>
               )}
             </TableBody>
           </Table>

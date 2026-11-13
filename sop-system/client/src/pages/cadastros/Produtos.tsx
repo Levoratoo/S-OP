@@ -8,7 +8,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
+import { textMatchesSearch } from "@shared/text-search";
 import { trpc } from "@/lib/trpc";
 import { Plus, Pencil, Trash2, Loader2, Download, Upload } from "lucide-react";
 import { toast } from "sonner";
@@ -89,10 +91,49 @@ export default function Produtos() {
     onSuccess: () => {
       utils.cadastrosSistema.pendingSkusFromFaturamento.invalidate();
       utils.produtos.list.invalidate();
+      utils.deParaCodigos.list.invalidate();
       toast.success("SKU aceito e cadastrado!");
     },
     onError: (error) => toast.error(error.message),
   });
+
+  const acceptPendingSkusBatchMutation = trpc.cadastrosSistema.acceptPendingSkusBatch.useMutation({
+    onSuccess: result => {
+      utils.cadastrosSistema.pendingSkusFromFaturamento.invalidate();
+      utils.produtos.list.invalidate();
+      utils.deParaCodigos.list.invalidate();
+      setSelectedPendingSkus(new Set());
+      setPendingAcceptDialog(null);
+      toast.success(
+        `${result.criados} SKU(s) cadastrados` +
+          (result.jaExistiam ? ` · ${result.jaExistiam} já existiam` : "") +
+          (result.erros.length ? ` · ${result.erros.length} com erro` : "")
+      );
+      if (result.erros.length > 0) {
+        console.warn("[aceitar SKUs em lote]", result.erros);
+      }
+    },
+    onError: error => toast.error(error.message),
+  });
+
+  const [pendingSkuSearch, setPendingSkuSearch] = useState("");
+  const [selectedPendingSkus, setSelectedPendingSkus] = useState<Set<string>>(new Set());
+  const [pendingAcceptDialog, setPendingAcceptDialog] = useState<"selected" | "filtered" | null>(null);
+
+  const filteredPendingSkus = useMemo(() => {
+    const term = pendingSkuSearch.trim();
+    if (!term) return pendingSkus;
+    return pendingSkus.filter(sku =>
+      textMatchesSearch(
+        [sku.codMaterial, sku.marca, sku.descricaoItem].filter(Boolean).join(" "),
+        term
+      )
+    );
+  }, [pendingSkus, pendingSkuSearch]);
+
+  const allFilteredPendingSelected =
+    filteredPendingSkus.length > 0 &&
+    filteredPendingSkus.every(s => selectedPendingSkus.has(s.codMaterial));
 
   // Filtrar produtos por busca e fluxo
   const filteredProdutos = produtos?.filter((produto) => {
@@ -325,10 +366,26 @@ export default function Produtos() {
 
   const isPending = createMutation.isPending || updateMutation.isPending;
 
-  const pendingSkusPreview = pendingSkus.slice(0, 50);
   const acceptingCod = acceptPendingSkuMutation.isPending
     ? acceptPendingSkuMutation.variables?.codMaterial
     : null;
+
+  const pendingAcceptCount =
+    pendingAcceptDialog === "selected" && selectedPendingSkus.size > 0
+      ? selectedPendingSkus.size
+      : filteredPendingSkus.length;
+
+  const confirmPendingAccept = () => {
+    const codes =
+      pendingAcceptDialog === "selected" && selectedPendingSkus.size > 0
+        ? Array.from(selectedPendingSkus)
+        : filteredPendingSkus.map(s => s.codMaterial);
+    if (codes.length === 0) {
+      toast.error("Nenhum SKU para aceitar.");
+      return;
+    }
+    acceptPendingSkusBatchMutation.mutate({ codMaterials: codes });
+  };
 
   return (
     <div className="space-y-6">
@@ -346,16 +403,54 @@ export default function Produtos() {
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="flex items-center gap-2 text-lg">
-              SKUs pendentes do Faturamento
+              SKUs novos (Faturamento)
               {!loadingPendingSkus && (
                 <Badge variant="secondary">{pendingSkus.length}</Badge>
               )}
             </CardTitle>
             <CardDescription>
-              SKUs presentes no faturamento que ainda não estão no cadastro de produtos
+              Códigos em Bases/Faturamento que ainda não estão em Produtos. Aceite para liberar em
+              Skus Projetar e De-Para (mesma regra do aceite individual).
             </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-3">
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="space-y-1">
+                <Label htmlFor="pending-sku-search">Filtrar lista</Label>
+                <Input
+                  id="pending-sku-search"
+                  className="w-72"
+                  placeholder="Código, marca ou descrição…"
+                  value={pendingSkuSearch}
+                  onChange={e => setPendingSkuSearch(e.target.value)}
+                />
+              </div>
+              <p className="text-sm text-muted-foreground pb-2">
+                {filteredPendingSkus.length.toLocaleString("pt-BR")} de{" "}
+                {pendingSkus.length.toLocaleString("pt-BR")} pendente(s)
+              </p>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={
+                  filteredPendingSkus.length === 0 || acceptPendingSkusBatchMutation.isPending
+                }
+                onClick={() => setPendingAcceptDialog("filtered")}
+              >
+                Aceitar todos (filtro atual)
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={
+                  selectedPendingSkus.size === 0 || acceptPendingSkusBatchMutation.isPending
+                }
+                onClick={() => setPendingAcceptDialog("selected")}
+              >
+                Aceitar selecionados ({selectedPendingSkus.size})
+              </Button>
+            </div>
             {loadingPendingSkus ? (
               <div className="flex justify-center py-6">
                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -367,6 +462,27 @@ export default function Produtos() {
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead className="w-10">
+                        <Checkbox
+                          checked={allFilteredPendingSelected}
+                          onCheckedChange={checked => {
+                            if (!checked) {
+                              setSelectedPendingSkus(prev => {
+                                const next = new Set(prev);
+                                filteredPendingSkus.forEach(s => next.delete(s.codMaterial));
+                                return next;
+                              });
+                              return;
+                            }
+                            setSelectedPendingSkus(prev => {
+                              const next = new Set(prev);
+                              filteredPendingSkus.forEach(s => next.add(s.codMaterial));
+                              return next;
+                            });
+                          }}
+                          aria-label="Selecionar todos filtrados"
+                        />
+                      </TableHead>
                       <TableHead>Código</TableHead>
                       <TableHead>Marca</TableHead>
                       <TableHead>Descrição</TableHead>
@@ -374,8 +490,30 @@ export default function Produtos() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {pendingSkusPreview.map((sku) => (
+                    {filteredPendingSkus.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={5} className="text-center py-6 text-muted-foreground">
+                          {pendingSkuSearch.trim()
+                            ? "Nenhum SKU encontrado neste filtro"
+                            : "Nenhum SKU pendente"}
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                    filteredPendingSkus.map((sku) => (
                       <TableRow key={sku.codMaterial}>
+                        <TableCell>
+                          <Checkbox
+                            checked={selectedPendingSkus.has(sku.codMaterial)}
+                            onCheckedChange={checked => {
+                              setSelectedPendingSkus(prev => {
+                                const next = new Set(prev);
+                                if (checked) next.add(sku.codMaterial);
+                                else next.delete(sku.codMaterial);
+                                return next;
+                              });
+                            }}
+                          />
+                        </TableCell>
                         <TableCell className="font-mono text-sm">{sku.codMaterial}</TableCell>
                         <TableCell>{sku.marca || "-"}</TableCell>
                         <TableCell className="max-w-md truncate">{sku.descricaoItem || "-"}</TableCell>
@@ -396,16 +534,40 @@ export default function Produtos() {
                           </Button>
                         </TableCell>
                       </TableRow>
-                    ))}
+                    ))
+                    )}
                   </TableBody>
                 </Table>
-                {pendingSkus.length > 50 && (
-                  <p className="text-xs text-muted-foreground px-3 py-2 border-t">
-                    Exibindo 50 de {pendingSkus.length} SKUs pendentes
-                  </p>
-                )}
               </div>
             )}
+
+            <AlertDialog
+              open={pendingAcceptDialog !== null}
+              onOpenChange={open => !open && setPendingAcceptDialog(null)}
+            >
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Confirmar aceite em lote</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Serão aceitos{" "}
+                    <strong>{pendingAcceptCount.toLocaleString("pt-BR")}</strong> SKU(s)
+                    {pendingAcceptDialog === "selected"
+                      ? " selecionados"
+                      : " do filtro atual"}
+                    . O cadastro e o De-Para serão criados em uma única operação no servidor.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                  <AlertDialogAction
+                    disabled={acceptPendingSkusBatchMutation.isPending}
+                    onClick={confirmPendingAccept}
+                  >
+                    Aceitar
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </CardContent>
         </Card>
       )}

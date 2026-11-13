@@ -23,6 +23,7 @@ import {
   acceptPendingClienteFromFaturamento,
   acceptPendingMarcasFromFaturamento,
   acceptPendingSkuFromFaturamento,
+  acceptPendingSkusFromFaturamentoBatch,
   listPendingClientesFromFaturamento,
   listPendingMarcasFromFaturamento,
   listPendingSkusFromFaturamento,
@@ -2093,6 +2094,14 @@ export const appRouter = router({
     acceptPendingSku: protectedProcedure
       .input(z.object({ codMaterial: z.string().min(1) }))
       .mutation(({ input }) => acceptPendingSkuFromFaturamento(input.codMaterial)),
+
+    acceptPendingSkusBatch: protectedProcedure
+      .input(
+        z.object({
+          codMaterials: z.array(z.string().min(1)).min(1).max(5000),
+        })
+      )
+      .mutation(({ input }) => acceptPendingSkusFromFaturamentoBatch(input.codMaterials)),
 
     /** Clientes no faturamento ainda não cadastrados. */
     pendingClientesFromFaturamento: protectedProcedure.query(() =>

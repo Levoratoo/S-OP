@@ -4,6 +4,9 @@
  */
 import { sql } from "drizzle-orm";
 import * as db from "../db";
+import { getDb } from "../db";
+import { deParaCodigos, produtos } from "../../drizzle/schema";
+import { eq } from "drizzle-orm";
 import type { InsertCliente, InsertProduto } from "../../drizzle/schema";
 import { isSkuAcabado } from "@shared/sku-acabado";
 import { invalidateDeParaCache } from "./de-para-map";
@@ -294,21 +297,48 @@ export async function listPendingSkusFromFaturamento(): Promise<PendingSkuFromFa
 }
 
 export async function acceptPendingSkuFromFaturamento(codMaterial: string) {
-  const cod = clean(codMaterial);
-  if (!cod) throw new Error("Código do SKU inválido");
+  const result = await acceptPendingSkusFromFaturamentoBatch([codMaterial]);
+  if (result.erros.length > 0) {
+    throw new Error(result.erros[0]!.message);
+  }
+  const detail = result.detalhes.find(d => d.codMaterial.toUpperCase() === clean(codMaterial)!.toUpperCase());
+  return {
+    created: detail?.created ?? false,
+    produtoId: detail?.produtoId ?? 0,
+    deParaCriado: detail?.deParaCriado ?? false,
+  };
+}
+
+export type AcceptPendingSkusBatchResult = {
+  criados: number;
+  jaExistiam: number;
+  erros: Array<{ codMaterial: string; message: string }>;
+  detalhes: Array<{
+    codMaterial: string;
+    created: boolean;
+    produtoId: number;
+    deParaCriado: boolean;
+  }>;
+};
+
+export async function acceptPendingSkusFromFaturamentoBatch(
+  codMaterials: string[]
+): Promise<AcceptPendingSkusBatchResult> {
+  const codes = Array.from(
+    new Set(codMaterials.map(c => clean(c)).filter((c): c is string => Boolean(c)))
+  );
+  if (codes.length === 0) {
+    return { criados: 0, jaExistiam: 0, erros: [], detalhes: [] };
+  }
+
+  const database = await getDb();
+  if (!database) throw new Error("Database not available");
 
   const fatProdutos = await loadDistinctProdutos();
-  const row = fatProdutos.find(r => (clean(r.codMaterial) || "").toUpperCase() === cod.toUpperCase());
-  if (!row) throw new Error(`SKU ${cod} não encontrado no faturamento`);
-
-  const existing = await db.listProdutos();
-  for (const p of existing) {
-    if (
-      (p.codItem || "").trim().toUpperCase() === cod.toUpperCase() ||
-      (p.codigo || "").trim().toUpperCase() === cod.toUpperCase()
-    ) {
-      return { created: false, produtoId: p.id, deParaCriado: false };
-    }
+  const fatByCode = new Map<string, FatProdutoRow>();
+  for (const row of fatProdutos) {
+    const c = clean(row.codMaterial);
+    if (c) fatByCode.set(c.toUpperCase(), row);
   }
 
   const marcas = await db.listMarcas();
@@ -317,24 +347,78 @@ export async function acceptPendingSkuFromFaturamento(codMaterial: string) {
     if (m.nome) marcaIdByName.set(m.nome.trim().toLowerCase(), m.id);
   }
 
-  const created = await db.createProduto(buildProduto(row, marcaIdByName));
-  const produtoId = Number(created.id ?? 0);
+  const erros: AcceptPendingSkusBatchResult["erros"] = [];
+  const detalhes: AcceptPendingSkusBatchResult["detalhes"] = [];
+  let criados = 0;
+  let jaExistiam = 0;
 
-  let deParaCriado = false;
-  const dePara = await db.listDeParaCodigos();
-  const hasDePara = dePara.some(
-    d => (d.skuAntigo || "").trim().toUpperCase() === cod.toUpperCase()
-  );
-  if (!hasDePara) {
-    await db.createDeParaCodigo({
-      skuAntigo: cod.toUpperCase(),
-      skuNovo: cod,
-    });
+  await database.transaction(async tx => {
+    const existingRows = await tx
+      .select({ id: produtos.id, codItem: produtos.codItem, codigo: produtos.codigo })
+      .from(produtos);
+    const existingByCode = new Map<string, number>();
+    for (const p of existingRows) {
+      if (p.codItem) existingByCode.set(p.codItem.trim().toUpperCase(), p.id);
+      if (p.codigo) existingByCode.set(p.codigo.trim().toUpperCase(), p.id);
+    }
+
+    const deParaRows = await tx
+      .select({ skuAntigo: deParaCodigos.skuAntigo })
+      .from(deParaCodigos);
+    const deParaCodes = new Set(
+      deParaRows.map(d => (d.skuAntigo || "").trim().toUpperCase()).filter(Boolean)
+    );
+
+    for (const raw of codes) {
+      const cod = raw.toUpperCase();
+      const row = fatByCode.get(cod);
+      if (!row) {
+        erros.push({ codMaterial: raw, message: `SKU ${raw} não encontrado no faturamento` });
+        continue;
+      }
+
+      const existingId = existingByCode.get(cod);
+      if (existingId != null) {
+        jaExistiam += 1;
+        detalhes.push({
+          codMaterial: raw,
+          created: false,
+          produtoId: existingId,
+          deParaCriado: false,
+        });
+        continue;
+      }
+
+      const insertProduto = buildProduto(row, marcaIdByName);
+      const insertResult = await tx.insert(produtos).values(insertProduto);
+      const produtoId = Number(insertResult[0].insertId ?? 0);
+      existingByCode.set(cod, produtoId);
+
+      let deParaCriado = false;
+      if (!deParaCodes.has(cod)) {
+        await tx.insert(deParaCodigos).values({
+          skuAntigo: cod,
+          skuNovo: clean(row.codMaterial)!,
+        });
+        deParaCodes.add(cod);
+        deParaCriado = true;
+      }
+
+      criados += 1;
+      detalhes.push({
+        codMaterial: raw,
+        created: true,
+        produtoId,
+        deParaCriado,
+      });
+    }
+  });
+
+  if (criados > 0) {
     invalidateDeParaCache();
-    deParaCriado = true;
   }
 
-  return { created: true, produtoId, deParaCriado };
+  return { criados, jaExistiam, erros, detalhes };
 }
 
 export async function listPendingClientesFromFaturamento(): Promise<PendingClienteFromFaturamento[]> {
