@@ -25,6 +25,11 @@ import {
 import { loadDeParaMap, resolveCodigoAtual } from "./de-para-map";
 import { carteiraPvAbertoWhere } from "./carteira-pv-aberto";
 import {
+  cicloHorizonCalendar,
+  cicloHorizonIndexFromCalendar,
+  cicloHorizonIsoDate,
+} from "@shared/ciclo-horizon";
+import {
   consolidadoQtd,
   consolidadoTipoComercial,
   consolidadoTipoLinha,
@@ -57,14 +62,6 @@ function emptyMeses(): Record<(typeof MES_KEYS)[number], string> {
     m11: "0",
     m12: "0",
   };
-}
-
-function mesIndexNoCiclo(anoInicio: number, mesInicio: number, ano: number, mes: number): number | null {
-  const absInicio = anoInicio * 12 + (mesInicio - 1);
-  const abs = ano * 12 + (mes - 1);
-  const idx = abs - absInicio;
-  if (idx < 0 || idx > 11) return null;
-  return idx;
 }
 
 /** Competência da carteira é data de calendário (mysql DATE em meia-noite UTC). */
@@ -171,7 +168,7 @@ export async function syncPvFromCarteira(cicloId: number) {
     if (!sku) continue;
     const ym = competenciaYearMonth(ped.competencia);
     if (!ym) continue;
-    const idx = mesIndexNoCiclo(ciclo.anoInicio, ciclo.mesInicio, ym.year, ym.month);
+    const idx = cicloHorizonIndexFromCalendar(ciclo.anoInicio, ciclo.mesInicio, ym.year, ym.month);
     if (idx == null) {
       pedidosForaDoCiclo += 1;
       continue;
@@ -408,7 +405,7 @@ export async function importCrmParaCiclo(cicloId: number, rows: CrmImportRow[]) 
       const qMes = toNum(row.qtdMes);
       const d = parseCrmCompetencia(row.dataFaturamento);
       if (qMes > 0 && d) {
-        const idx = mesIndexNoCiclo(
+        const idx = cicloHorizonIndexFromCalendar(
           ciclo.anoInicio,
           ciclo.mesInicio,
           d.getFullYear(),
@@ -599,7 +596,7 @@ export async function getBaseCicloFull(cicloId: number) {
   const ciclo = await getCicloComercial(cicloId);
   const itens = await listCicloComercialItens(cicloId);
   const anoBase = ciclo?.anoInicio ?? new Date().getFullYear();
-  const mesBase = ciclo?.mesInicio ?? 1;
+  const mesCiclo = ciclo?.mesInicio ?? 1;
   const rows: Array<{
     ano: number;
     mes: number;
@@ -615,10 +612,10 @@ export async function getBaseCicloFull(cicloId: number) {
     for (let i = 0; i < 12; i++) {
       const qMes = toNum(item[MES_KEYS[i]]);
       if (qMes === 0) continue;
-      const mesAbs = mesBase + i;
+      const cal = cicloHorizonCalendar(anoBase, mesCiclo, i);
       rows.push({
-        ano: anoBase + Math.floor((mesAbs - 1) / 12),
-        mes: ((mesAbs - 1) % 12) + 1,
+        ano: cal.year,
+        mes: cal.month,
         sku: item.sku,
         marca: item.marca,
         linha: item.linha,
@@ -787,9 +784,9 @@ export async function getConsolidadoArquivo(cicloId: number) {
       (item.familiaSnapshot || "").trim() ||
       (prod ? produtoMaps.dimensionsByProductId.get(prod.id)?.familia?.trim() : "") ||
       "";
-    const relatorio = resolveConsolidadoRelatorio(item.planoColab, prod?.tipoNegocio);
-    const tipoComercial = consolidadoTipoComercial(relatorio);
-    const tp = consolidadoTp(relatorio);
+    const relatorio = resolveConsolidadoRelatorio(item.planoColab);
+    const tipoComercial = consolidadoTipoComercial(relatorio, prod?.tipoNegocio);
+    const tp = consolidadoTp(relatorio, prod?.tipoNegocio);
     const tipo = consolidadoTipoLinha(relatorio, item.crmTipo);
     const gestorFonte =
       gestorByMarcaNome.get(normKey(marca)) ||
@@ -810,9 +807,6 @@ export async function getConsolidadoArquivo(cicloId: number) {
       const qtdRaw = monthEffectiveQty(item as Record<string, unknown>, i);
       const qtd = consolidadoQtd(qtdRaw);
       if (qtd <= 0) continue;
-      const mesAbs = ciclo.mesInicio + i;
-      const ano = ciclo.anoInicio + Math.floor((mesAbs - 1) / 12);
-      const mes = ((mesAbs - 1) % 12) + 1;
       rows.push({
         skuMarca: marca ? `${sku}-${marca}` : sku,
         sku,
@@ -820,7 +814,7 @@ export async function getConsolidadoArquivo(cicloId: number) {
         linha,
         marca,
         venda,
-        mes: `${ano}-${String(mes).padStart(2, "0")}-01`,
+        mes: cicloHorizonIsoDate(ciclo.anoInicio, ciclo.mesInicio, i),
         qtd,
         valorTotal: consolidadoValorTotal(qtd, venda),
         relatorio,
@@ -860,9 +854,9 @@ export async function getResumoProd(cicloId: number) {
     for (let index = 0; index < 12; index++) {
       const qtd = toNum(item[MES_KEYS[index]]);
       if (qtd === 0) continue;
-      const monthAbsolute = ciclo.mesInicio - 1 + index;
-      const ano = ciclo.anoInicio + Math.floor(monthAbsolute / 12);
-      const mes = (monthAbsolute % 12) + 1;
+      const cal = cicloHorizonCalendar(ciclo.anoInicio, ciclo.mesInicio, index);
+      const ano = cal.year;
+      const mes = cal.month;
       const tipoEstoque = item.tipoEstoque || "MTS";
       const marca = item.marca || "SEM-MARCA";
       const linha = item.linha || "SEM-LINHA";
@@ -1007,8 +1001,10 @@ export async function getAaPrevReal(cicloId: number) {
   const itens = await listCicloComercialItens(cicloId);
   const dePara = await loadDeParaMap();
   const anoAA = ciclo.anoInicio - 1;
-  const inicio = new Date(ciclo.anoInicio, ciclo.mesInicio - 1, 1);
-  const fim = new Date(ciclo.anoInicio, ciclo.mesInicio - 1 + 12, 0);
+  const firstH = cicloHorizonCalendar(ciclo.anoInicio, ciclo.mesInicio, 0);
+  const lastH = cicloHorizonCalendar(ciclo.anoInicio, ciclo.mesInicio, 11);
+  const inicio = new Date(firstH.year, firstH.month - 1, 1);
+  const fim = new Date(lastH.year, lastH.month, 0, 23, 59, 59);
 
   const fatRows = await db
     .select({

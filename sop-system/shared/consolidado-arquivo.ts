@@ -1,38 +1,38 @@
 /** Layout do arquivo Consolidado (modelo padrão — uma linha por SKU × mês × origem). */
 
-export type ConsolidadoRelatorio = "MTS" | "JITO" | "MTO PV" | "CRM";
+export type ConsolidadoRelatorio = "MTS" | "MTO PV" | "CRM";
 
-export function resolveConsolidadoRelatorio(
-  planoColab: string,
-  tipoNegocioProduto: string | null | undefined
-): ConsolidadoRelatorio {
+export function resolveConsolidadoRelatorio(planoColab: string): ConsolidadoRelatorio {
   const plano = String(planoColab || "").trim().toUpperCase();
   if (plano === "PV_MTO") return "MTO PV";
   if (plano === "CRM") return "CRM";
-  if (plano === "JITO") return "JITO";
-  const neg = String(tipoNegocioProduto || "")
-    .trim()
-    .toUpperCase();
-  if (plano === "MTS" && neg === "ATD") return "JITO";
   return "MTS";
 }
 
-export function consolidadoTipoComercial(relatorio: ConsolidadoRelatorio): string {
-  switch (relatorio) {
-    case "MTS":
-      return "JIT";
-    case "JITO":
-      return "ATD";
-    case "MTO PV":
-    case "CRM":
-      return "PRG";
-    default:
-      return "PRG";
-  }
+/** Tipo Comercial na aba MTS: ATD para SKUs ATD; demais JIT. PV/CRM = PRG. */
+export function consolidadoTipoComercial(
+  relatorio: ConsolidadoRelatorio,
+  tipoNegocioProduto: string | null | undefined
+): string {
+  if (relatorio === "MTO PV" || relatorio === "CRM") return "PRG";
+  const neg = String(tipoNegocioProduto || "")
+    .trim()
+    .toUpperCase();
+  if (neg === "ATD") return "ATD";
+  return "JIT";
 }
 
-export function consolidadoTp(relatorio: ConsolidadoRelatorio): string {
-  return relatorio === "MTS" ? "JIT" : "PRG";
+/** Tp: JIT padrão MTS; ATD (JITO) = PRG; PV/CRM = PRG. */
+export function consolidadoTp(
+  relatorio: ConsolidadoRelatorio,
+  tipoNegocioProduto: string | null | undefined
+): string {
+  if (relatorio !== "MTS") return "PRG";
+  const neg = String(tipoNegocioProduto || "")
+    .trim()
+    .toUpperCase();
+  if (neg === "ATD") return "PRG";
+  return "JIT";
 }
 
 /** CRM aposta vem de crmTipo; demais origens = Colaboração. */

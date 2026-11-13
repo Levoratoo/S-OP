@@ -2674,13 +2674,13 @@ export async function getCicloComercialConsolidado(cicloId: number) {
     byMarca[marcaKey].estatistica += estat;
 
     const anoBase = ciclo?.anoInicio ?? new Date().getFullYear();
-    const mesBase = ciclo?.mesInicio ?? 1;
+    const mesCiclo = ciclo?.mesInicio ?? 1;
     for (let i = 0; i < 12; i++) {
       const qMes = monthEffectiveQty(item as Record<string, unknown>, i);
       if (qMes === 0) continue;
-      const mesAbs = mesBase + i;
-      const ano = anoBase + Math.floor((mesAbs - 1) / 12);
-      const mes = ((mesAbs - 1) % 12) + 1;
+      const t = mesCiclo + i;
+      const mes = (t % 12) + 1;
+      const ano = anoBase + Math.floor(t / 12);
       baseCiclo.push({
         ano,
         mes,

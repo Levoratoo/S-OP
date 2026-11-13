@@ -149,10 +149,9 @@ export function ColaboracaoArquivo({
   return (
     <div className="space-y-3">
       <p className="text-sm text-muted-foreground">
-        Modelo padrão: uma linha por SKU × mês × origem (horizonte de 12 meses do ciclo). Preço: cadastro
-        do produto → snapshot do ciclo (PV/CRM) → média dos últimos 12 meses de faturamento do SKU.
-        JITO: itens <code className="text-xs">planoColab=JITO</code> ou MTS com tipo comercial{" "}
-        <strong>ATD</strong> no cadastro (pedidos ATD na carteira ERP ainda não sincronizam — só PRG).
+        Modelo padrão: uma linha por SKU × mês × origem (12 meses a partir do mês seguinte ao ciclo).
+        Relatório: MTS (inclui SKUs ATD com Tipo Comercial ATD), MTO PV, CRM. Preço: cadastro → snapshot
+        do ciclo → média faturamento 12M.
       </p>
 
       <div className="flex flex-wrap items-end gap-3">

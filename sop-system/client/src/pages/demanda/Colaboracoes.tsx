@@ -21,6 +21,7 @@ import { Loader2, Plus, RefreshCw, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { ColaboracaoArquivo } from "./ColaboracaoArquivo";
 import { ColaboracaoResumos } from "./ColaboracaoResumos";
+import { cicloHorizonCalendar, cicloHorizonIndexFromCalendar } from "@shared/ciclo-horizon";
 import { CrmExcelLayoutError, parseCrmExcel } from "./parse-crm-excel";
 
 type PlanoColab = "MTS" | "PV_MTO" | "CRM";
@@ -64,10 +65,14 @@ function competenciaNoHorizontoCiclo(
   if (!value) return false;
   const d = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(d.getTime())) return false;
-  const absStart = anoInicio * 12 + (mesInicio - 1);
-  const abs = d.getFullYear() * 12 + d.getMonth();
-  const idx = abs - absStart;
-  return idx >= 0 && idx < 12;
+  return (
+    cicloHorizonIndexFromCalendar(
+      anoInicio,
+      mesInicio,
+      d.getFullYear(),
+      d.getMonth() + 1
+    ) !== null
+  );
 }
 
 function formatDataBr(value: Date | string | null | undefined) {
@@ -76,10 +81,9 @@ function formatDataBr(value: Date | string | null | undefined) {
   return Number.isNaN(d.getTime()) ? "-" : d.toLocaleDateString("pt-BR");
 }
 
-/** Próximo mês = início do ciclo (equiv. aba Dias e Data C2). */
+/** Mês corrente = mês do ciclo; previsão m1…m12 começa no mês seguinte. */
 function defaultCicloInicio(now = new Date()) {
-  const next = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-  return { mesInicio: next.getMonth() + 1, anoInicio: next.getFullYear() };
+  return { mesInicio: now.getMonth() + 1, anoInicio: now.getFullYear() };
 }
 
 export default function Colaboracoes() {
@@ -330,10 +334,8 @@ export default function Colaboracoes() {
 
   const cicloMesLabel = (offset: number) => {
     if (!ciclo) return `M${offset + 1}`;
-    const abs = ciclo.mesInicio - 1 + offset;
-    const mes = (abs % 12) + 1;
-    const ano = ciclo.anoInicio + Math.floor(abs / 12);
-    return `${MESES_CURTO[mes - 1]}/${String(ano).slice(-2)}`;
+    const { year, month } = cicloHorizonCalendar(ciclo.anoInicio, ciclo.mesInicio, offset);
+    return `${MESES_CURTO[month - 1]}/${String(year).slice(-2)}`;
   };
 
   return (
@@ -355,8 +357,8 @@ export default function Colaboracoes() {
             <DialogHeader>
               <DialogTitle>Novo ciclo S&OP</DialogTitle>
               <DialogDescription>
-                Equivalente a copiar o “0 - Novo Modelo Colaboração Comercial”. Desagrega a Visão
-                Executiva do job Python (aba Dias e Data = 1º dia do mês de início).
+                Desagrega a Visão Executiva do job Python. O mês do ciclo é o mês corrente do
+                processo; a previsão colaborável (m1…m12) começa no mês seguinte.
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-3 py-2">
@@ -381,7 +383,7 @@ export default function Colaboracoes() {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <Label>Mês início</Label>
+                  <Label>Mês do ciclo</Label>
                   <Select value={mesInicio} onValueChange={setMesInicio}>
                     <SelectTrigger>
                       <SelectValue />
@@ -451,7 +453,8 @@ export default function Colaboracoes() {
               <div className="flex items-center gap-2 text-sm">
                 <Badge>{ciclo.status}</Badge>
                 <span className="text-muted-foreground">
-                  Início {String(ciclo.mesInicio).padStart(2, "0")}/{ciclo.anoInicio}
+                  Ciclo {String(ciclo.mesInicio).padStart(2, "0")}/{ciclo.anoInicio} · prev{" "}
+                  {cicloMesLabel(0)}–{cicloMesLabel(11)}
                   {ciclo.jobId ? ` · job #${ciclo.jobId}` : ""}
                 </span>
               </div>

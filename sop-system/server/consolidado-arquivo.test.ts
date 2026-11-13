@@ -10,34 +10,31 @@ import {
 } from "@shared/consolidado-arquivo";
 
 describe("arquivo Consolidado — mapeamento por origem", () => {
-  it("resolve relatório MTS / JITO / MTO PV / CRM", () => {
-    expect(resolveConsolidadoRelatorio("MTS", "JIT")).toBe("MTS");
-    expect(resolveConsolidadoRelatorio("MTS", "ATD")).toBe("JITO");
-    expect(resolveConsolidadoRelatorio("JITO", null)).toBe("JITO");
-    expect(resolveConsolidadoRelatorio("PV_MTO", "PRG")).toBe("MTO PV");
-    expect(resolveConsolidadoRelatorio("CRM", null)).toBe("CRM");
+  it("resolve relatório MTS / MTO PV / CRM (sem JITO)", () => {
+    expect(resolveConsolidadoRelatorio("MTS")).toBe("MTS");
+    expect(resolveConsolidadoRelatorio("JITO")).toBe("MTS");
+    expect(resolveConsolidadoRelatorio("PV_MTO")).toBe("MTO PV");
+    expect(resolveConsolidadoRelatorio("CRM")).toBe("CRM");
   });
 
-  it("Tipo Comercial conforme modelo", () => {
-    expect(consolidadoTipoComercial("MTS")).toBe("JIT");
-    expect(consolidadoTipoComercial("JITO")).toBe("ATD");
-    expect(consolidadoTipoComercial("MTO PV")).toBe("PRG");
-    expect(consolidadoTipoComercial("CRM")).toBe("PRG");
+  it("Tipo Comercial: MTS JIT; ATD no cadastro; PV/CRM PRG", () => {
+    expect(consolidadoTipoComercial("MTS", "JIT")).toBe("JIT");
+    expect(consolidadoTipoComercial("MTS", "ATD")).toBe("ATD");
+    expect(consolidadoTipoComercial("MTO PV", "ATD")).toBe("PRG");
+    expect(consolidadoTipoComercial("CRM", null)).toBe("PRG");
   });
 
-  it("Tp conforme modelo", () => {
-    expect(consolidadoTp("MTS")).toBe("JIT");
-    expect(consolidadoTp("JITO")).toBe("PRG");
-    expect(consolidadoTp("MTO PV")).toBe("PRG");
-    expect(consolidadoTp("CRM")).toBe("PRG");
+  it("Tp: JIT padrão MTS; ATD → PRG", () => {
+    expect(consolidadoTp("MTS", "JIT")).toBe("JIT");
+    expect(consolidadoTp("MTS", "ATD")).toBe("PRG");
+    expect(consolidadoTp("MTO PV", null)).toBe("PRG");
+    expect(consolidadoTp("CRM", null)).toBe("PRG");
   });
 
   it("Tipo linha — Aposta só no CRM", () => {
     expect(consolidadoTipoLinha("MTS", null)).toBe("Colaboração");
-    expect(consolidadoTipoLinha("JITO", null)).toBe("Colaboração");
     expect(consolidadoTipoLinha("CRM", "COLABORACAO")).toBe("Colaboração");
     expect(consolidadoTipoLinha("CRM", "APOSTA")).toBe("Aposta");
-    expect(consolidadoTipoLinha("CRM", "Oportunidade")).toBe("Colaboração");
   });
 
   it("Valor Total = round(Qtd × Venda)", () => {

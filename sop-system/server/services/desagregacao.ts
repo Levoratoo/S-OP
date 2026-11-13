@@ -20,6 +20,7 @@ import {
 import * as previsaoPython from "../previsaoPython";
 import { loadDeParaMap, resolveCodigoAtual } from "./de-para-map";
 import { syncPvFromCarteira } from "./ciclo-colab-extras";
+import { cicloHorizonCalendar, cicloHorizonStartAbsolute } from "@shared/ciclo-horizon";
 import {
   getSeasonalityIndex,
   redistribuirTotalComFatores,
@@ -176,8 +177,8 @@ export function alignCycleMonths(
     m1: "0", m2: "0", m3: "0", m4: "0", m5: "0", m6: "0",
     m7: "0", m8: "0", m9: "0", m10: "0", m11: "0", m12: "0",
   } satisfies MesesCiclo;
-  const previousStart = cycleMonthAbsolute(previousYear, previousMonth);
-  const targetStart = cycleMonthAbsolute(targetYear, targetMonth);
+  const previousStart = cicloHorizonStartAbsolute(previousYear, previousMonth);
+  const targetStart = cicloHorizonStartAbsolute(targetYear, targetMonth);
   for (let previousIndex = 0; previousIndex < 12; previousIndex++) {
     const targetIndex = previousStart + previousIndex - targetStart;
     if (targetIndex < 0 || targetIndex >= 12) continue;
@@ -584,7 +585,7 @@ export async function desagregarJobParaCicloComercial(input: DesagregarInput) {
   }
 
   const now = new Date();
-  const defaultStart = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const defaultStart = new Date(now.getFullYear(), now.getMonth(), 1);
   const anoInicio = input.anoInicio ?? defaultStart.getFullYear();
   const mesInicio = input.mesInicio ?? defaultStart.getMonth() + 1;
   const colabAnterior = await loadColabCicloAnterior(anoInicio, mesInicio);
@@ -697,7 +698,8 @@ export async function desagregarJobParaCicloComercial(input: DesagregarInput) {
         const totalSkuLine = allocate ? total12m * rateio : 0;
         if (allocate && fatoresCadastro) {
           usouFatorSku = true;
-          const dist = redistribuirTotalComFatores(totalSkuLine, fatoresCadastro, mesInicio);
+          const mesHorizonte0 = cicloHorizonCalendar(anoInicio, mesInicio, 0).month;
+          const dist = redistribuirTotalComFatores(totalSkuLine, fatoresCadastro, mesHorizonte0);
           for (const k of MES_KEYS) {
             meses[k] = String(dist[k]);
             totalSku += dist[k];
@@ -705,7 +707,7 @@ export async function desagregarJobParaCicloComercial(input: DesagregarInput) {
         } else if (allocate) {
           const saz = resolveSazonalidadeForSku(skuInfo.sku, sazonalidadeSku);
           for (let i = 0; i < 12; i++) {
-            const seasonalityIndex = getSeasonalityIndex(mesInicio, i);
+            const seasonalityIndex = cicloHorizonCalendar(anoInicio, mesInicio, i).month - 1;
             const q = totalSkuLine * saz[seasonalityIndex];
             const rounded = Math.round(q * 100) / 100;
             meses[MES_KEYS[i]] = String(rounded);

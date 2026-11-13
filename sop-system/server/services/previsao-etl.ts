@@ -12,6 +12,7 @@
  * Granularidade oficial (comercial): SKU da aba Skus Projetar — não TML.
  */
 import { isSkuAcabado } from "@shared/sku-acabado";
+import { cicloHorizonCalendar } from "@shared/ciclo-horizon";
 import fs from "node:fs";
 import path from "node:path";
 import XLSX from "xlsx";
@@ -662,12 +663,11 @@ async function buildPrevistoFromLastCiclo(requiredMonth?: string): Promise<{
     for (let i = 0; i < 12; i++) {
       const key = MES_KEYS[i];
       const q = toNumber(item[key]);
-      let mes = ciclo.mesInicio + i;
-      let ano = ciclo.anoInicio;
-      while (mes > 12) {
-        mes -= 12;
-        ano += 1;
-      }
+      const { year: ano, month: mes } = cicloHorizonCalendar(
+        ciclo.anoInicio,
+        ciclo.mesInicio,
+        i
+      );
       const col = mesCol(ano, mes);
       monthSet.add(col);
       map.set(col, (map.get(col) || 0) + q);
