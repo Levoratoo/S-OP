@@ -21,14 +21,15 @@ export default function DeParaCodigos() {
     <div className="p-6 space-y-6">
       <div>
         <h1 className="text-3xl font-bold">De-Para de Códigos</h1>
-        <p className="text-muted-foreground">Gerencie a migração de códigos SKU para consolidar histórico de vendas</p>
+        <p className="text-muted-foreground">
+          Migração de códigos SKU. Use a aba Skus Novos para aceitar códigos do faturamento.
+        </p>
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
           <TabsTrigger value="lista">Lista De-Para</TabsTrigger>
           <TabsTrigger value="novos">Skus Novos</TabsTrigger>
-          <TabsTrigger value="importar">Importar Excel</TabsTrigger>
         </TabsList>
 
         <TabsContent value="lista">
@@ -37,10 +38,6 @@ export default function DeParaCodigos() {
 
         <TabsContent value="novos">
           <SkusNovosTab />
-        </TabsContent>
-
-        <TabsContent value="importar">
-          <ImportarTab />
         </TabsContent>
       </Tabs>
     </div>

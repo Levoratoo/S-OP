@@ -23,6 +23,24 @@ import {
   type InsertCicloComercialItem,
 } from "../../drizzle/schema";
 import { loadDeParaMap, resolveCodigoAtual } from "./de-para-map";
+import { carteiraPvAbertoWhere } from "./carteira-pv-aberto";
+import {
+  cicloHorizonCalendar,
+  cicloHorizonIndexFromCalendar,
+  cicloHorizonIsoDate,
+} from "@shared/ciclo-horizon";
+import {
+  consolidadoQtd,
+  consolidadoTipoComercial,
+  consolidadoTipoLinha,
+  consolidadoTp,
+  consolidadoValorTotal,
+  resolveConsolidadoRelatorio,
+  type ConsolidadoRelatorio,
+} from "@shared/consolidado-arquivo";
+import { resolveProdutoFamilia } from "@shared/produto-familia";
+import { resolveGestorPorMarca } from "@shared/gestor-marca-resolve";
+import { resolveValorVendaUnitario } from "@shared/preco-unitario";
 
 const MES_KEYS = ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12"] as const;
 
@@ -49,14 +67,6 @@ function emptyMeses(): Record<(typeof MES_KEYS)[number], string> {
   };
 }
 
-function mesIndexNoCiclo(anoInicio: number, mesInicio: number, ano: number, mes: number): number | null {
-  const absInicio = anoInicio * 12 + (mesInicio - 1);
-  const abs = ano * 12 + (mes - 1);
-  const idx = abs - absInicio;
-  if (idx < 0 || idx > 11) return null;
-  return idx;
-}
-
 /** Competência da carteira é data de calendário (mysql DATE em meia-noite UTC). */
 export function competenciaYearMonth(value: unknown): { year: number; month: number } | null {
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
@@ -73,7 +83,7 @@ export function competenciaYearMonth(value: unknown): { year: number; month: num
 async function loadProdutoMaps() {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const [rows, familyRows, managerRows, managerBrandRows] = await Promise.all([
+  const [rows, familyRows, managerRows, managerBrandRows, marcaRows] = await Promise.all([
     db.select().from(produtos),
     db.select({ id: familias.id, nome: familias.nome }).from(familias),
     db
@@ -84,6 +94,7 @@ async function loadProdutoMaps() {
       .select({ marcaId: gestorMarca.marcaId, gestorId: gestorMarca.gestorId })
       .from(gestorMarca)
       .where(eq(gestorMarca.ativo, true)),
+    db.select({ id: marcas.id, nome: marcas.nome }).from(marcas),
   ]);
   const byId = new Map(rows.map(p => [p.id, p]));
   const byCode = new Map<string, (typeof rows)[number]>();
@@ -98,16 +109,22 @@ async function loadProdutoMaps() {
     const manager = managerById.get(relation.gestorId);
     if (manager) managerByBrandId.set(relation.marcaId, manager);
   }
+  const gestorByMarcaNome = new Map<string, string>();
+  for (const marca of marcaRows) {
+    const gestor = managerByBrandId.get(marca.id);
+    if (gestor && marca.nome) gestorByMarcaNome.set(normKey(marca.nome), gestor);
+  }
   const dimensionsByProductId = new Map(
     rows.map(product => [
       product.id,
       {
-        familia: product.familiaId
-          ? familyById.get(product.familiaId) ?? null
-          : null,
-        gestor: product.marcaId
-          ? managerByBrandId.get(product.marcaId) ?? null
-          : null,
+        familia:
+          (product.familiaId ? familyById.get(product.familiaId) ?? null : null) ||
+          resolveProdutoFamilia(product) ||
+          null,
+        gestor:
+          resolveGestorPorMarca(product.marca, gestorByMarcaNome) ||
+          (product.marcaId ? managerByBrandId.get(product.marcaId) ?? null : null),
       },
     ])
   );
@@ -125,7 +142,10 @@ export async function syncPvFromCarteira(cicloId: number) {
   }
 
   const { byId, dimensionsByProductId } = await loadProdutoMaps();
-  const pedidos = await db.select().from(carteiraPedidos).where(eq(carteiraPedidos.faturado, false));
+  const pedidos = await db
+    .select()
+    .from(carteiraPedidos)
+    .where(carteiraPvAbertoWhere());
 
   // A aba PV MTO é a carteira de PV em aberto (pedidos Liberado + PRG), não a previsão estatística.
   await db
@@ -134,18 +154,22 @@ export async function syncPvFromCarteira(cicloId: number) {
       and(eq(cicloComercialItens.cicloId, cicloId), eq(cicloComercialItens.planoColab, "PV_MTO"))
     );
 
-  type Agg = {
+  type PvLine = {
+    pedidoCodigo: string;
+    sequencia: number;
     sku: string;
     descricao: string | null;
     marca: string | null;
     linha: string | null;
     tipoEstoque: "MTS" | "MTO";
     valorVenda: string | null;
+    receitaBruta: number;
+    quantidade: number;
     familia: string | null;
     gestor: string | null;
     meses: number[];
   };
-  const bySku = new Map<string, Agg>();
+  const lines: PvLine[] = [];
 
   let pedidosForaDoCiclo = 0;
   let pedidosNoCiclo = 0;
@@ -156,52 +180,59 @@ export async function syncPvFromCarteira(cicloId: number) {
     if (!sku) continue;
     const ym = competenciaYearMonth(ped.competencia);
     if (!ym) continue;
-    const idx = mesIndexNoCiclo(ciclo.anoInicio, ciclo.mesInicio, ym.year, ym.month);
+    const idx = cicloHorizonIndexFromCalendar(ciclo.anoInicio, ciclo.mesInicio, ym.year, ym.month);
     if (idx == null) {
       pedidosForaDoCiclo += 1;
       continue;
     }
     pedidosNoCiclo += 1;
 
-    if (!bySku.has(sku)) {
-      bySku.set(sku, {
-        sku,
-        descricao: prod.descricao || prod.nome || null,
-        marca: prod.marca,
-        linha: prod.linha,
-        tipoEstoque: prod.tipoEstoque === "MTO" ? "MTO" : "MTS",
-        valorVenda: prod.valorVenda,
-        familia: dimensionsByProductId.get(prod.id)?.familia ?? null,
-        gestor: dimensionsByProductId.get(prod.id)?.gestor ?? null,
-        meses: Array(12).fill(0),
-      });
-    }
-    bySku.get(sku)!.meses[idx] += toNum(ped.quantidade);
+    const meses = Array(12).fill(0);
+    meses[idx] = toNum(ped.quantidade);
+    lines.push({
+      pedidoCodigo: String(ped.codigo || "").trim() || sku,
+      sequencia: Number(ped.sequencia) > 0 ? Number(ped.sequencia) : 1,
+      sku,
+      descricao: prod.descricao || prod.nome || null,
+      marca: prod.marca,
+      linha: prod.linha,
+      tipoEstoque: prod.tipoEstoque === "MTO" ? "MTO" : "MTS",
+      valorVenda: prod.valorVenda,
+      receitaBruta: toNum(ped.receitaBruta),
+      quantidade: toNum(ped.quantidade),
+      familia: dimensionsByProductId.get(prod.id)?.familia ?? null,
+      gestor: dimensionsByProductId.get(prod.id)?.gestor ?? null,
+      meses,
+    });
   }
 
   const itens: InsertCicloComercialItem[] = [];
-  for (const agg of Array.from(bySku.values())) {
+  for (const line of lines) {
     const meses = emptyMeses();
     let total = 0;
     for (let i = 0; i < 12; i++) {
-      const q = Math.round(agg.meses[i] * 100) / 100;
+      const q = Math.round(line.meses[i] * 100) / 100;
       meses[MES_KEYS[i]] = String(q);
       total += q;
     }
+    if (total <= 0) continue;
     itens.push({
       cicloId,
       planoColab: "PV_MTO",
-      sku: agg.sku,
-      descricao: agg.descricao,
-      marca: agg.marca,
-      linha: agg.linha,
-      tipoEstoque: agg.tipoEstoque,
-      tipoMarcaLinha: `${agg.tipoEstoque}-${agg.marca || "SEM-MARCA"}-${agg.linha || "SEM-LINHA"}`,
+      sku: line.sku,
+      descricao: line.descricao,
+      marca: line.marca,
+      linha: line.linha,
+      tipoEstoque: line.tipoEstoque,
+      tipoMarcaLinha: `${line.tipoEstoque}-${line.marca || "SEM-MARCA"}-${line.linha || "SEM-LINHA"}`,
       projetar: false,
       qtdeTotalEstatistica: "0",
-      valorVendaSnapshot: String(toNum(agg.valorVenda)),
-      familiaSnapshot: agg.familia,
-      gestorSnapshot: agg.gestor,
+      valorVendaSnapshot: String(
+        resolveValorVendaUnitario(line.valorVenda, line.receitaBruta, line.quantidade)
+      ),
+      familiaSnapshot: line.familia,
+      gestorSnapshot: line.gestor,
+      crmCard: line.pedidoCodigo,
       ...meses,
       qtdeColaborada: String(Math.round(total * 100) / 100),
       origem: "PV",
@@ -390,7 +421,7 @@ export async function importCrmParaCiclo(cicloId: number, rows: CrmImportRow[]) 
       const qMes = toNum(row.qtdMes);
       const d = parseCrmCompetencia(row.dataFaturamento);
       if (qMes > 0 && d) {
-        const idx = mesIndexNoCiclo(
+        const idx = cicloHorizonIndexFromCalendar(
           ciclo.anoInicio,
           ciclo.mesInicio,
           d.getFullYear(),
@@ -547,7 +578,7 @@ export async function getResumoRs(cicloId: number) {
     const prod = byCode.get(item.sku.toUpperCase());
     const valorUnit = toNum(item.valorVendaSnapshot ?? prod?.valorVenda);
     if (valorUnit <= 0) skusSemPreco.add(item.sku);
-    const qtde = sumItemMonths(item);
+    const qtde = sumItemMonths(item as Record<string, unknown>);
     const valorTotal = qtde * valorUnit;
     byPlano[item.planoColab] = (byPlano[item.planoColab] || 0) + valorTotal;
     const mk = item.marca || "SEM-MARCA";
@@ -581,7 +612,7 @@ export async function getBaseCicloFull(cicloId: number) {
   const ciclo = await getCicloComercial(cicloId);
   const itens = await listCicloComercialItens(cicloId);
   const anoBase = ciclo?.anoInicio ?? new Date().getFullYear();
-  const mesBase = ciclo?.mesInicio ?? 1;
+  const mesCiclo = ciclo?.mesInicio ?? 1;
   const rows: Array<{
     ano: number;
     mes: number;
@@ -597,10 +628,10 @@ export async function getBaseCicloFull(cicloId: number) {
     for (let i = 0; i < 12; i++) {
       const qMes = toNum(item[MES_KEYS[i]]);
       if (qMes === 0) continue;
-      const mesAbs = mesBase + i;
+      const cal = cicloHorizonCalendar(anoBase, mesCiclo, i);
       rows.push({
-        ano: anoBase + Math.floor((mesAbs - 1) / 12),
-        mes: ((mesAbs - 1) % 12) + 1,
+        ano: cal.year,
+        mes: cal.month,
         sku: item.sku,
         marca: item.marca,
         linha: item.linha,
@@ -639,10 +670,11 @@ async function loadPrecoEGestorFaturamento(): Promise<PrecoGestorCache> {
   if (!db) throw new Error("Database not available");
   const dePara = await loadDeParaMap();
   const since = new Date();
-  since.setUTCFullYear(since.getUTCFullYear() - 2);
+  since.setUTCMonth(since.getUTCMonth() - 12);
   const sinceIso = since.toISOString().slice(0, 10);
 
-  const [precoResult, gestorResult] = await Promise.all([
+  const [precoResult, gestorResult, precoAllResult, gestorAllResult, carteiraPrecoResult, marcaGestorRows] =
+    await Promise.all([
     db.execute(sql`
       SELECT TRIM(codMaterial) AS sku, SUM(valorTotal) AS valor, SUM(qtd) AS qtd
       FROM faturamento
@@ -662,6 +694,41 @@ async function loadPrecoEGestorFaturamento(): Promise<PrecoGestorCache> {
         AND gestor IS NOT NULL AND TRIM(gestor) <> ''
       GROUP BY TRIM(marca), TRIM(gestor)
     `),
+    db.execute(sql`
+      SELECT TRIM(codMaterial) AS sku, SUM(valorTotal) AS valor, SUM(qtd) AS qtd
+      FROM faturamento
+      WHERE tipoFaturamento = 'SAIDA'
+        AND qtd > 0
+        AND valorTotal <> 0
+        AND codMaterial IS NOT NULL AND TRIM(codMaterial) <> ''
+      GROUP BY TRIM(codMaterial)
+    `),
+    db.execute(sql`
+      SELECT TRIM(marca) AS marca, TRIM(gestor) AS gestor, MAX(dataEmissao) AS lastEm
+      FROM faturamento
+      WHERE tipoFaturamento = 'SAIDA'
+        AND marca IS NOT NULL AND TRIM(marca) <> ''
+        AND gestor IS NOT NULL AND TRIM(gestor) <> ''
+      GROUP BY TRIM(marca), TRIM(gestor)
+    `),
+    db.execute(sql`
+      SELECT TRIM(p.codItem) AS sku, SUM(cp.receitaBruta) AS valor, SUM(cp.quantidade) AS qtd
+      FROM carteira_pedidos cp
+      INNER JOIN produtos p ON p.id = cp.produtoId
+      WHERE cp.quantidade > 0
+        AND cp.receitaBruta <> 0
+        AND p.codItem IS NOT NULL AND TRIM(p.codItem) <> ''
+      GROUP BY TRIM(p.codItem)
+    `),
+    db
+      .select({
+        marcaNome: marcas.nome,
+        gestorNome: gestores.nome,
+      })
+      .from(gestorMarca)
+      .innerJoin(marcas, eq(gestorMarca.marcaId, marcas.id))
+      .innerJoin(gestores, eq(gestorMarca.gestorId, gestores.id))
+      .where(eq(gestorMarca.ativo, true)),
   ]);
 
   const priceAcc = new Map<string, { valor: number; qtd: number }>();
@@ -678,6 +745,27 @@ async function loadPrecoEGestorFaturamento(): Promise<PrecoGestorCache> {
     if (acc.qtd > 0) precoBySku.set(sku, Math.round((acc.valor / acc.qtd) * 10000) / 10000);
   }
 
+  const priceAllAcc = new Map<string, { valor: number; qtd: number }>();
+  for (const row of (precoAllResult[0] as unknown as Array<{ sku: string; valor: unknown; qtd: unknown }>) ?? []) {
+    const sku = resolveCodigoAtual(String(row.sku || ""), dePara).trim().toUpperCase();
+    if (!sku) continue;
+    const acc = priceAllAcc.get(sku) ?? { valor: 0, qtd: 0 };
+    acc.valor += toNum(row.valor);
+    acc.qtd += toNum(row.qtd);
+    priceAllAcc.set(sku, acc);
+  }
+  for (const [sku, acc] of priceAllAcc) {
+    if (precoBySku.has(sku) || acc.qtd <= 0) continue;
+    precoBySku.set(sku, Math.round((acc.valor / acc.qtd) * 10000) / 10000);
+  }
+  for (const row of (carteiraPrecoResult[0] as unknown as Array<{ sku: string; valor: unknown; qtd: unknown }>) ?? []) {
+    const sku = String(row.sku || "").trim().toUpperCase();
+    const q = toNum(row.qtd);
+    const v = toNum(row.valor);
+    if (!sku || precoBySku.has(sku) || q <= 0) continue;
+    precoBySku.set(sku, Math.round((v / q) * 10000) / 10000);
+  }
+
   const gestorByMarca = new Map<string, string>();
   const gestorCount = new Map<string, number>();
   for (const row of (gestorResult[0] as unknown as Array<{ marca: string; gestor: string; n: unknown }>) ?? []) {
@@ -689,6 +777,25 @@ async function loadPrecoEGestorFaturamento(): Promise<PrecoGestorCache> {
       gestorCount.set(key, n);
       gestorByMarca.set(key, nome);
     }
+  }
+  const gestorLastEm = new Map<string, { gestor: string; last: number }>();
+  for (const row of (gestorAllResult[0] as unknown as Array<{ marca: string; gestor: string; lastEm: unknown }>) ?? []) {
+    const key = normKey(String(row.marca || ""));
+    const nome = String(row.gestor || "").trim();
+    if (!key || !nome || gestorByMarca.has(key)) continue;
+    const d = new Date(String(row.lastEm));
+    const t = Number.isNaN(d.getTime()) ? 0 : d.getTime();
+    const prev = gestorLastEm.get(key);
+    if (!prev || t > prev.last) gestorLastEm.set(key, { gestor: nome, last: t });
+  }
+  for (const [key, entry] of gestorLastEm) {
+    if (!gestorByMarca.has(key)) gestorByMarca.set(key, entry.gestor);
+  }
+  for (const row of marcaGestorRows) {
+    const key = normKey(row.marcaNome || "");
+    const nome = (row.gestorNome || "").trim();
+    if (!key || !nome || gestorByMarca.has(key)) continue;
+    gestorByMarca.set(key, nome);
   }
 
   precoGestorCache = { at: Date.now(), precoBySku, gestorByMarca };
@@ -706,19 +813,6 @@ function properName(value: string): string {
     .join("");
 }
 
-function crmTipoLabel(value: string | null | undefined): string {
-  const tipo = String(value || "").trim().toUpperCase();
-  if (tipo === "APOSTA") return "Aposta";
-  if (tipo === "OPORTUNIDADE") return "Oportunidade";
-  return "Colaboração";
-}
-
-function tipoComercialDe(tipoNegocio: string | null | undefined): "JIT" | "PRG" | "VAR" | null {
-  const tipo = String(tipoNegocio || "").trim().toUpperCase();
-  if (tipo === "JIT" || tipo === "PRG" || tipo === "VAR") return tipo;
-  return null;
-}
-
 export type ConsolidadoArquivoRow = {
   skuMarca: string;
   sku: string;
@@ -729,11 +823,12 @@ export type ConsolidadoArquivoRow = {
   mes: string;
   qtd: number;
   valorTotal: number;
-  relatorio: "MTS" | "MTO PV" | "CRM";
+  relatorio: ConsolidadoRelatorio;
   tipoComercial: string;
   tipo: string;
   tp: string;
   gestor: string;
+  familia: string;
 };
 
 /** Uma linha por SKU × mês, no layout do arquivo Consolidado (modelo padrão). */
@@ -777,17 +872,19 @@ export async function getConsolidadoArquivo(cicloId: number) {
     const marca = (item.marca || prod?.marca || "").trim();
     const descricao = (item.descricao || prod?.descricao || prod?.nome || "").trim();
     const linha = (item.linha || prod?.linha || "").trim();
-    const relatorio =
-      item.planoColab === "PV_MTO" ? "MTO PV" : item.planoColab === "CRM" ? "CRM" : "MTS";
-    const tipoCadastro = tipoComercialDe(prod?.tipoNegocio);
-    const tp =
-      relatorio === "MTS" ? "JIT" : relatorio === "MTO PV" ? "PRG" : tipoCadastro ?? "PRG";
-    const tipoComercial = tipoCadastro ?? tp;
-    const tipo = relatorio === "CRM" ? crmTipoLabel(item.crmTipo) : "Colaboração";
+    const familia =
+      (item.familiaSnapshot || "").trim() ||
+      (prod ? produtoMaps.dimensionsByProductId.get(prod.id)?.familia?.trim() : "") ||
+      (prod ? resolveProdutoFamilia(prod) : "") ||
+      "";
+    const relatorio = resolveConsolidadoRelatorio(item.planoColab);
+    const tipoComercial = consolidadoTipoComercial(relatorio, prod?.tipoNegocio);
+    const tp = consolidadoTp(relatorio, prod?.tipoNegocio);
+    const tipo = consolidadoTipoLinha(relatorio, item.crmTipo);
     const gestorFonte =
-      gestorByMarcaNome.get(normKey(marca)) ||
-      item.gestorSnapshot ||
-      fatLookup.gestorByMarca.get(normKey(marca)) ||
+      resolveGestorPorMarca(marca, gestorByMarcaNome) ||
+      (item.gestorSnapshot || "").trim() ||
+      resolveGestorPorMarca(marca, fatLookup.gestorByMarca) ||
       "";
     const gestor = gestorFonte ? properName(gestorFonte) : "";
     const vendaCadastro = toNum(prod?.valorVenda);
@@ -800,14 +897,9 @@ export async function getConsolidadoArquivo(cicloId: number) {
           : fatLookup.precoBySku.get(sku.toUpperCase()) ?? 0;
 
     for (let i = 0; i < 12; i++) {
-      const qtd = monthEffectiveQty(
-        item as unknown as Record<string, string | number | null | undefined>,
-        i
-      );
-      if (!qtd) continue;
-      const mesAbs = ciclo.mesInicio + i;
-      const ano = ciclo.anoInicio + Math.floor((mesAbs - 1) / 12);
-      const mes = ((mesAbs - 1) % 12) + 1;
+      const qtdRaw = monthEffectiveQty(item as Record<string, unknown>, i);
+      const qtd = consolidadoQtd(qtdRaw);
+      if (qtd <= 0) continue;
       rows.push({
         skuMarca: marca ? `${sku}-${marca}` : sku,
         sku,
@@ -815,14 +907,15 @@ export async function getConsolidadoArquivo(cicloId: number) {
         linha,
         marca,
         venda,
-        mes: `${ano}-${String(mes).padStart(2, "0")}-01`,
+        mes: cicloHorizonIsoDate(ciclo.anoInicio, ciclo.mesInicio, i),
         qtd,
-        valorTotal: Math.round(qtd * venda * 100) / 100,
+        valorTotal: consolidadoValorTotal(qtd, venda),
         relatorio,
         tipoComercial,
         tipo,
         tp,
         gestor,
+        familia,
       });
     }
   }
@@ -854,9 +947,9 @@ export async function getResumoProd(cicloId: number) {
     for (let index = 0; index < 12; index++) {
       const qtd = toNum(item[MES_KEYS[index]]);
       if (qtd === 0) continue;
-      const monthAbsolute = ciclo.mesInicio - 1 + index;
-      const ano = ciclo.anoInicio + Math.floor(monthAbsolute / 12);
-      const mes = (monthAbsolute % 12) + 1;
+      const cal = cicloHorizonCalendar(ciclo.anoInicio, ciclo.mesInicio, index);
+      const ano = cal.year;
+      const mes = cal.month;
       const tipoEstoque = item.tipoEstoque || "MTS";
       const marca = item.marca || "SEM-MARCA";
       const linha = item.linha || "SEM-LINHA";
@@ -1001,8 +1094,10 @@ export async function getAaPrevReal(cicloId: number) {
   const itens = await listCicloComercialItens(cicloId);
   const dePara = await loadDeParaMap();
   const anoAA = ciclo.anoInicio - 1;
-  const inicio = new Date(ciclo.anoInicio, ciclo.mesInicio - 1, 1);
-  const fim = new Date(ciclo.anoInicio, ciclo.mesInicio - 1 + 12, 0);
+  const firstH = cicloHorizonCalendar(ciclo.anoInicio, ciclo.mesInicio, 0);
+  const lastH = cicloHorizonCalendar(ciclo.anoInicio, ciclo.mesInicio, 11);
+  const inicio = new Date(firstH.year, firstH.month - 1, 1);
+  const fim = new Date(lastH.year, lastH.month, 0, 23, 59, 59);
 
   const fatRows = await db
     .select({
@@ -1035,7 +1130,7 @@ export async function getAaPrevReal(cicloId: number) {
     .filter(i => i.planoColab === "MTS" || i.planoColab === "JITO")
     .map(item => {
       const key = item.sku.toUpperCase();
-      const colab = sumItemMonths(item);
+      const colab = sumItemMonths(item as Record<string, unknown>);
       const prev = toNum(item.qtdeTotalEstatistica);
       const aa = aaBySku.get(key) || 0;
       const real = realBySku.get(key) || 0;

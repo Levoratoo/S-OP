@@ -1,4 +1,11 @@
 import * as XLSX from "xlsx";
+import {
+  CRM_EXCEL_HEADERS,
+  CrmExcelLayoutError,
+  validateCrmExcelHeaders,
+} from "@shared/crm-excel-layout";
+
+export { CRM_EXCEL_HEADERS, CrmExcelLayoutError, validateCrmExcelHeaders };
 
 export type CrmExcelRow = {
   sku: string;
@@ -11,9 +18,14 @@ export type CrmExcelRow = {
   tipo: string;
   orcamento: number;
   valorVenda: number;
+  qtdeTotal: number;
+  valorTotal: number;
+  qtdeEntregas: number;
   dataFaturamento: string;
   qtdMes: number;
+  valorTotalMes: number;
   modalidade: string;
+  tipoNegocio: string;
   m1: number;
   m2: number;
   m3: number;
@@ -28,23 +40,7 @@ export type CrmExcelRow = {
   m12: number;
 };
 
-/**
- * Modelo Ciclo CRM (Pipe):
- * IdNegocio, Marca, Proprietario, NomeProduto ("80.03.002154-descrição"),
- * PrecoProduto, ColaboracaoAposta, Temperatura, QuantidadeMes, Data da Entrega,
- * NumeroCalculoNovo. A coluna Tipo é PRG/JIT, não a classificação do card.
- */
-function cell(row: Record<string, unknown>, ...keys: string[]) {
-  const headers = Object.keys(row);
-  for (const key of keys) {
-    const found = headers.find(header => header.trim().toLowerCase() === key.trim().toLowerCase());
-    if (found && row[found] != null && String(row[found]).trim() !== "") return row[found];
-  }
-  return "";
-}
-
-function num(row: Record<string, unknown>, ...keys: string[]) {
-  const value = cell(row, ...keys);
+function num(value: unknown) {
   if (value instanceof Date) return 0;
   if (typeof value === "number" && Number.isFinite(value)) return value;
   const parsed = Number(String(value ?? "0").replace(/\s/g, "").replace(",", "."));
@@ -63,7 +59,7 @@ function asDateStr(value: unknown) {
   return text;
 }
 
-function skuFromNomeProduto(raw: string) {
+function skuFromProduto(raw: string) {
   const text = raw.trim();
   const match = text.match(/^(\d{2}\.\d{2}\.\d{6})\b/);
   if (!match) return { sku: text, descricao: text };
@@ -71,36 +67,7 @@ function skuFromNomeProduto(raw: string) {
   return { sku: match[1], descricao: descricao || text };
 }
 
-function crmTipo(row: Record<string, unknown>) {
-  const classificacao = String(
-    cell(
-      row,
-      "ColaboracaoAposta",
-      "Colaboração/Aposta",
-      "ColaboracaoAposta/Oportunidade",
-      "ColaboracaoApostaOportunidade"
-    )
-  ).trim();
-  if (classificacao) return classificacao;
-  const tipo = String(cell(row, "Tipo", "tipo")).trim();
-  const folded = tipo
-    .normalize("NFD")
-    .replace(/\p{M}/gu, "")
-    .toUpperCase();
-  if (folded.includes("APOSTA") || folded.includes("OPORTUN") || folded.includes("COLABOR")) return tipo;
-  return "";
-}
-
-function orcamentoNum(row: Record<string, unknown>) {
-  const raw = cell(
-    row,
-    "NumeroCalculoNovo",
-    "Numero Calculo",
-    "Orçamento",
-    "Orcamento",
-    "Cálculo OR",
-    "Calculo OR"
-  );
+function orcamentoFromCalculoOr(raw: unknown) {
   const text = String(raw ?? "").trim();
   if (!text || text === "0") return 0;
   const match = text.match(/^(\d+)/);
@@ -109,58 +76,73 @@ function orcamentoNum(row: Record<string, unknown>) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
 }
 
-export function parseCrmExcel(buffer: ArrayBuffer): CrmExcelRow[] {
+function classificacaoColaboracao(row: Record<string, unknown>) {
+  const raw = String(row["ColaboracaoAposta/Oportunidade"] ?? "").trim();
+  if (raw) return raw;
+  return "";
+}
+
+export function parseCrmExcel(buffer: ArrayBuffer): { headers: string[]; rows: CrmExcelRow[] } {
   const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
-  return json
-    .map(row => {
-      const nome = String(
-        cell(row, "NomeProduto", "Nome do Produto", "Produto", "Descrição", "Descricao", "descricao")
-      ).trim();
-      const fromNome = skuFromNomeProduto(nome);
-      const skuExplicito = String(
-        cell(row, "SKU", "sku", "Cod Item", "CodItem", "Codigo", "Cod Material", "Cod. Material")
-      ).trim();
-      const sku = skuExplicito || fromNome.sku;
-      return {
-        sku,
-        descricao: fromNome.descricao || nome,
-        marca: String(cell(row, "Marca", "marca")),
-        card: String(cell(row, "IdNegocio", "Id Negocio", "Card", "card", "ID Card")),
-        cliente: String(cell(row, "Cliente", "cliente")),
-        gestor: String(cell(row, "Proprietario", "Proprietário", "Gestor", "gestor")),
-        temperatura: String(cell(row, "Temperatura", "temperatura")),
-        tipo: crmTipo(row),
-        orcamento: orcamentoNum(row),
-        valorVenda: num(row, "PrecoProduto", "Preço Produto", "R$ Venda", "R$Venda", "Valor Venda"),
-        dataFaturamento: asDateStr(
-          cell(
-            row,
-            "Data da Entrega",
-            "Data Entrega",
-            "DataFaturamentoEsperada",
-            "Data de Faturamento",
-            "Data Faturamento",
-            "DataFaturamento",
-            "Competencia"
-          )
-        ),
-        qtdMes: num(row, "QuantidadeMes", "Quantidade Mês", "Quantidade Mes", "Qtd Mês", "Qtd Mes", "Qtde Mês", "Qtde Mes"),
-        modalidade: String(cell(row, "Modalidade", "modalidade")),
-        m1: num(row, "m1", "M1"),
-        m2: num(row, "m2", "M2"),
-        m3: num(row, "m3", "M3"),
-        m4: num(row, "m4", "M4"),
-        m5: num(row, "m5", "M5"),
-        m6: num(row, "m6", "M6"),
-        m7: num(row, "m7", "M7"),
-        m8: num(row, "m8", "M8"),
-        m9: num(row, "m9", "M9"),
-        m10: num(row, "m10", "M10"),
-        m11: num(row, "m11", "M11"),
-        m12: num(row, "m12", "M12"),
-      };
-    })
-    .filter(row => row.sku);
+  const matrix = XLSX.utils.sheet_to_json<(string | number)[]>(sheet, {
+    header: 1,
+    defval: "",
+    blankrows: false,
+  }) as unknown[][];
+  if (!matrix.length) {
+    throw new CrmExcelLayoutError("Planilha CRM vazia.");
+  }
+  const headerRow = (matrix[0] || []).map(cell => String(cell ?? "").trim());
+  validateCrmExcelHeaders(headerRow);
+
+  const rows: CrmExcelRow[] = [];
+  for (let r = 1; r < matrix.length; r++) {
+    const line = matrix[r] || [];
+    const row: Record<string, unknown> = {};
+    CRM_EXCEL_HEADERS.forEach((header, index) => {
+      row[header] = line[index] ?? "";
+    });
+
+    const produto = String(row.Produto ?? "").trim();
+    if (!produto) continue;
+    const fromProduto = skuFromProduto(produto);
+    const classificacao = classificacaoColaboracao(row);
+    const tipoNegocio = String(row.Tipo ?? "").trim();
+
+    rows.push({
+      sku: fromProduto.sku,
+      descricao: fromProduto.descricao,
+      marca: String(row.Marca ?? ""),
+      card: "",
+      cliente: "",
+      gestor: String(row.Gestor ?? ""),
+      temperatura: String(row.Temperatura ?? ""),
+      tipo: classificacao || tipoNegocio,
+      orcamento: orcamentoFromCalculoOr(row["Cálculo OR"]),
+      valorVenda: num(row["R$ Venda"]),
+      qtdeTotal: num(row["Qtde Total"]),
+      valorTotal: num(row["R$ Total"]),
+      qtdeEntregas: num(row["Qtde Entregas"]),
+      dataFaturamento: asDateStr(row["Data de Faturamento"]),
+      qtdMes: num(row["Qtd Mês"]),
+      valorTotalMes: num(row["R$ Total Mês"]),
+      modalidade: String(row.Modalidade ?? ""),
+      tipoNegocio,
+      m1: 0,
+      m2: 0,
+      m3: 0,
+      m4: 0,
+      m5: 0,
+      m6: 0,
+      m7: 0,
+      m8: 0,
+      m9: 0,
+      m10: 0,
+      m11: 0,
+      m12: 0,
+    });
+  }
+
+  return { headers: headerRow, rows: rows.filter(row => row.sku) };
 }

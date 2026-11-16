@@ -8,6 +8,8 @@ import { eq, inArray } from "drizzle-orm";
 import { getDb } from "../db";
 import { deParaCodigos, marcas, produtos } from "../../drizzle/schema";
 import { invalidateDeParaCache } from "./de-para-map";
+import { normalizeTipoNegocioComercial } from "@shared/tipo-negocio";
+import { DeParaValidationError, inheritProjetarFromAntigo, validateDeParaEdge } from "./de-para-validate";
 
 function resolveDadosDir(explicit?: string): string {
   if (explicit?.trim()) return path.resolve(explicit.trim());
@@ -77,9 +79,7 @@ function normalizeStatus(value: string): "ATIVO" | "INATIVO" {
 }
 
 function normalizeTipoNegocio(value: string): string | null {
-  const u = value.trim().toUpperCase();
-  if (u === "JIT" || u === "PRG" || u === "VAR") return u;
-  return value.trim() || null;
+  return normalizeTipoNegocioComercial(value);
 }
 
 function pickSkuCode(row: Record<string, string>): string {
@@ -443,6 +443,16 @@ export async function syncEstatisticaIaCadastros(options?: {
     existingDePara.map(r => [r.skuAntigo.trim().toUpperCase(), r])
   );
 
+  // Cadastro "Ativo" sem SKU NOVO não recebe De-Para do CSV (SKU Ativo vence).
+  const cadastroAtivoSemSkuNovo = new Set<string>();
+  for (const row of cadRows) {
+    const sku = (row["Cod Item"] || row.cod_item || "").trim();
+    const novo = (row["SKU NOVO"] || row.sku_novo || "").trim();
+    if (sku && !novo && normalizeStatus(row.Status || "Ativa") === "ATIVO") {
+      cadastroAtivoSemSkuNovo.add(sku.toUpperCase());
+    }
+  }
+
   // CSV primeiro; Cadastros/Projetar por cima (SKU Ativo vence sobre De-Para desatualizado).
   const deParaPairs = new Map<string, string>();
   const deParaCsvPath = path.join(dir, "de-para-codigos.csv");
@@ -451,9 +461,12 @@ export async function syncEstatisticaIaCadastros(options?: {
     for (const row of dpRows) {
       const antigo = (row["SKU Antigo"] || row.sku_antigo || row.skuAntigo || "").trim();
       const novo = (row["SKU Novo"] || row.sku_novo || row.skuNovo || "").trim();
-      if (antigo && novo && antigo.toUpperCase() !== novo.toUpperCase()) {
-        deParaPairs.set(antigo.toUpperCase(), novo);
+      if (!antigo || !novo || antigo.toUpperCase() === novo.toUpperCase()) continue;
+      if (cadastroAtivoSemSkuNovo.has(antigo.toUpperCase())) {
+        avisos.push(`De-Para CSV ignorado (SKU ativo no cadastro): ${antigo}→${novo}`);
+        continue;
       }
+      deParaPairs.set(antigo.toUpperCase(), novo);
     }
   }
   for (const row of cadRows) {
@@ -472,23 +485,44 @@ export async function syncEstatisticaIaCadastros(options?: {
     }
   }
 
+  const existingPairs = existingDePara.map(r => ({
+    skuAntigo: r.skuAntigo,
+    skuNovo: r.skuNovo,
+  }));
   const deParaToInsert: { skuAntigo: string; skuNovo: string }[] = [];
   for (const [antigoKey, novo] of deParaPairs) {
+    try {
+      await validateDeParaEdge(antigoKey, novo, existingPairs);
+    } catch (err) {
+      const msg =
+        err instanceof DeParaValidationError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      avisos.push(`De-Para recusado ${antigoKey}→${novo}: ${msg}`);
+      continue;
+    }
     const existing = deParaByOld.get(antigoKey);
     if (!existing) {
       deParaToInsert.push({ skuAntigo: antigoKey, skuNovo: novo });
+      existingPairs.push({ skuAntigo: antigoKey, skuNovo: novo });
     } else if (existing.skuNovo.trim().toUpperCase() !== novo.toUpperCase()) {
       await db
         .update(deParaCodigos)
         .set({ skuNovo: novo })
         .where(eq(deParaCodigos.id, existing.id));
       deParaUpserted += 1;
+      await inheritProjetarFromAntigo(antigoKey, novo);
     }
   }
   for (let i = 0; i < deParaToInsert.length; i += 100) {
     const chunk = deParaToInsert.slice(i, i + 100);
     await db.insert(deParaCodigos).values(chunk);
     deParaUpserted += chunk.length;
+    for (const pair of chunk) {
+      await inheritProjetarFromAntigo(pair.skuAntigo, pair.skuNovo);
+    }
   }
   invalidateDeParaCache();
 

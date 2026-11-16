@@ -379,7 +379,6 @@ export default function Acuracidade() {
                     <TableRow>
                       <TableHead>Ano/Mês</TableHead>
                       <TableHead>Produto</TableHead>
-                      <TableHead>Família</TableHead>
                       <TableHead className="text-right">Valor Previsto</TableHead>
                       <TableHead className="text-right">MAPE</TableHead>
                       <TableHead className="text-right">WMAPE</TableHead>
@@ -388,7 +387,7 @@ export default function Acuracidade() {
                   <TableBody>
                     {!previsoes || previsoes.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
+                        <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">
                           Nenhuma previsão encontrada para este ano. Rode um job Python SUCCESS para
                           ver analytics unificados.
                         </TableCell>
@@ -400,7 +399,6 @@ export default function Acuracidade() {
                             {item.ano}/{MESES[(item.mes || 1) - 1]}
                           </TableCell>
                           <TableCell>{item.produtoId ?? "-"}</TableCell>
-                          <TableCell>{item.familiaId ?? "-"}</TableCell>
                           <TableCell className="text-right">{formatMoney(item.valorPrevisto)}</TableCell>
                           <TableCell className="text-right">
                             {formatPercentLegacy(item.mape ? Number(item.mape) : null)}

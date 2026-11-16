@@ -199,6 +199,27 @@ export const produtos = mysqlTable("produtos", {
 export type Produto = typeof produtos.$inferSelect;
 export type InsertProduto = typeof produtos.$inferInsert;
 
+/** Fatores % sazonais cadastrados por SKU (jan-dez, soma ~100%). */
+export const produtoSazonalidadeFatores = mysqlTable("produto_sazonalidade_fatores", {
+  produtoId: int("produtoId").primaryKey(),
+  fatorJan: decimal("fatorJan", { precision: 8, scale: 4 }).notNull(),
+  fatorFev: decimal("fatorFev", { precision: 8, scale: 4 }).notNull(),
+  fatorMar: decimal("fatorMar", { precision: 8, scale: 4 }).notNull(),
+  fatorAbr: decimal("fatorAbr", { precision: 8, scale: 4 }).notNull(),
+  fatorMai: decimal("fatorMai", { precision: 8, scale: 4 }).notNull(),
+  fatorJun: decimal("fatorJun", { precision: 8, scale: 4 }).notNull(),
+  fatorJul: decimal("fatorJul", { precision: 8, scale: 4 }).notNull(),
+  fatorAgo: decimal("fatorAgo", { precision: 8, scale: 4 }).notNull(),
+  fatorSet: decimal("fatorSet", { precision: 8, scale: 4 }).notNull(),
+  fatorOut: decimal("fatorOut", { precision: 8, scale: 4 }).notNull(),
+  fatorNov: decimal("fatorNov", { precision: 8, scale: 4 }).notNull(),
+  fatorDez: decimal("fatorDez", { precision: 8, scale: 4 }).notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type ProdutoSazonalidadeFatores = typeof produtoSazonalidadeFatores.$inferSelect;
+export type InsertProdutoSazonalidadeFatores = typeof produtoSazonalidadeFatores.$inferInsert;
+
 // ==================== CLIENTES ====================
 export const clientes = mysqlTable("clientes", {
   id: int("id").autoincrement().primaryKey(),
@@ -382,7 +403,9 @@ export const faturamento = mysqlTable("faturamento", {
   codMaterial: varchar("codMaterial", { length: 50 }),
   descricaoItem: varchar("descricaoItem", { length: 300 }),
   // Classificação
-  tipoNegocio: varchar("tipoNegocio", { length: 50 }), // JIT, PRG, VAR
+  tipoNegocio: varchar("tipoNegocio", { length: 50 }), // JIT, ATD, PRG, VAR (usr_acabado)
+  /** usr_grupo do ERP — família/tipo de produto (Sacola, Envelope…). */
+  grupoProduto: varchar("grupoProduto", { length: 100 }),
   tipoEstoque: mysqlEnum("tipoEstoque", ["MTS", "MTO"]),
   linhaProduto: varchar("linhaProduto", { length: 100 }), // Automática, Classic, Elegance
   // Valores
@@ -561,6 +584,18 @@ export const gestorMarca = mysqlTable("gestor_marca", {
 export type GestorMarca = typeof gestorMarca.$inferSelect;
 export type InsertGestorMarca = typeof gestorMarca.$inferInsert;
 
+/** Gestor sugerido por import CSV para marcas ainda não cadastradas (aplicado ao aceitar marca). */
+export const gestorMarcaImportMap = mysqlTable("gestor_marca_import_map", {
+  id: int("id").autoincrement().primaryKey(),
+  marcaKey: varchar("marcaKey", { length: 200 }).notNull().unique(),
+  marcaNome: varchar("marcaNome", { length: 100 }).notNull(),
+  gestorNome: varchar("gestorNome", { length: 200 }).notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type GestorMarcaImportMap = typeof gestorMarcaImportMap.$inferSelect;
+export type InsertGestorMarcaImportMap = typeof gestorMarcaImportMap.$inferInsert;
+
 // ==================== DE-PARA DE CÓDIGOS DE ITEM ====================
 export const deParaCodigos = mysqlTable("de_para_codigos", {
   id: int("id").autoincrement().primaryKey(),
@@ -734,6 +769,8 @@ export const cicloComercialItens = mysqlTable("ciclo_comercial_itens", {
   rateio6m: decimal("rateio6m", { precision: 10, scale: 6 }),
   rateioConsiderar: decimal("rateioConsiderar", { precision: 10, scale: 6 }),
   qtdeTotalEstatistica: decimal("qtdeTotalEstatistica", { precision: 15, scale: 2 }),
+  /** Estatística mensal redistribuída com fatores % cadastrados do SKU. */
+  estatUsouFatorSku: boolean("estatUsouFatorSku").default(false).notNull(),
   /** Previsão estatística mensal (snapshot na desagregação). */
   e1: decimal("e1", { precision: 15, scale: 2 }),
   e2: decimal("e2", { precision: 15, scale: 2 }),

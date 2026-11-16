@@ -12,6 +12,7 @@
  * Granularidade oficial (comercial): SKU da aba Skus Projetar — não TML.
  */
 import { isSkuAcabado } from "@shared/sku-acabado";
+import { cicloHorizonCalendar } from "@shared/ciclo-horizon";
 import fs from "node:fs";
 import path from "node:path";
 import XLSX from "xlsx";
@@ -26,6 +27,7 @@ import {
   previsoes,
 } from "../../drizzle/schema";
 import { loadDeParaMap, resolveCodigoAtual } from "./de-para-map";
+import { skuProjetarEfetivo } from "@shared/de-para-projetar";
 
 /** Erro de pré-condição do ETL (cliente deve corrigir dados — mapear para 4xx no tRPC). */
 export class PrevisaoEtlUserError extends Error {
@@ -160,6 +162,68 @@ export function resolveSkuCodificacao(
     }
   }
   return buildSkuCodificacao(code, marca);
+}
+
+function mergeMonthValueMaps(
+  target: Map<string, number>,
+  source: Map<string, number>
+) {
+  for (const [month, qty] of source) {
+    target.set(month, (target.get(month) || 0) + qty);
+  }
+}
+
+/** SKU canônico após De-Para (cadeia resolvida). */
+export function canonicalSkuCode(rawSku: string, deParaMap: Map<string, string>) {
+  const trimmed = (rawSku || "").trim();
+  if (!trimmed) return trimmed;
+  return resolveCodigoAtual(trimmed, deParaMap);
+}
+
+export function isDeParaAliasSku(rawSku: string, deParaMap: Map<string, string>) {
+  const trimmed = (rawSku || "").trim();
+  if (!trimmed) return false;
+  return canonicalSkuCode(trimmed, deParaMap).toUpperCase() !== trimmed.toUpperCase();
+}
+
+export function remapCodificacaoByDePara(
+  codificacao: string,
+  deParaMap: Map<string, string>,
+  skuMarcaOficial: ReadonlyMap<string, string>
+) {
+  const dash = codificacao.indexOf("-");
+  const skuPart = dash > 0 ? codificacao.slice(0, dash) : codificacao;
+  const marcaPart = dash > 0 ? codificacao.slice(dash + 1) : null;
+  const resolved = canonicalSkuCode(skuPart, deParaMap);
+  if (resolved.toUpperCase() === skuPart.toUpperCase()) return codificacao;
+  return resolveSkuCodificacao(resolved, marcaPart, skuMarcaOficial);
+}
+
+export function consolidateVendasAggByDePara<
+  MonthKey extends string,
+>(
+  vendasAgg: Map<string, Map<MonthKey, number>>,
+  deParaMap: Map<string, string>,
+  skuMarcaOficial: ReadonlyMap<string, string>
+) {
+  const merged = new Map<string, Map<MonthKey, number>>();
+  for (const [codificacao, months] of vendasAgg) {
+    const canonical = remapCodificacaoByDePara(codificacao, deParaMap, skuMarcaOficial);
+    if (!merged.has(canonical)) merged.set(canonical, new Map());
+    mergeMonthValueMaps(merged.get(canonical)!, months);
+  }
+  return merged;
+}
+
+export function previsaoCodificacaoForProduto(
+  prod: { codItem?: string | null; codigo?: string | null; marca?: string | null },
+  skuFallback: string,
+  deParaMap: Map<string, string>,
+  skuMarcaOficial: ReadonlyMap<string, string>
+) {
+  const raw = (prod.codItem || prod.codigo || skuFallback || "").trim();
+  const canonical = canonicalSkuCode(raw, deParaMap);
+  return resolveSkuCodificacao(canonical, prod.marca || "SEM-MARCA", skuMarcaOficial);
 }
 
 export function isTmlCodificacao(codigo: string | null | undefined) {
@@ -600,12 +664,11 @@ async function buildPrevistoFromLastCiclo(requiredMonth?: string): Promise<{
     for (let i = 0; i < 12; i++) {
       const key = MES_KEYS[i];
       const q = toNumber(item[key]);
-      let mes = ciclo.mesInicio + i;
-      let ano = ciclo.anoInicio;
-      while (mes > 12) {
-        mes -= 12;
-        ano += 1;
-      }
+      const { year: ano, month: mes } = cicloHorizonCalendar(
+        ciclo.anoInicio,
+        ciclo.mesInicio,
+        i
+      );
       const col = mesCol(ano, mes);
       monthSet.add(col);
       map.set(col, (map.get(col) || 0) + q);
@@ -819,7 +882,11 @@ export async function gerarBasesPrevisaoPython(options?: {
 
     // Excel: inner join skus_projetar — só entra quem está marcado para projetar.
     // Não filtrar INATIVO: Skus Projetar inclui SKUs inativos com histórico (Power Query).
-    if (!prod || prod.projetarEstatistica !== true || !isSkuAcabado(prod.codItem || prod.codigo || skuAtual || skuOriginal)) {
+    const skuCanon = (skuAtual || skuOriginal || prod?.codItem || prod?.codigo || "").trim();
+    const projetar = skuCanon
+      ? skuProjetarEfetivo(skuCanon, produtoByCodigo, deParaMap)
+      : false;
+    if (!prod || !projetar || !isSkuAcabado(prod.codItem || prod.codigo || skuAtual || skuOriginal)) {
       linhasSemSkuProjetar += 1;
       continue;
     }
@@ -848,7 +915,7 @@ export async function gerarBasesPrevisaoPython(options?: {
     monthsWithData.add(col);
 
     const skuKey = (prod.codItem || prod.codigo || skuAtual || skuOriginal).trim();
-    const codificacao = resolveSkuCodificacao(skuKey, marca, skuMarcaOficial);
+    const codificacao = previsaoCodificacaoForProduto(prod, skuKey, deParaMap, skuMarcaOficial);
     // Devolução com Qtd. positiva no ERP → sinal negativo (como Qtd. líquida do Excel).
     let qtd = toNumber(row.qtd);
     if (row.tipoFaturamento === "DEVOLUCAO" && qtd > 0) qtd = -qtd;
@@ -866,21 +933,34 @@ export async function gerarBasesPrevisaoPython(options?: {
 
   // Garante 1 linha por SKU de Skus Projetar (mesmo sem faturamento no período).
   for (const prod of produtosRows) {
-    if (prod.projetarEstatistica !== true || !isSkuAcabado(prod.codItem || prod.codigo)) continue;
     const skuKey = (prod.codItem || prod.codigo || "").trim();
     if (!skuKey) continue;
+    const skuCanon = skuKey.toUpperCase();
+    if (!skuProjetarEfetivo(skuCanon, produtoByCodigo, deParaMap) || !isSkuAcabado(prod.codItem || prod.codigo))
+      continue;
+    if (isDeParaAliasSku(skuKey, deParaMap)) continue;
     const tipo = prod.tipoEstoque || "MTS";
     const marca = prod.marca || "SEM-MARCA";
     const linha = prod.linha || "SEM-LINHA";
     if (isTipoOutros(tipo, prod.tipoNegocio, linha)) continue;
     if (marcasInativas.has(normalizeKey(marca))) continue;
-    const codificacao = resolveSkuCodificacao(skuKey, marca, skuMarcaOficial);
+    const codificacao = previsaoCodificacaoForProduto(prod, skuKey, deParaMap, skuMarcaOficial);
     if (!vendasAgg.has(codificacao)) {
       vendasAgg.set(codificacao, new Map());
     }
   }
 
-  if (vendasAgg.size === 0) {
+  const vendasConsolidadas = consolidateVendasAggByDePara(vendasAgg, deParaMap, skuMarcaOficial);
+  const clientesConsolidados = new Map<string, Map<string, number>>();
+  for (const [key, mapa] of clientesAgg) {
+    const [codificacao, cliente] = key.split("||");
+    const canonical = remapCodificacaoByDePara(codificacao || "", deParaMap, skuMarcaOficial);
+    const newKey = `${canonical}||${cliente || "SEM-CLIENTE"}`;
+    if (!clientesConsolidados.has(newKey)) clientesConsolidados.set(newKey, new Map());
+    mergeMonthValueMaps(clientesConsolidados.get(newKey)!, mapa);
+  }
+
+  if (vendasConsolidadas.size === 0) {
     throw new PrevisaoEtlUserError(
       "Nenhum SKU elegível após filtros (Skus Projetar / De-Para / Marca ativa / ≠ Outros). " +
         `Revise Cadastros → Skus Projetar (sincronize o Estatística IA). Excluídos: sem projetar=${linhasSemSkuProjetar}, Outros=${linhasOutrosExcluidas}, marca inativa=${marcasInativasExcluidas}.`
@@ -895,7 +975,7 @@ export async function gerarBasesPrevisaoPython(options?: {
     );
   }
 
-  const vendasSorted = Array.from(vendasAgg.entries()).sort(([a], [b]) =>
+  const vendasSorted = Array.from(vendasConsolidadas.entries()).sort(([a], [b]) =>
     a.localeCompare(b, "pt-BR")
   );
   const vendasRows = vendasSorted.map(([codificacao, mapa]) => {
@@ -911,7 +991,7 @@ export async function gerarBasesPrevisaoPython(options?: {
     "Planilha1"
   );
 
-  const clientesSorted = Array.from(clientesAgg.entries()).sort(([a], [b]) =>
+  const clientesSorted = Array.from(clientesConsolidados.entries()).sort(([a], [b]) =>
     a.localeCompare(b, "pt-BR")
   );
   const clientesRows = clientesSorted.map(([key, mapa]) => {
@@ -948,10 +1028,22 @@ export async function gerarBasesPrevisaoPython(options?: {
     const prevAgg = new Map<string, Map<MonthKey, number>>();
     const produtosAll = await db.select().from(produtos);
     const byId = new Map(produtosAll.map(p => [p.id, p]));
+    const produtoByCodigoPrev = new Map<string, (typeof produtosAll)[number]>();
+    for (const p of produtosAll) {
+      if (p.codItem) produtoByCodigoPrev.set(p.codItem.trim().toUpperCase(), p);
+      if (p.codigo) produtoByCodigoPrev.set(p.codigo.trim().toUpperCase(), p);
+    }
 
     for (const p of prevRowsDb) {
       const prod = p.produtoId ? byId.get(p.produtoId) : undefined;
-      if (!prod || prod.projetarEstatistica !== true || !isSkuAcabado(prod.codItem || prod.codigo)) continue;
+      const skuKeyPrev = (prod?.codItem || prod?.codigo || "").trim();
+      if (
+        !prod ||
+        !skuKeyPrev ||
+        !skuProjetarEfetivo(skuKeyPrev, produtoByCodigoPrev, deParaMap) ||
+        !isSkuAcabado(prod.codItem || prod.codigo)
+      )
+        continue;
       if (marcasInativas.has(normalizeKey(prod.marca))) continue;
       if (isTipoOutros(prod.tipoEstoque, prod.tipoNegocio, prod.linha)) continue;
       const skuKey = (prod.codItem || prod.codigo || "").trim();

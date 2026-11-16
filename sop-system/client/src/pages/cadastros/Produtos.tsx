@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -8,75 +8,16 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Progress } from "@/components/ui/progress";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
+import { textMatchesSearch } from "@shared/text-search";
 import { trpc } from "@/lib/trpc";
-import { Plus, Pencil, Trash2, Loader2, Upload, Download, FileSpreadsheet, AlertCircle, CheckCircle2 } from "lucide-react";
+import { Plus, Pencil, Trash2, Loader2, Download, Upload } from "lucide-react";
 import { toast } from "sonner";
-import * as XLSX from "xlsx";
 import { exportToCsv } from "@/lib/exportCsv";
-
-// Mapeamento de colunas do Excel para campos do banco
-const COLUMN_MAPPING: Record<string, string> = {
-  "Cod Item": "codItem",
-  "Cod. Item": "codItem",
-  "CodItem": "codItem",
-  "Descrição": "descricao",
-  "Descricao": "descricao",
-  "Status": "status",
-  "Tipo Negocio": "tipoNegocio",
-  "Tipo Negócio": "tipoNegocio",
-  "TipoNegocio": "tipoNegocio",
-  "Tipo Estoque": "tipoEstoque",
-  "TipoEstoque": "tipoEstoque",
-  "Linha": "linha",
-  "Linha Produto": "linha",
-  "Modelo": "modelo",
-  "Tamanho": "tamanho",
-  "A X L X P": "axlxp",
-  "AXLXP": "axlxp",
-  "Marca": "marca",
-  "Grupo": "grupo",
-  "Ramo Atuação": "ramoAtuacao",
-  "Ramo Atuacao": "ramoAtuacao",
-  "RamoAtuacao": "ramoAtuacao",
-  "Valor Venda": "valorVenda",
-  "ValorVenda": "valorVenda",
-  "Valor Custo": "valorCusto",
-  "ValorCusto": "valorCusto",
-  "Qtde Pallet": "qtdePallet",
-  "QtdePallet": "qtdePallet",
-  "Lote Economico Viável": "loteEconomicoViavel",
-  "Lote Economico Viavel": "loteEconomicoViavel",
-  "LoteEconomicoViavel": "loteEconomicoViavel",
-  "Fluxo": "fluxo",
-  "Caminho": "caminho",
-  "Pista": "pista",
-};
-
-interface ParsedProduto {
-  codItem?: string;
-  descricao?: string;
-  status?: "ATIVO" | "INATIVO";
-  tipoNegocio?: string;
-  tipoEstoque?: "MTS" | "MTO";
-  linha?: string;
-  modelo?: string;
-  tamanho?: string;
-  axlxp?: string;
-  marca?: string;
-  grupo?: string;
-  ramoAtuacao?: string;
-  valorVenda?: string;
-  valorCusto?: string;
-  qtdePallet?: number;
-  loteEconomicoViavel?: number;
-  fluxo?: string;
-  caminho?: string;
-  pista?: number;
-}
+import { ProdutoFatoresSazonaisSection } from "@/components/ProdutoFatoresSazonaisSection";
+import { FATOR_MESES_LABEL } from "@shared/sku-fator-sazonalidade";
+import * as XLSX from "xlsx";
 
 export default function Produtos() {
   const [isOpen, setIsOpen] = useState(false);
@@ -115,16 +56,24 @@ export default function Produtos() {
   // Filter states
   const [searchTerm, setSearchTerm] = useState("");
   const [filterFluxo, setFilterFluxo] = useState<string>("all");
-
-  // Import states
-  const [file, setFile] = useState<File | null>(null);
-  const [parsedData, setParsedData] = useState<ParsedProduto[]>([]);
-  const [errors, setErrors] = useState<string[]>([]);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [importProgress, setImportProgress] = useState(0);
+  const [filterFator, setFilterFator] = useState<"all" | "com" | "sem">("all");
 
   const utils = trpc.useUtils();
   const { data: produtos, isLoading } = trpc.produtos.list.useQuery();
+  const { data: idsComFator = [] } = trpc.produtos.idsComFatorSazonal.useQuery();
+  const comFatorSet = useMemo(() => new Set(idsComFator), [idsComFator]);
+
+  const importFatoresMutation = trpc.produtos.importSazonalidadeFatores.useMutation({
+    onSuccess: result => {
+      utils.produtos.idsComFatorSazonal.invalidate();
+      toast.success(`${result.atualizados} SKU(s) com fatores importados`);
+      if (result.erros.length) {
+        toast.error(`${result.erros.length} linha(s) com erro — veja o console`);
+        console.warn("[import fatores]", result.erros);
+      }
+    },
+    onError: e => toast.error(e.message),
+  });
   const { data: pendingSkus = [], isLoading: loadingPendingSkus } =
     trpc.cadastrosSistema.pendingSkusFromFaturamento.useQuery();
   
@@ -142,10 +91,49 @@ export default function Produtos() {
     onSuccess: () => {
       utils.cadastrosSistema.pendingSkusFromFaturamento.invalidate();
       utils.produtos.list.invalidate();
+      utils.deParaCodigos.list.invalidate();
       toast.success("SKU aceito e cadastrado!");
     },
     onError: (error) => toast.error(error.message),
   });
+
+  const acceptPendingSkusBatchMutation = trpc.cadastrosSistema.acceptPendingSkusBatch.useMutation({
+    onSuccess: result => {
+      utils.cadastrosSistema.pendingSkusFromFaturamento.invalidate();
+      utils.produtos.list.invalidate();
+      utils.deParaCodigos.list.invalidate();
+      setSelectedPendingSkus(new Set());
+      setPendingAcceptDialog(null);
+      toast.success(
+        `${result.criados} SKU(s) cadastrados` +
+          (result.jaExistiam ? ` · ${result.jaExistiam} já existiam` : "") +
+          (result.erros.length ? ` · ${result.erros.length} com erro` : "")
+      );
+      if (result.erros.length > 0) {
+        console.warn("[aceitar SKUs em lote]", result.erros);
+      }
+    },
+    onError: error => toast.error(error.message),
+  });
+
+  const [pendingSkuSearch, setPendingSkuSearch] = useState("");
+  const [selectedPendingSkus, setSelectedPendingSkus] = useState<Set<string>>(new Set());
+  const [pendingAcceptDialog, setPendingAcceptDialog] = useState<"selected" | "filtered" | null>(null);
+
+  const filteredPendingSkus = useMemo(() => {
+    const term = pendingSkuSearch.trim();
+    if (!term) return pendingSkus;
+    return pendingSkus.filter(sku =>
+      textMatchesSearch(
+        [sku.codMaterial, sku.marca, sku.descricaoItem].filter(Boolean).join(" "),
+        term
+      )
+    );
+  }, [pendingSkus, pendingSkuSearch]);
+
+  const allFilteredPendingSelected =
+    filteredPendingSkus.length > 0 &&
+    filteredPendingSkus.every(s => selectedPendingSkus.has(s.codMaterial));
 
   // Filtrar produtos por busca e fluxo
   const filteredProdutos = produtos?.filter((produto) => {
@@ -155,8 +143,11 @@ export default function Produtos() {
       produto.marca?.toLowerCase().includes(searchTerm.toLowerCase());
     
     const matchesFluxo = filterFluxo === "all" || produto.fluxo === filterFluxo;
-    
-    return matchesSearch && matchesFluxo;
+    const temFator = comFatorSet.has(produto.id);
+    const matchesFator =
+      filterFator === "all" || (filterFator === "com" ? temFator : !temFator);
+
+    return matchesSearch && matchesFluxo && matchesFator;
   });
 
   // Obter lista única de fluxos para o filtro
@@ -186,20 +177,6 @@ export default function Produtos() {
       toast.success("Produto excluído com sucesso!");
     },
     onError: (error) => toast.error(error.message),
-  });
-
-  const importMutation = trpc.produtos.importBatch.useMutation({
-    onSuccess: (result) => {
-      toast.success(`${result.count} produtos importados com sucesso!`);
-      utils.produtos.list.invalidate();
-      setParsedData([]);
-      setFile(null);
-      setImportProgress(100);
-    },
-    onError: (error) => {
-      toast.error(`Erro na importação: ${error.message}`);
-      setImportProgress(0);
-    },
   });
 
   const resetForm = () => {
@@ -267,6 +244,41 @@ export default function Produtos() {
       tamanhoId: value,
       tamanho: selected?.nome || ""
     });
+  };
+
+  const handleImportFatores = async (file: File) => {
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array" });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
+      const rows: Array<{ sku: string; fatores: number[] }> = [];
+      for (const row of json) {
+        const sku = String(
+          row.SKU ?? row.sku ?? row["Cod Item"] ?? row.CodItem ?? Object.values(row)[0] ?? ""
+        ).trim();
+        if (!sku) continue;
+        const fatores: number[] = [];
+        for (let i = 0; i < 12; i++) {
+          const label = FATOR_MESES_LABEL[i];
+          const raw =
+            row[label] ??
+            row[label.toLowerCase()] ??
+            row[`M${i + 1}`] ??
+            row[`m${i + 1}`];
+          const n = Number(String(raw ?? "0").replace(",", "."));
+          fatores.push(Number.isFinite(n) ? n : 0);
+        }
+        rows.push({ sku, fatores });
+      }
+      if (rows.length === 0) {
+        toast.error("Nenhuma linha no arquivo.");
+        return;
+      }
+      importFatoresMutation.mutate(rows);
+    } catch (e) {
+      toast.error(`Falha ao ler planilha: ${String(e)}`);
+    }
   };
 
   const handleMarcaChange = (value: string) => {
@@ -352,144 +364,38 @@ export default function Produtos() {
     setIsOpen(true);
   };
 
-  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFile = e.target.files?.[0];
-    if (!selectedFile) return;
-
-    setFile(selectedFile);
-    setErrors([]);
-    setIsProcessing(true);
-    setParsedData([]);
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      try {
-        const data = event.target?.result;
-        const workbook = XLSX.read(data, { type: "array" });
-        const sheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[sheetName];
-        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as unknown[][];
-
-        if (jsonData.length < 2) {
-          setErrors(["Arquivo vazio ou sem dados"]);
-          setIsProcessing(false);
-          return;
-        }
-
-        const headers = jsonData[0] as string[];
-        const rows: ParsedProduto[] = [];
-
-        const parseNumber = (value: unknown): string => {
-          if (value === null || value === undefined || value === "") return "";
-          const num = Number(value);
-          return isNaN(num) ? String(value).replace(",", ".") : num.toString();
-        };
-
-        for (let i = 1; i < jsonData.length; i++) {
-          const row = jsonData[i] as unknown[];
-          if (!row || row.length === 0) continue;
-
-          const parsedRow: ParsedProduto = {};
-
-          headers.forEach((header, index) => {
-            const field = COLUMN_MAPPING[header?.trim()];
-            if (!field) return;
-
-            const value = row[index];
-            if (value === null || value === undefined || value === "") return;
-
-            switch (field) {
-              case "codItem":
-              case "descricao":
-              case "tipoNegocio":
-              case "linha":
-              case "modelo":
-              case "tamanho":
-              case "axlxp":
-              case "marca":
-              case "grupo":
-              case "ramoAtuacao":
-              case "fluxo":
-              case "caminho":
-                (parsedRow as Record<string, unknown>)[field] = String(value).trim();
-                break;
-              case "status":
-                const statusVal = String(value).toUpperCase();
-                parsedRow.status = statusVal === "INATIVO" ? "INATIVO" : "ATIVO";
-                break;
-              case "tipoEstoque":
-                const estoqueVal = String(value).toUpperCase();
-                parsedRow.tipoEstoque = estoqueVal === "MTO" ? "MTO" : "MTS";
-                break;
-              case "valorVenda":
-              case "valorCusto":
-                (parsedRow as Record<string, unknown>)[field] = parseNumber(value);
-                break;
-              case "qtdePallet":
-              case "loteEconomicoViavel":
-              case "pista":
-                const numVal = parseInt(parseNumber(value));
-                if (!isNaN(numVal)) {
-                  (parsedRow as Record<string, unknown>)[field] = numVal;
-                }
-                break;
-            }
-          });
-
-          if (parsedRow.codItem || parsedRow.descricao) {
-            rows.push(parsedRow);
-          }
-        }
-
-        setParsedData(rows);
-        setIsProcessing(false);
-        toast.success(`${rows.length} produtos carregados do arquivo`);
-      } catch (error) {
-        setErrors([`Erro ao processar arquivo: ${error}`]);
-        setIsProcessing(false);
-      }
-    };
-
-    reader.readAsArrayBuffer(selectedFile);
-  }, []);
-
-  const handleImport = async () => {
-    if (parsedData.length === 0) return;
-    setImportProgress(10);
-    await importMutation.mutateAsync(parsedData);
-  };
-
-  const downloadTemplate = () => {
-    const headers = [
-      "Cod Item", "Descrição", "Status", "Tipo Negocio", "Tipo Estoque", "Linha", "Modelo",
-      "Tamanho", "A X L X P", "Marca", "Grupo", "Ramo Atuação", "Valor Venda", "Valor Custo",
-      "Qtde Pallet", "Lote Economico Viável", "Fluxo", "Caminho", "Pista"
-    ];
-    const exampleRow = [
-      "99.99.999999", "Sacola Classic P", "Ativo", "VAR", "MTS", "Classic", "Sacola",
-      "P", "165 x 130 x 65", "Marca X", "Grupo A", "Varejo", "10.50", "5.25",
-      "100", "500", "Fluxo 1", "Caminho A", "1"
-    ];
-    
-    const ws = XLSX.utils.aoa_to_sheet([headers, exampleRow]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Produtos");
-    XLSX.writeFile(wb, "template_produtos.xlsx");
-  };
-
   const isPending = createMutation.isPending || updateMutation.isPending;
 
-  const pendingSkusPreview = pendingSkus.slice(0, 50);
   const acceptingCod = acceptPendingSkuMutation.isPending
     ? acceptPendingSkuMutation.variables?.codMaterial
     : null;
+
+  const pendingAcceptCount =
+    pendingAcceptDialog === "selected" && selectedPendingSkus.size > 0
+      ? selectedPendingSkus.size
+      : filteredPendingSkus.length;
+
+  const confirmPendingAccept = () => {
+    const codes =
+      pendingAcceptDialog === "selected" && selectedPendingSkus.size > 0
+        ? Array.from(selectedPendingSkus)
+        : filteredPendingSkus.map(s => s.codMaterial);
+    if (codes.length === 0) {
+      toast.error("Nenhum SKU para aceitar.");
+      return;
+    }
+    acceptPendingSkusBatchMutation.mutate({ codMaterials: codes });
+  };
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Produtos</h1>
-          <p className="text-muted-foreground">Gerencie o cadastro de produtos</p>
+          <p className="text-muted-foreground">
+            Gerencie o cadastro de produtos. A única importação manual do S&amp;OP é o Excel do CRM na Colaboração
+            Comercial.
+          </p>
         </div>
       </div>
 
@@ -497,16 +403,54 @@ export default function Produtos() {
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="flex items-center gap-2 text-lg">
-              SKUs pendentes do Faturamento
+              SKUs novos (Faturamento)
               {!loadingPendingSkus && (
                 <Badge variant="secondary">{pendingSkus.length}</Badge>
               )}
             </CardTitle>
             <CardDescription>
-              SKUs presentes no faturamento que ainda não estão no cadastro de produtos
+              Códigos em Bases/Faturamento que ainda não estão em Produtos. Aceite para liberar em
+              Skus Projetar e De-Para (mesma regra do aceite individual).
             </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-3">
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="space-y-1">
+                <Label htmlFor="pending-sku-search">Filtrar lista</Label>
+                <Input
+                  id="pending-sku-search"
+                  className="w-72"
+                  placeholder="Código, marca ou descrição…"
+                  value={pendingSkuSearch}
+                  onChange={e => setPendingSkuSearch(e.target.value)}
+                />
+              </div>
+              <p className="text-sm text-muted-foreground pb-2">
+                {filteredPendingSkus.length.toLocaleString("pt-BR")} de{" "}
+                {pendingSkus.length.toLocaleString("pt-BR")} pendente(s)
+              </p>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={
+                  filteredPendingSkus.length === 0 || acceptPendingSkusBatchMutation.isPending
+                }
+                onClick={() => setPendingAcceptDialog("filtered")}
+              >
+                Aceitar todos (filtro atual)
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={
+                  selectedPendingSkus.size === 0 || acceptPendingSkusBatchMutation.isPending
+                }
+                onClick={() => setPendingAcceptDialog("selected")}
+              >
+                Aceitar selecionados ({selectedPendingSkus.size})
+              </Button>
+            </div>
             {loadingPendingSkus ? (
               <div className="flex justify-center py-6">
                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -518,6 +462,27 @@ export default function Produtos() {
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead className="w-10">
+                        <Checkbox
+                          checked={allFilteredPendingSelected}
+                          onCheckedChange={checked => {
+                            if (!checked) {
+                              setSelectedPendingSkus(prev => {
+                                const next = new Set(prev);
+                                filteredPendingSkus.forEach(s => next.delete(s.codMaterial));
+                                return next;
+                              });
+                              return;
+                            }
+                            setSelectedPendingSkus(prev => {
+                              const next = new Set(prev);
+                              filteredPendingSkus.forEach(s => next.add(s.codMaterial));
+                              return next;
+                            });
+                          }}
+                          aria-label="Selecionar todos filtrados"
+                        />
+                      </TableHead>
                       <TableHead>Código</TableHead>
                       <TableHead>Marca</TableHead>
                       <TableHead>Descrição</TableHead>
@@ -525,8 +490,30 @@ export default function Produtos() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {pendingSkusPreview.map((sku) => (
+                    {filteredPendingSkus.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={5} className="text-center py-6 text-muted-foreground">
+                          {pendingSkuSearch.trim()
+                            ? "Nenhum SKU encontrado neste filtro"
+                            : "Nenhum SKU pendente"}
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                    filteredPendingSkus.map((sku) => (
                       <TableRow key={sku.codMaterial}>
+                        <TableCell>
+                          <Checkbox
+                            checked={selectedPendingSkus.has(sku.codMaterial)}
+                            onCheckedChange={checked => {
+                              setSelectedPendingSkus(prev => {
+                                const next = new Set(prev);
+                                if (checked) next.add(sku.codMaterial);
+                                else next.delete(sku.codMaterial);
+                                return next;
+                              });
+                            }}
+                          />
+                        </TableCell>
                         <TableCell className="font-mono text-sm">{sku.codMaterial}</TableCell>
                         <TableCell>{sku.marca || "-"}</TableCell>
                         <TableCell className="max-w-md truncate">{sku.descricaoItem || "-"}</TableCell>
@@ -547,27 +534,45 @@ export default function Produtos() {
                           </Button>
                         </TableCell>
                       </TableRow>
-                    ))}
+                    ))
+                    )}
                   </TableBody>
                 </Table>
-                {pendingSkus.length > 50 && (
-                  <p className="text-xs text-muted-foreground px-3 py-2 border-t">
-                    Exibindo 50 de {pendingSkus.length} SKUs pendentes
-                  </p>
-                )}
               </div>
             )}
+
+            <AlertDialog
+              open={pendingAcceptDialog !== null}
+              onOpenChange={open => !open && setPendingAcceptDialog(null)}
+            >
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Confirmar aceite em lote</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Serão aceitos{" "}
+                    <strong>{pendingAcceptCount.toLocaleString("pt-BR")}</strong> SKU(s)
+                    {pendingAcceptDialog === "selected"
+                      ? " selecionados"
+                      : " do filtro atual"}
+                    . O cadastro e o De-Para serão criados em uma única operação no servidor.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                  <AlertDialogAction
+                    disabled={acceptPendingSkusBatchMutation.isPending}
+                    onClick={confirmPendingAccept}
+                  >
+                    Aceitar
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </CardContent>
         </Card>
       )}
 
-      <Tabs defaultValue="lista" className="space-y-4">
-        <TabsList>
-          <TabsTrigger value="lista">Lista de Produtos</TabsTrigger>
-          <TabsTrigger value="importar">Importar Excel</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="lista" className="space-y-4">
+      <div className="space-y-4">
           {/* Barra de filtros */}
           <div className="flex items-center gap-4">
             <div className="flex-1">
@@ -593,9 +598,36 @@ export default function Produtos() {
                 </SelectContent>
               </Select>
             </div>
+            <Select
+              value={filterFator}
+              onValueChange={v => setFilterFator(v as "all" | "com" | "sem")}
+            >
+              <SelectTrigger className="w-44">
+                <SelectValue placeholder="Fator %" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Fator: todos</SelectItem>
+                <SelectItem value="com">Com fator %</SelectItem>
+                <SelectItem value="sem">Sem fator %</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
 
-          <div className="flex justify-end gap-2">
+          <div className="flex flex-wrap justify-end gap-2">
+            <Label className="inline-flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm hover:bg-accent">
+              <Upload className="h-4 w-4" />
+              Importar fatores % (SKU + Jan…Dez)
+              <input
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                className="hidden"
+                onChange={e => {
+                  const f = e.target.files?.[0];
+                  if (f) void handleImportFatores(f);
+                  e.target.value = "";
+                }}
+              />
+            </Label>
             <Button variant="outline" onClick={() => {
               if (produtos && produtos.length > 0) {
                 exportToCsv(produtos, "produtos", [
@@ -882,6 +914,8 @@ export default function Produtos() {
                     </div>
                   </div>
 
+                  <ProdutoFatoresSazonaisSection produtoId={editingId} enabled={isOpen} />
+
                   <div className="flex justify-end gap-2 pt-4">
                     <Button type="button" variant="outline" onClick={resetForm}>
                       Cancelar
@@ -914,6 +948,7 @@ export default function Produtos() {
                       <TableHead>Linha</TableHead>
                       <TableHead>Modelo</TableHead>
                       <TableHead>Fluxo</TableHead>
+                      <TableHead>Fator %</TableHead>
                       <TableHead>Projetar</TableHead>
                       <TableHead className="w-[100px]">Ações</TableHead>
                     </TableRow>
@@ -921,7 +956,7 @@ export default function Produtos() {
                   <TableBody>
                     {filteredProdutos?.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
+                        <TableCell colSpan={10} className="text-center text-muted-foreground py-8">
                           {searchTerm || filterFluxo !== "all" ? "Nenhum produto encontrado com os filtros aplicados" : "Nenhum produto cadastrado"}
                         </TableCell>
                       </TableRow>
@@ -940,6 +975,11 @@ export default function Produtos() {
                           <TableCell>{produto.linha || "-"}</TableCell>
                           <TableCell>{produto.modelo || "-"}</TableCell>
                           <TableCell>{produto.fluxo || "-"}</TableCell>
+                          <TableCell>
+                            <Badge variant={comFatorSet.has(produto.id) ? "default" : "secondary"}>
+                              {comFatorSet.has(produto.id) ? "Com fator %" : "Sem fator %"}
+                            </Badge>
+                          </TableCell>
                           <TableCell>
                             <Badge variant={produto.projetarEstatistica !== false ? "default" : "secondary"}>
                               {produto.projetarEstatistica !== false ? "Sim" : "Não"}
@@ -979,128 +1019,7 @@ export default function Produtos() {
               )}
             </CardContent>
           </Card>
-        </TabsContent>
-
-        <TabsContent value="importar" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <FileSpreadsheet className="h-5 w-5" />
-                Importar Produtos via Excel
-              </CardTitle>
-              <CardDescription>
-                Faça upload de um arquivo Excel (.xlsx, .xls) ou CSV com os dados dos produtos
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex items-center gap-4">
-                <Button variant="outline" onClick={downloadTemplate}>
-                  <Download className="h-4 w-4 mr-2" />
-                  Baixar Template
-                </Button>
-                <div className="flex-1">
-                  <Input
-                    type="file"
-                    accept=".xlsx,.xls,.csv"
-                    onChange={handleFileChange}
-                    className="cursor-pointer"
-                  />
-                </div>
-              </div>
-
-              {isProcessing && (
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Processando arquivo...
-                </div>
-              )}
-
-              {errors.length > 0 && (
-                <Alert variant="destructive">
-                  <AlertCircle className="h-4 w-4" />
-                  <AlertTitle>Erros encontrados</AlertTitle>
-                  <AlertDescription>
-                    <ul className="list-disc list-inside">
-                      {errors.map((error, i) => (
-                        <li key={i}>{error}</li>
-                      ))}
-                    </ul>
-                  </AlertDescription>
-                </Alert>
-              )}
-
-              {parsedData.length > 0 && (
-                <>
-                  <Alert>
-                    <CheckCircle2 className="h-4 w-4" />
-                    <AlertTitle>Arquivo processado</AlertTitle>
-                    <AlertDescription>
-                      {parsedData.length} produtos prontos para importação
-                    </AlertDescription>
-                  </Alert>
-
-                  <div className="border rounded-lg overflow-auto max-h-[400px]">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Código</TableHead>
-                          <TableHead>Descrição</TableHead>
-                          <TableHead>Status</TableHead>
-                          <TableHead>Tipo Negócio</TableHead>
-                          <TableHead>Tipo Estoque</TableHead>
-                          <TableHead>Linha</TableHead>
-                          <TableHead>Modelo</TableHead>
-                          <TableHead>Fluxo</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {parsedData.slice(0, 10).map((row, i) => (
-                          <TableRow key={i}>
-                            <TableCell className="font-mono">{row.codItem || "-"}</TableCell>
-                            <TableCell>{row.descricao || "-"}</TableCell>
-                            <TableCell>{row.status || "-"}</TableCell>
-                            <TableCell>{row.tipoNegocio || "-"}</TableCell>
-                            <TableCell>{row.tipoEstoque || "-"}</TableCell>
-                            <TableCell>{row.linha || "-"}</TableCell>
-                            <TableCell>{row.modelo || "-"}</TableCell>
-                            <TableCell>{row.fluxo || "-"}</TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                  {parsedData.length > 10 && (
-                    <p className="text-sm text-muted-foreground">
-                      Mostrando 10 de {parsedData.length} registros
-                    </p>
-                  )}
-
-                  {importProgress > 0 && importProgress < 100 && (
-                    <Progress value={importProgress} className="w-full" />
-                  )}
-
-                  <div className="flex justify-end gap-2">
-                    <Button
-                      variant="outline"
-                      onClick={() => {
-                        setParsedData([]);
-                        setFile(null);
-                      }}
-                    >
-                      Cancelar
-                    </Button>
-                    <Button onClick={handleImport} disabled={importMutation.isPending}>
-                      {importMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                      <Upload className="h-4 w-4 mr-2" />
-                      Importar {parsedData.length} Produtos
-                    </Button>
-                  </div>
-                </>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
+      </div>
     </div>
   );
 }

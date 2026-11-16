@@ -3,6 +3,24 @@ import { formatCalendarDate } from "@shared/calendar-date";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 
+function toastPostSyncAlerts(postSync: {
+  clientesError?: string;
+  marcasAutoError?: string;
+  gestorMarcaError?: string;
+  clientes?: { clientes?: { created?: number } };
+}) {
+  if (postSync.clientesError) {
+    toast.error(`Sync clientes: ${postSync.clientesError}`);
+  } else {
+    const created = postSync.clientes?.clientes?.created;
+    if (created && created > 0) {
+      toast.message(`+${created} cliente(s) do faturamento`);
+    }
+  }
+  if (postSync.marcasAutoError) toast.error(`Marcas×gestor: ${postSync.marcasAutoError}`);
+  if (postSync.gestorMarcaError) toast.error(`Mapa gestor×marca: ${postSync.gestorMarcaError}`);
+}
+
 /** Ao abrir o sistema, descarta CFOP fora da lista e busca notas novas no ERP. */
 export function useRefreshFaturamentoRecent(options?: { notifySuccess?: boolean }) {
   const notifySuccess = options?.notifySuccess !== false;
@@ -15,7 +33,9 @@ export function useRefreshFaturamentoRecent(options?: { notifySuccess?: boolean 
         void utils.faturamento.stats.invalidate();
         void utils.faturamento.porMes.invalidate();
         void utils.faturamento.mesFechadoCheck.invalidate();
+        void utils.clientes.list.invalidate();
       }
+      if (result.postSync) toastPostSyncAlerts(result.postSync);
       if (!notifySuccess) return;
       if (result.inserted > 0 && result.maxDepois) {
         toast.success(`Faturamento atualizado até ${formatCalendarDate(result.maxDepois)}`);
@@ -38,3 +58,5 @@ export function useRefreshFaturamentoRecent(options?: { notifySuccess?: boolean 
 
   return refresh;
 }
+
+export { toastPostSyncAlerts };

@@ -3,7 +3,6 @@
  */
 import * as db from "../db";
 import { importSystemCadastros } from "./system-cadastros-importer";
-import { seedSazonalidadeUniformeSeVazia } from "./desagregacao";
 
 const MARCAS_PADRAO = [
   "Adidas",
@@ -30,7 +29,7 @@ export type SeedMestresResult = {
   marcasCriadas: number;
   gestoresCriados: number;
   vinculosCriados: number;
-  sazonalidade: Awaited<ReturnType<typeof seedSazonalidadeUniformeSeVazia>>;
+  sazonalidade: { inserted: 0; skipped: true };
 };
 
 export async function seedDadosMestresOperacionais(options: {
@@ -100,30 +99,6 @@ export async function seedDadosMestresOperacionais(options: {
     }
   }
 
-  let sazonalidade = dryRun
-    ? { inserted: 0 }
-    : await seedSazonalidadeUniformeSeVazia();
-
-  // Se já existia sazonalidade parcial, completa marcas cadastradas sem curva
-  if (!dryRun) {
-    const marcas = await db.listMarcas();
-    const sazRows = await db.listSazonalidadeMarca();
-    const marcasComSaz = new Set(sazRows.map(r => (r.marcaNome || "").trim().toLowerCase()));
-    const pct = String(Math.round((1 / 12) * 1e6) / 1e6);
-    const missing: Array<{ marcaNome: string; mes: number; percentual: string; marcaId?: number }> = [];
-    for (const marca of marcas) {
-      const key = (marca.nome || "").trim().toLowerCase();
-      if (!key || marcasComSaz.has(key)) continue;
-      for (let mes = 1; mes <= 12; mes++) {
-        missing.push({ marcaNome: marca.nome, mes, percentual: pct, marcaId: marca.id });
-      }
-    }
-    if (missing.length > 0) {
-      await db.upsertSazonalidadeMarcaBatch(missing);
-      sazonalidade = { inserted: (sazonalidade.inserted || 0) + missing.length };
-    }
-  }
-
   return {
     dirPath: options.dirPath,
     dryRun,
@@ -131,6 +106,6 @@ export async function seedDadosMestresOperacionais(options: {
     marcasCriadas,
     gestoresCriados,
     vinculosCriados,
-    sazonalidade,
+    sazonalidade: { inserted: 0, skipped: true },
   };
 }

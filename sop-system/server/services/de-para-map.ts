@@ -133,6 +133,11 @@ export function resolveCodigoAtual(codigoOriginal: string, map: Map<string, stri
     atual = map.get(lookup)!;
     lookup = atual.toUpperCase();
   }
+  if (map.has(lookup) && seen.has(lookup)) {
+    console.warn(
+      `[de-para] Ciclo ao resolver "${codigoOriginal}" (parou em ${atual}). Revise o cadastro De-Para.`
+    );
+  }
   return atual;
 }
 
