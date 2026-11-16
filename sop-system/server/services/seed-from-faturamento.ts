@@ -113,9 +113,15 @@ async function loadDistinctClientes(): Promise<FatClienteRow[]> {
   return ((result[0] as unknown) as FatClienteRow[]) ?? [];
 }
 
+type AntigoProdutoRef = Pick<
+  InsertProduto,
+  "projetarEstatistica" | "tipoNegocio" | "grupo" | "linha" | "modelo" | "tipoEstoque"
+>;
+
 function buildProduto(
   row: FatProdutoRow,
   marcaIdByName: Map<string, number>,
+  herdar?: AntigoProdutoRef | null
 ): InsertProduto {
   const cod = clean(row.codMaterial)!;
   const desc = clean(row.descricaoItem) || cod;
@@ -133,12 +139,13 @@ function buildProduto(
     descricao: desc.slice(0, 300),
     marca: marca ?? undefined,
     marcaId: marcaId ?? undefined,
-    linha: linha ?? undefined,
-    grupo: grupo ?? undefined,
-    tipoNegocio,
-    tipoEstoque: tipoEstoque ?? "MTS",
+    linha: herdar?.linha ?? linha ?? undefined,
+    grupo: herdar?.grupo ?? grupo ?? undefined,
+    modelo: herdar?.modelo ?? undefined,
+    tipoNegocio: herdar?.tipoNegocio ?? tipoNegocio,
+    tipoEstoque: herdar?.tipoEstoque ?? tipoEstoque ?? "MTS",
     status: "ATIVO",
-    projetarEstatistica: true,
+    projetarEstatistica: herdar?.projetarEstatistica ?? true,
     unidade: "UN",
   };
 }
@@ -188,6 +195,23 @@ export async function seedProdutosClientesFromFaturamento(options?: {
     if (m.nome) marcaIdByName.set(m.nome.trim().toLowerCase(), m.id);
   }
 
+  const conn = await getDb();
+  const antigoPorNovo = new Map<string, (typeof existingProdutos)[number]>();
+  if (conn && !clientesOnly) {
+    const deParas = await conn.select().from(deParaCodigos);
+    const prodByKey = new Map<string, (typeof existingProdutos)[number]>();
+    for (const p of existingProdutos) {
+      if (p.codItem) prodByKey.set(p.codItem.trim().toUpperCase(), p);
+      if (p.codigo) prodByKey.set(p.codigo.trim().toUpperCase(), p);
+    }
+    for (const dp of deParas) {
+      const novo = dp.skuNovo.trim().toUpperCase();
+      const antigo = dp.skuAntigo.trim().toUpperCase();
+      const prodAntigo = prodByKey.get(antigo);
+      if (prodAntigo && !antigoPorNovo.has(novo)) antigoPorNovo.set(novo, prodAntigo);
+    }
+  }
+
   const produtosToCreate: InsertProduto[] = [];
   let produtosSkipped = 0;
   if (!clientesOnly) {
@@ -198,7 +222,18 @@ export async function seedProdutosClientesFromFaturamento(options?: {
         continue;
       }
       if (existingCodes.has(cod)) continue;
-      produtosToCreate.push(buildProduto(row, marcaIdByName));
+      const antigo = antigoPorNovo.get(cod.toUpperCase());
+      const herdar = antigo
+        ? ({
+            projetarEstatistica: antigo.projetarEstatistica ?? undefined,
+            tipoNegocio: antigo.tipoNegocio ?? undefined,
+            grupo: antigo.grupo ?? undefined,
+            linha: antigo.linha ?? undefined,
+            modelo: antigo.modelo ?? undefined,
+            tipoEstoque: antigo.tipoEstoque ?? undefined,
+          } satisfies AntigoProdutoRef)
+        : null;
+      produtosToCreate.push(buildProduto(row, marcaIdByName, herdar));
       existingCodes.add(cod);
     }
   }

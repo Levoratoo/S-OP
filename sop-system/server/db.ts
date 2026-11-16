@@ -1626,17 +1626,32 @@ export async function createDeParaCodigo(data: InsertDeParaCodigo) {
   if (!skuAntigo || !skuNovo || skuAntigo === skuNovo.toUpperCase()) {
     throw new Error("Relação De-Para inválida.");
   }
+  const { validateDeParaEdge, inheritProjetarFromAntigo } = await import(
+    "./services/de-para-validate"
+  );
+  await validateDeParaEdge(skuAntigo, skuNovo);
   const result = await db
     .insert(deParaCodigos)
     .values({ ...data, skuAntigo, skuNovo })
     .onDuplicateKeyUpdate({ set: { skuNovo } });
+  await inheritProjetarFromAntigo(skuAntigo, skuNovo);
   return { id: result[0].insertId };
 }
 
 export async function updateDeParaCodigo(id: number, data: Partial<InsertDeParaCodigo>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
+  const [current] = await db.select().from(deParaCodigos).where(eq(deParaCodigos.id, id)).limit(1);
+  if (!current) throw new Error("De-Para não encontrado.");
+  const skuAntigo = (data.skuAntigo ?? current.skuAntigo).trim().toUpperCase();
+  const skuNovo = (data.skuNovo ?? current.skuNovo).trim();
+  const { validateDeParaEdge, inheritProjetarFromAntigo } = await import(
+    "./services/de-para-validate"
+  );
+  const others = (await db.select().from(deParaCodigos)).filter(r => r.id !== id);
+  await validateDeParaEdge(skuAntigo, skuNovo, others);
   await db.update(deParaCodigos).set(data).where(eq(deParaCodigos.id, id));
+  await inheritProjetarFromAntigo(skuAntigo, skuNovo);
 }
 
 export async function deleteDeParaCodigo(id: number) {
@@ -1656,11 +1671,21 @@ export async function createDeParaCodigosBatch(data: InsertDeParaCodigo[]) {
     if (!skuAntigo || !skuNovo || skuAntigo === skuNovo.toUpperCase()) continue;
     normalized.set(skuAntigo, skuNovo);
   }
+  const { validateDeParaEdge, inheritProjetarFromAntigo } = await import(
+    "./services/de-para-validate"
+  );
+  const existing = await db.select().from(deParaCodigos);
+  const accPairs = existing.map(r => ({ skuAntigo: r.skuAntigo, skuNovo: r.skuNovo }));
   for (const [skuAntigo, skuNovo] of normalized) {
+    await validateDeParaEdge(skuAntigo, skuNovo, accPairs.filter(p => p.skuAntigo !== skuAntigo));
     await db
       .insert(deParaCodigos)
       .values({ skuAntigo, skuNovo })
       .onDuplicateKeyUpdate({ set: { skuNovo } });
+    await inheritProjetarFromAntigo(skuAntigo, skuNovo);
+    const existingIdx = accPairs.findIndex(p => p.skuAntigo === skuAntigo);
+    if (existingIdx >= 0) accPairs[existingIdx] = { skuAntigo, skuNovo };
+    else accPairs.push({ skuAntigo, skuNovo });
   }
   return { count: normalized.size };
 }

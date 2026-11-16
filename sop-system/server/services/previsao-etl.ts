@@ -27,6 +27,7 @@ import {
   previsoes,
 } from "../../drizzle/schema";
 import { loadDeParaMap, resolveCodigoAtual } from "./de-para-map";
+import { skuProjetarEfetivo } from "@shared/de-para-projetar";
 
 /** Erro de pré-condição do ETL (cliente deve corrigir dados — mapear para 4xx no tRPC). */
 export class PrevisaoEtlUserError extends Error {
@@ -881,7 +882,11 @@ export async function gerarBasesPrevisaoPython(options?: {
 
     // Excel: inner join skus_projetar — só entra quem está marcado para projetar.
     // Não filtrar INATIVO: Skus Projetar inclui SKUs inativos com histórico (Power Query).
-    if (!prod || prod.projetarEstatistica !== true || !isSkuAcabado(prod.codItem || prod.codigo || skuAtual || skuOriginal)) {
+    const skuCanon = (skuAtual || skuOriginal || prod?.codItem || prod?.codigo || "").trim();
+    const projetar = skuCanon
+      ? skuProjetarEfetivo(skuCanon, produtoByCodigo, deParaMap)
+      : false;
+    if (!prod || !projetar || !isSkuAcabado(prod.codItem || prod.codigo || skuAtual || skuOriginal)) {
       linhasSemSkuProjetar += 1;
       continue;
     }
@@ -928,9 +933,11 @@ export async function gerarBasesPrevisaoPython(options?: {
 
   // Garante 1 linha por SKU de Skus Projetar (mesmo sem faturamento no período).
   for (const prod of produtosRows) {
-    if (prod.projetarEstatistica !== true || !isSkuAcabado(prod.codItem || prod.codigo)) continue;
     const skuKey = (prod.codItem || prod.codigo || "").trim();
     if (!skuKey) continue;
+    const skuCanon = skuKey.toUpperCase();
+    if (!skuProjetarEfetivo(skuCanon, produtoByCodigo, deParaMap) || !isSkuAcabado(prod.codItem || prod.codigo))
+      continue;
     if (isDeParaAliasSku(skuKey, deParaMap)) continue;
     const tipo = prod.tipoEstoque || "MTS";
     const marca = prod.marca || "SEM-MARCA";
@@ -1021,10 +1028,22 @@ export async function gerarBasesPrevisaoPython(options?: {
     const prevAgg = new Map<string, Map<MonthKey, number>>();
     const produtosAll = await db.select().from(produtos);
     const byId = new Map(produtosAll.map(p => [p.id, p]));
+    const produtoByCodigoPrev = new Map<string, (typeof produtosAll)[number]>();
+    for (const p of produtosAll) {
+      if (p.codItem) produtoByCodigoPrev.set(p.codItem.trim().toUpperCase(), p);
+      if (p.codigo) produtoByCodigoPrev.set(p.codigo.trim().toUpperCase(), p);
+    }
 
     for (const p of prevRowsDb) {
       const prod = p.produtoId ? byId.get(p.produtoId) : undefined;
-      if (!prod || prod.projetarEstatistica !== true || !isSkuAcabado(prod.codItem || prod.codigo)) continue;
+      const skuKeyPrev = (prod?.codItem || prod?.codigo || "").trim();
+      if (
+        !prod ||
+        !skuKeyPrev ||
+        !skuProjetarEfetivo(skuKeyPrev, produtoByCodigoPrev, deParaMap) ||
+        !isSkuAcabado(prod.codItem || prod.codigo)
+      )
+        continue;
       if (marcasInativas.has(normalizeKey(prod.marca))) continue;
       if (isTipoOutros(prod.tipoEstoque, prod.tipoNegocio, prod.linha)) continue;
       const skuKey = (prod.codItem || prod.codigo || "").trim();

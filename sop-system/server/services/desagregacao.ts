@@ -30,6 +30,7 @@ import { resolvePlanoColab } from "@shared/plano-colab";
 import { normalizeTipoNegocioComercial } from "@shared/tipo-negocio";
 import { resolveProdutoFamilia } from "@shared/produto-familia";
 import { resolveGestorPorMarca } from "@shared/gestor-marca-resolve";
+import { isDeParaCanonicalTarget, skuProjetarEfetivo } from "@shared/de-para-projetar";
 
 export { getSeasonalityIndex } from "@shared/sku-fator-sazonalidade";
 
@@ -347,7 +348,12 @@ async function computeRateiosPorSku(now = new Date()) {
     if (!prod) continue;
     // Inclui SKUs não-projetar no mapa de rateio para fallback de grupos da Visão
     // que não têm nenhum item marcado em Skus Projetar.
-    if ((prod.status || "").toUpperCase() === "INATIVO") continue;
+    if (
+      (prod.status || "").toUpperCase() === "INATIVO" &&
+      !isDeParaCanonicalTarget(sku, deParaMap)
+    ) {
+      continue;
+    }
 
     const tipo = (prod.tipoEstoque || row.tipoEstoque || "MTS") as "MTS" | "MTO";
     const marca = prod.marca || row.marca || "SEM-MARCA";
@@ -377,7 +383,7 @@ async function computeRateiosPorSku(now = new Date()) {
         tipoEstoque: tipo,
         tipoNegocio,
         tipoMarcaLinha: tml,
-        projetar: prod.projetarEstatistica === true,
+        projetar: skuProjetarEfetivo(sku, byCode, deParaMap),
         valorVenda: prod.valorVenda,
         familia:
           (prod.familiaId ? familiaById.get(prod.familiaId) ?? null : null) ||

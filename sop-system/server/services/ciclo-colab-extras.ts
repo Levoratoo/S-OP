@@ -40,6 +40,7 @@ import {
 } from "@shared/consolidado-arquivo";
 import { resolveProdutoFamilia } from "@shared/produto-familia";
 import { resolveGestorPorMarca } from "@shared/gestor-marca-resolve";
+import { resolveValorVendaUnitario } from "@shared/preco-unitario";
 
 const MES_KEYS = ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12"] as const;
 
@@ -162,6 +163,8 @@ export async function syncPvFromCarteira(cicloId: number) {
     linha: string | null;
     tipoEstoque: "MTS" | "MTO";
     valorVenda: string | null;
+    receitaBruta: number;
+    quantidade: number;
     familia: string | null;
     gestor: string | null;
     meses: number[];
@@ -195,6 +198,8 @@ export async function syncPvFromCarteira(cicloId: number) {
       linha: prod.linha,
       tipoEstoque: prod.tipoEstoque === "MTO" ? "MTO" : "MTS",
       valorVenda: prod.valorVenda,
+      receitaBruta: toNum(ped.receitaBruta),
+      quantidade: toNum(ped.quantidade),
       familia: dimensionsByProductId.get(prod.id)?.familia ?? null,
       gestor: dimensionsByProductId.get(prod.id)?.gestor ?? null,
       meses,
@@ -222,7 +227,9 @@ export async function syncPvFromCarteira(cicloId: number) {
       tipoMarcaLinha: `${line.tipoEstoque}-${line.marca || "SEM-MARCA"}-${line.linha || "SEM-LINHA"}`,
       projetar: false,
       qtdeTotalEstatistica: "0",
-      valorVendaSnapshot: String(toNum(line.valorVenda)),
+      valorVendaSnapshot: String(
+        resolveValorVendaUnitario(line.valorVenda, line.receitaBruta, line.quantidade)
+      ),
       familiaSnapshot: line.familia,
       gestorSnapshot: line.gestor,
       crmCard: line.pedidoCodigo,
@@ -666,7 +673,8 @@ async function loadPrecoEGestorFaturamento(): Promise<PrecoGestorCache> {
   since.setUTCMonth(since.getUTCMonth() - 12);
   const sinceIso = since.toISOString().slice(0, 10);
 
-  const [precoResult, gestorResult] = await Promise.all([
+  const [precoResult, gestorResult, precoAllResult, gestorAllResult, carteiraPrecoResult, marcaGestorRows] =
+    await Promise.all([
     db.execute(sql`
       SELECT TRIM(codMaterial) AS sku, SUM(valorTotal) AS valor, SUM(qtd) AS qtd
       FROM faturamento
@@ -686,6 +694,41 @@ async function loadPrecoEGestorFaturamento(): Promise<PrecoGestorCache> {
         AND gestor IS NOT NULL AND TRIM(gestor) <> ''
       GROUP BY TRIM(marca), TRIM(gestor)
     `),
+    db.execute(sql`
+      SELECT TRIM(codMaterial) AS sku, SUM(valorTotal) AS valor, SUM(qtd) AS qtd
+      FROM faturamento
+      WHERE tipoFaturamento = 'SAIDA'
+        AND qtd > 0
+        AND valorTotal <> 0
+        AND codMaterial IS NOT NULL AND TRIM(codMaterial) <> ''
+      GROUP BY TRIM(codMaterial)
+    `),
+    db.execute(sql`
+      SELECT TRIM(marca) AS marca, TRIM(gestor) AS gestor, MAX(dataEmissao) AS lastEm
+      FROM faturamento
+      WHERE tipoFaturamento = 'SAIDA'
+        AND marca IS NOT NULL AND TRIM(marca) <> ''
+        AND gestor IS NOT NULL AND TRIM(gestor) <> ''
+      GROUP BY TRIM(marca), TRIM(gestor)
+    `),
+    db.execute(sql`
+      SELECT TRIM(p.codItem) AS sku, SUM(cp.receitaBruta) AS valor, SUM(cp.quantidade) AS qtd
+      FROM carteira_pedidos cp
+      INNER JOIN produtos p ON p.id = cp.produtoId
+      WHERE cp.quantidade > 0
+        AND cp.receitaBruta <> 0
+        AND p.codItem IS NOT NULL AND TRIM(p.codItem) <> ''
+      GROUP BY TRIM(p.codItem)
+    `),
+    db
+      .select({
+        marcaNome: marcas.nome,
+        gestorNome: gestores.nome,
+      })
+      .from(gestorMarca)
+      .innerJoin(marcas, eq(gestorMarca.marcaId, marcas.id))
+      .innerJoin(gestores, eq(gestorMarca.gestorId, gestores.id))
+      .where(eq(gestorMarca.ativo, true)),
   ]);
 
   const priceAcc = new Map<string, { valor: number; qtd: number }>();
@@ -702,6 +745,27 @@ async function loadPrecoEGestorFaturamento(): Promise<PrecoGestorCache> {
     if (acc.qtd > 0) precoBySku.set(sku, Math.round((acc.valor / acc.qtd) * 10000) / 10000);
   }
 
+  const priceAllAcc = new Map<string, { valor: number; qtd: number }>();
+  for (const row of (precoAllResult[0] as unknown as Array<{ sku: string; valor: unknown; qtd: unknown }>) ?? []) {
+    const sku = resolveCodigoAtual(String(row.sku || ""), dePara).trim().toUpperCase();
+    if (!sku) continue;
+    const acc = priceAllAcc.get(sku) ?? { valor: 0, qtd: 0 };
+    acc.valor += toNum(row.valor);
+    acc.qtd += toNum(row.qtd);
+    priceAllAcc.set(sku, acc);
+  }
+  for (const [sku, acc] of priceAllAcc) {
+    if (precoBySku.has(sku) || acc.qtd <= 0) continue;
+    precoBySku.set(sku, Math.round((acc.valor / acc.qtd) * 10000) / 10000);
+  }
+  for (const row of (carteiraPrecoResult[0] as unknown as Array<{ sku: string; valor: unknown; qtd: unknown }>) ?? []) {
+    const sku = String(row.sku || "").trim().toUpperCase();
+    const q = toNum(row.qtd);
+    const v = toNum(row.valor);
+    if (!sku || precoBySku.has(sku) || q <= 0) continue;
+    precoBySku.set(sku, Math.round((v / q) * 10000) / 10000);
+  }
+
   const gestorByMarca = new Map<string, string>();
   const gestorCount = new Map<string, number>();
   for (const row of (gestorResult[0] as unknown as Array<{ marca: string; gestor: string; n: unknown }>) ?? []) {
@@ -713,6 +777,25 @@ async function loadPrecoEGestorFaturamento(): Promise<PrecoGestorCache> {
       gestorCount.set(key, n);
       gestorByMarca.set(key, nome);
     }
+  }
+  const gestorLastEm = new Map<string, { gestor: string; last: number }>();
+  for (const row of (gestorAllResult[0] as unknown as Array<{ marca: string; gestor: string; lastEm: unknown }>) ?? []) {
+    const key = normKey(String(row.marca || ""));
+    const nome = String(row.gestor || "").trim();
+    if (!key || !nome || gestorByMarca.has(key)) continue;
+    const d = new Date(String(row.lastEm));
+    const t = Number.isNaN(d.getTime()) ? 0 : d.getTime();
+    const prev = gestorLastEm.get(key);
+    if (!prev || t > prev.last) gestorLastEm.set(key, { gestor: nome, last: t });
+  }
+  for (const [key, entry] of gestorLastEm) {
+    if (!gestorByMarca.has(key)) gestorByMarca.set(key, entry.gestor);
+  }
+  for (const row of marcaGestorRows) {
+    const key = normKey(row.marcaNome || "");
+    const nome = (row.gestorNome || "").trim();
+    if (!key || !nome || gestorByMarca.has(key)) continue;
+    gestorByMarca.set(key, nome);
   }
 
   precoGestorCache = { at: Date.now(), precoBySku, gestorByMarca };
