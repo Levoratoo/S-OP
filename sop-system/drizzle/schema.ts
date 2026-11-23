@@ -804,6 +804,10 @@ export const cicloComercialItens = mysqlTable("ciclo_comercial_itens", {
   crmCard: varchar("crmCard", { length: 120 }),
   crmTipo: varchar("crmTipo", { length: 40 }),
   crmTemperatura: varchar("crmTemperatura", { length: 20 }),
+  /** Modalidade do Excel CRM (Repetição, Recompra…). */
+  crmModalidade: varchar("crmModalidade", { length: 200 }),
+  /** Tipo do Excel CRM (PRG, JIT (MTO)…). */
+  crmTipoNegocio: varchar("crmTipoNegocio", { length: 40 }),
   crmCliente: varchar("crmCliente", { length: 160 }),
   crmOrcamento: decimal("crmOrcamento", { precision: 15, scale: 2 }),
   origem: mysqlEnum("origem", ["ESTATISTICA", "MANUAL", "CRM", "PV"]).default("ESTATISTICA").notNull(),

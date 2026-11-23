@@ -1059,13 +1059,11 @@ export const appRouter = router({
               "Existem SKUs sem preço de venda: " + resumoRs.skusSemPreco.slice(0, 20).join(", "),
           });
         }
-        const crmIncompletos = itens.filter(
-          item => item.planoColab === "CRM" && (!item.crmTipo || !item.crmTemperatura)
-        );
+        const crmIncompletos = itens.filter(item => item.planoColab === "CRM" && !item.crmTipo);
         if (crmIncompletos.length > 0) {
           throw new TRPCError({
             code: "PRECONDITION_FAILED",
-            message: `Reimporte ${crmIncompletos.length} itens CRM sem tipo/temperatura.`,
+            message: `Reimporte ${crmIncompletos.length} itens CRM sem classificação (Colaboração/Aposta).`,
           });
         }
         await db.updateCicloComercial(input.id, { status: "FECHADO" });

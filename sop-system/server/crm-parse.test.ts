@@ -4,8 +4,9 @@ import {
   CRM_EXCEL_HEADERS,
   CrmExcelLayoutError,
   parseCrmExcel,
+  skuFromProdutoCrm,
   validateCrmExcelHeaders,
-} from "../client/src/pages/demanda/parse-crm-excel";
+} from "@shared/crm-excel-parse";
 
 function buildCrmBuffer(headers: string[], rows: unknown[][]) {
   const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
@@ -14,50 +15,91 @@ function buildCrmBuffer(headers: string[], rows: unknown[][]) {
   return XLSX.write(wb, { type: "array", bookType: "xlsx" }) as ArrayBuffer;
 }
 
-describe("parseCrmExcel layout TI", () => {
-  it("aceita exatamente as 15 colunas na ordem oficial", () => {
-    expect(() => validateCrmExcelHeaders([...CRM_EXCEL_HEADERS])).not.toThrow();
+const HEADERS_PEDRO = [...CRM_EXCEL_HEADERS];
+
+describe("parseCrmExcel layout Pedro", () => {
+  it("aceita cabeçalho oficial com coluna Tp", () => {
+    expect(() => validateCrmExcelHeaders([...HEADERS_PEDRO])).not.toThrow();
+    const withTemperatura = [...HEADERS_PEDRO];
+    withTemperatura[14] = "Temperatura";
+    expect(() => validateCrmExcelHeaders(withTemperatura)).not.toThrow();
   });
 
-  it("rejeita ordem ou nomes diferentes", () => {
-    const swapped = [...CRM_EXCEL_HEADERS];
-    const tmp = swapped[0]!;
-    swapped[0] = swapped[1]!;
-    swapped[1] = tmp;
-    expect(() => validateCrmExcelHeaders(swapped)).toThrow(CrmExcelLayoutError);
-    expect(() => validateCrmExcelHeaders(CRM_EXCEL_HEADERS.slice(0, 10))).toThrow(
-      CrmExcelLayoutError
+  it("rejeita número de colunas errado", () => {
+    expect(() => validateCrmExcelHeaders(HEADERS_PEDRO.slice(0, 10))).toThrow(CrmExcelLayoutError);
+  });
+
+  it("extrai SKU na primeira ocorrência e descrição", () => {
+    expect(skuFromProdutoCrm("80.04.000125 : 80.04.000125 - Sacola M Nova").sku).toBe(
+      "80.04.000125"
     );
+    expect(skuFromProdutoCrm("80.02.000876-Sacola M - The Cosmetics").sku).toBe("80.02.000876");
   });
 
-  it("mapeia Produto, classificação e Qtd Mês", () => {
-    const buffer = buildCrmBuffer([...CRM_EXCEL_HEADERS], [
+  it("mapeia linhas de exemplo do CRM", () => {
+    const buffer = buildCrmBuffer(HEADERS_PEDRO, [
       [
-        "Adidas",
-        "Gestor A",
-        "80.03.002154-Sacola",
-        10,
-        100,
-        1000,
-        "OR-123",
-        2,
-        50,
-        500,
-        "15/03/2026",
+        "Cosmetics Company",
+        "Anelysie",
+        "80.02.000876-Sacola M - The Cosmetics Company Store FSC misto",
+        3.23,
+        10000,
+        32300,
+        58010,
+        1,
+        10000,
+        32300,
+        new Date(2027, 7, 6),
+        "RECOMPRA/REATIVAÇÃO (podemos perder o pedido)",
         "PRG",
-        "JIT",
         "Colaboração",
+        "Frio",
+      ],
+      [
+        "American Crime",
+        "Anna Carini",
+        "80.06.001473-SKU GENÉRICO - SACOLA AUTOMÁTICA - P",
+        1.1,
+        10000,
+        11000,
+        63028,
+        1,
+        10000,
+        11000,
+        new Date(2027, 0, 11),
+        "RECOMPRA/REATIVAÇÃO (podemos perder o pedido)",
+        "PRG",
+        "Aposta",
         "Quente",
       ],
+      [
+        "Karsten",
+        "Anna Carini",
+        "80.06.001507-Sacola G - Karsten FSC Misto",
+        2.67,
+        10000,
+        26700,
+        "",
+        1,
+        10000,
+        26700,
+        new Date(2027, 10, 10),
+        "RECOMPRA/REATIVAÇÃO (podemos perder o pedido)",
+        "PRG",
+        "Colaboração",
+        "",
+      ],
     ]);
-    const rows = parseCrmExcel(buffer);
-    expect(rows.rows).toHaveLength(1);
-    expect(rows.rows[0]?.sku).toBe("80.03.002154");
-    expect(rows.rows[0]?.gestor).toBe("Gestor A");
-    expect(rows.rows[0]?.tipo).toBe("Colaboração");
-    expect(rows.rows[0]?.qtdMes).toBe(50);
-    expect(rows.rows[0]?.dataFaturamento).toBe("2026-03-15");
-    expect(rows.rows[0]?.modalidade).toBe("PRG");
-    expect(rows.rows[0]?.tipoNegocio).toBe("JIT");
+    const { rows } = parseCrmExcel(buffer);
+    expect(rows).toHaveLength(3);
+    expect(rows[0]?.sku).toBe("80.02.000876");
+    expect(rows[0]?.tipo).toBe("Colaboração");
+    expect(rows[0]?.tipoNegocio).toBe("PRG");
+    expect(rows[0]?.temperatura).toBe("Frio");
+    expect(rows[0]?.dataFaturamento).toBe("2027-08-06");
+    expect(rows[0]?.qtdMes).toBe(10000);
+    expect(rows[1]?.tipo).toBe("Aposta");
+    expect(rows[2]?.temperatura).toBe("");
+    expect(rows[2]?.orcamento).toBe(0);
   });
 });

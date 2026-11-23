@@ -287,6 +287,7 @@ export type CrmImportRow = {
   qtdMes?: number;
   valorVenda?: number;
   modalidade?: string;
+  tipoNegocio?: string;
   m1?: number;
   m2?: number;
   m3?: number;
@@ -355,11 +356,14 @@ export async function importCrmParaCiclo(cicloId: number, rows: CrmImportRow[]) 
     gestor?: string;
     crmTipo: string;
     crmTemperatura: string;
+    crmModalidade: string;
+    crmTipoNegocio: string;
     orcamento: number;
     valorVenda: number;
     meses: number[];
   };
   const byKey = new Map<string, Agg>();
+  let foraHorizonte = 0;
 
   for (const row of rows) {
     const skuRaw = (row.sku || "").trim();
@@ -383,7 +387,7 @@ export async function importCrmParaCiclo(cicloId: number, rows: CrmImportRow[]) 
       continue;
     }
 
-    const key = `${sku.toUpperCase()}||${crmTipo}||${crmTemperatura}`;
+    const key = `${sku.toUpperCase()}||${crmTipo}`;
     if (!byKey.has(key)) {
       byKey.set(key, {
         sku,
@@ -395,6 +399,8 @@ export async function importCrmParaCiclo(cicloId: number, rows: CrmImportRow[]) 
         gestor: row.gestor,
         crmTipo,
         crmTemperatura,
+        crmModalidade: (row.modalidade || "").trim(),
+        crmTipoNegocio: (row.tipoNegocio || "").trim(),
         orcamento: 0,
         valorVenda: 0,
         meses: Array(12).fill(0),
@@ -408,6 +414,9 @@ export async function importCrmParaCiclo(cicloId: number, rows: CrmImportRow[]) 
     if (row.descricao) agg.descricao = row.descricao;
     if (row.card) agg.card = row.card;
     if (row.cliente) agg.cliente = row.cliente;
+    if (crmTemperatura && !agg.crmTemperatura) agg.crmTemperatura = crmTemperatura;
+    if (row.modalidade?.trim()) agg.crmModalidade = row.modalidade.trim();
+    if (row.tipoNegocio?.trim()) agg.crmTipoNegocio = row.tipoNegocio.trim();
 
     let hasMonthCols = false;
     for (let i = 0; i < 12; i++) {
@@ -428,6 +437,7 @@ export async function importCrmParaCiclo(cicloId: number, rows: CrmImportRow[]) 
           d.getMonth() + 1
         );
         if (idx == null) {
+          foraHorizonte += 1;
           avisos.push(`${skuRaw}: data ${row.dataFaturamento} fora do horizonte do ciclo`);
         } else {
           agg.meses[idx] += qMes;
@@ -494,7 +504,9 @@ export async function importCrmParaCiclo(cicloId: number, rows: CrmImportRow[]) 
         null,
       crmCard: agg.card?.trim() || null,
       crmTipo: agg.crmTipo,
-      crmTemperatura: agg.crmTemperatura,
+      crmTemperatura: agg.crmTemperatura || null,
+      crmModalidade: agg.crmModalidade || null,
+      crmTipoNegocio: agg.crmTipoNegocio || null,
       crmCliente: agg.cliente?.trim() || null,
       crmOrcamento: String(agg.orcamento),
       origem: "CRM",
@@ -502,7 +514,12 @@ export async function importCrmParaCiclo(cicloId: number, rows: CrmImportRow[]) 
   }
 
   if (!itens.length) {
-    return { itensCriados: 0, erros: erros.slice(0, 100), avisos: avisos.slice(0, 50) };
+    return {
+      itensCriados: 0,
+      erros: erros.slice(0, 100),
+      avisos: avisos.slice(0, 50),
+      foraHorizonte,
+    };
   }
 
   await db.transaction(async tx => {
@@ -520,7 +537,12 @@ export async function importCrmParaCiclo(cicloId: number, rows: CrmImportRow[]) 
     }
   });
 
-  return { itensCriados: itens.length, erros: erros.slice(0, 100), avisos: avisos.slice(0, 50) };
+  return {
+    itensCriados: itens.length,
+    erros: erros.slice(0, 100),
+    avisos: avisos.slice(0, 50),
+    foraHorizonte,
+  };
 }
 
 export async function getPvVsCrmDetalhado(cicloId: number) {

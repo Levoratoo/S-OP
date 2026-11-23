@@ -1,4 +1,4 @@
-/** Layout CRM Ciclo (15 colunas, ordem fixa). */
+/** Layout CRM Ciclo (15 colunas — modelo Pedro / PipeDrive). */
 export const CRM_EXCEL_HEADERS = [
   "Marca",
   "Gestor",
@@ -14,8 +14,43 @@ export const CRM_EXCEL_HEADERS = [
   "Modalidade",
   "Tipo",
   "ColaboracaoAposta/Oportunidade",
-  "Temperatura",
+  "Tp",
 ] as const;
+
+export type CrmExcelField =
+  | "marca"
+  | "gestor"
+  | "produto"
+  | "valorVenda"
+  | "qtdeTotal"
+  | "valorTotal"
+  | "calculoOr"
+  | "qtdeEntregas"
+  | "qtdMes"
+  | "valorTotalMes"
+  | "dataFaturamento"
+  | "modalidade"
+  | "tipoNegocio"
+  | "classificacao"
+  | "temperatura";
+
+export const CRM_EXCEL_FIELD_ORDER: CrmExcelField[] = [
+  "marca",
+  "gestor",
+  "produto",
+  "valorVenda",
+  "qtdeTotal",
+  "valorTotal",
+  "calculoOr",
+  "qtdeEntregas",
+  "qtdMes",
+  "valorTotalMes",
+  "dataFaturamento",
+  "modalidade",
+  "tipoNegocio",
+  "classificacao",
+  "temperatura",
+];
 
 export class CrmExcelLayoutError extends Error {
   constructor(message: string) {
@@ -30,29 +65,84 @@ export function normalizeCrmHeader(value: unknown) {
     .normalize("NFD")
     .replace(/\p{M}/gu, "")
     .toLowerCase()
-    .replace(/\s+/g, " ");
+    .replace(/\s+/g, " ")
+    .replace(/[.$]/g, "");
 }
 
-const EXPECTED_NORMALIZED = CRM_EXCEL_HEADERS.map(normalizeCrmHeader);
+function headerMatchesField(normalized: string, field: CrmExcelField): boolean {
+  switch (field) {
+    case "marca":
+      return normalized === "marca";
+    case "gestor":
+      return normalized === "gestor";
+    case "produto":
+      return normalized === "produto";
+    case "valorVenda":
+      return normalized === "r venda" || normalized === "rs venda" || normalized === "valor venda";
+    case "qtdeTotal":
+      return normalized === "qtde total" || normalized === "qtd total";
+    case "valorTotal":
+      return normalized === "r total" || normalized === "rs total" || normalized === "valor total";
+    case "calculoOr":
+      return normalized === "calculo or" || normalized === "cálculo or";
+    case "qtdeEntregas":
+      return normalized === "qtde entregas" || normalized === "qtd entregas";
+    case "qtdMes":
+      return normalized === "qtd mes" || normalized === "qtd mês" || normalized === "qtdmes";
+    case "valorTotalMes":
+      return normalized === "r total mes" || normalized === "r total mês" || normalized === "rs total mes";
+    case "dataFaturamento":
+      return normalized === "data de faturamento" || normalized === "data faturamento";
+    case "modalidade":
+      return normalized === "modalidade";
+    case "tipoNegocio":
+      return normalized === "tipo";
+    case "classificacao":
+      return (
+        normalized === "colaboracaoaposta/oportunidade" ||
+        normalized === "colaboracao aposta/oportunidade" ||
+        (normalized.includes("colaboracao") && normalized.includes("oportunidade"))
+      );
+    case "temperatura":
+      return normalized === "tp" || normalized === "temperatura";
+    default:
+      return false;
+  }
+}
 
-export function validateCrmExcelHeaders(headers: string[]) {
+/** Índice de coluna (0-based) para cada campo canônico; falha se layout incompleto ou duplicado. */
+export function resolveCrmColumnMap(headers: string[]): Map<CrmExcelField, number> {
   const trimmed = headers.map(h => String(h ?? "").trim());
   if (trimmed.length !== CRM_EXCEL_HEADERS.length) {
     throw new CrmExcelLayoutError(
-      `O CRM deve ter exatamente ${CRM_EXCEL_HEADERS.length} colunas nesta ordem: ${CRM_EXCEL_HEADERS.join(", ")}. Encontradas: ${trimmed.length}.`
+      `O CRM deve ter exatamente ${CRM_EXCEL_HEADERS.length} colunas. Encontradas: ${trimmed.length}.`
     );
   }
-  const mismatches: string[] = [];
-  for (let i = 0; i < CRM_EXCEL_HEADERS.length; i++) {
-    const got = normalizeCrmHeader(trimmed[i]);
-    const expected = EXPECTED_NORMALIZED[i]!;
-    if (got !== expected) {
-      mismatches.push(`coluna ${i + 1}: esperado "${CRM_EXCEL_HEADERS[i]}", recebido "${trimmed[i]}"`);
+  const map = new Map<CrmExcelField, number>();
+  const used = new Set<number>();
+  for (let i = 0; i < trimmed.length; i++) {
+    const norm = normalizeCrmHeader(trimmed[i]);
+    for (const field of CRM_EXCEL_FIELD_ORDER) {
+      if (!headerMatchesField(norm, field)) continue;
+      if (map.has(field)) {
+        throw new CrmExcelLayoutError(`Coluna duplicada para “${field}” no cabeçalho CRM.`);
+      }
+      map.set(field, i);
+      used.add(i);
+      break;
     }
   }
-  if (mismatches.length) {
+  const missing = CRM_EXCEL_FIELD_ORDER.filter(f => !map.has(f));
+  if (missing.length) {
     throw new CrmExcelLayoutError(
-      `Layout CRM inválido. ${mismatches.join("; ")}. Ordem esperada: ${CRM_EXCEL_HEADERS.join(" | ")}.`
+      `Layout CRM inválido. Colunas não reconhecidas: ${missing.join(", ")}. ` +
+        `Cabeçalho recebido: ${trimmed.join(" | ")}.`
     );
   }
+  return map;
+}
+
+/** Valida cabeçalho tolerante (sinônimos, acentos, Tp/Temperatura). */
+export function validateCrmExcelHeaders(headers: string[]) {
+  resolveCrmColumnMap(headers);
 }

@@ -131,6 +131,22 @@ export default function Colaboracoes() {
   const { data: produtosCarteira } = trpc.produtos.list.useQuery(undefined, {
     enabled: abaGrade === "PV_MTO",
   });
+  const { data: produtosCadastro } = trpc.produtos.list.useQuery();
+  const descricaoPorSku = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of produtosCadastro ?? []) {
+      const text = (p.descricao || p.nome || "").trim();
+      if (!text) continue;
+      if (p.codItem) map.set(p.codItem.trim().toUpperCase(), text);
+      if (p.codigo) map.set(p.codigo.trim().toUpperCase(), text);
+    }
+    return map;
+  }, [produtosCadastro]);
+  const descricaoDoItem = (item: { sku: string; descricao?: string | null }) => {
+    const fromItem = (item.descricao || "").trim();
+    if (fromItem) return fromItem;
+    return descricaoPorSku.get((item.sku || "").trim().toUpperCase()) || "—";
+  };
   const { data: clientesCarteira } = trpc.clientes.list.useQuery(undefined, {
     enabled: abaGrade === "PV_MTO",
   });
@@ -193,7 +209,13 @@ export default function Colaboracoes() {
   const importCrm = trpc.cicloComercial.importCrm.useMutation({
     onSuccess: result => {
       toast.success(`CRM importado: ${result.itensCriados} itens.`);
-      if (result.avisos.length) toast.message(`${result.avisos.length} avisos de validação`);
+      if (result.foraHorizonte > 0) {
+        toast.message(
+          `${result.foraHorizonte} linha(s) com data fora do horizonte do ciclo (ignoradas).`
+        );
+      } else if (result.avisos.length) {
+        toast.message(`${result.avisos.length} aviso(s) na importação`);
+      }
       if (result.erros.length) toast.error(`${result.erros.length} erros — confira SKUs`);
       utils.cicloComercial.itens.invalidate();
       utils.cicloComercial.consolidado.invalidate();
@@ -279,7 +301,8 @@ export default function Colaboracoes() {
 
   const produtoLabel = (produtoId: number) => {
     const p = produtosCarteira?.find(x => x.id === produtoId);
-    return p?.nome || p?.codItem || p?.codigo || `Produto ${produtoId}`;
+    const desc = (p?.descricao || p?.nome || "").trim();
+    return desc || p?.codItem || p?.codigo || `Produto ${produtoId}`;
   };
 
   const clienteLabel = (clienteId: number | null) =>
@@ -585,7 +608,7 @@ export default function Colaboracoes() {
                   <div className="w-64 space-y-1">
                     <Label>Buscar</Label>
                     <Input
-                      placeholder="SKU, marca, linha..."
+                      placeholder="SKU, descrição, linha..."
                       value={search}
                       onChange={e => setSearch(e.target.value)}
                     />
@@ -642,7 +665,7 @@ export default function Colaboracoes() {
                                 <TableHead className="sticky left-0 z-20 bg-background min-w-[120px]">
                                   SKU
                                 </TableHead>
-                                <TableHead>Marca</TableHead>
+                                <TableHead className="min-w-[200px]">Descrição</TableHead>
                                 {MESES_CURTO.map((m, i) => (
                                   <TableHead key={`r25-${i}`} className="text-right text-xs text-muted-foreground">
                                     {m}/25
@@ -698,7 +721,12 @@ export default function Colaboracoes() {
                                           ) : null}
                                         </span>
                                       </TableCell>
-                                      <TableCell className="max-w-[100px] truncate">{item.marca}</TableCell>
+                                      <TableCell
+                                        className="max-w-[220px] truncate"
+                                        title={descricaoDoItem(item)}
+                                      >
+                                        {descricaoDoItem(item)}
+                                      </TableCell>
                                       {r25.map((q, i) => (
                                         <TableCell key={`r25-${i}`} className="p-1 text-right text-muted-foreground tabular-nums">
                                           {q ? formatNum(q) : "·"}
@@ -756,7 +784,7 @@ export default function Colaboracoes() {
                                 <TableRow>
                                   <TableHead>Código</TableHead>
                                   <TableHead>Competência</TableHead>
-                                  <TableHead>Produto</TableHead>
+                                  <TableHead className="min-w-[200px]">Descrição</TableHead>
                                   <TableHead>Cliente</TableHead>
                                   <TableHead className="text-right">Quantidade</TableHead>
                                   <TableHead className="text-right">Receita</TableHead>
@@ -780,7 +808,12 @@ export default function Colaboracoes() {
                                         {item.codigo}/{item.sequencia}
                                       </TableCell>
                                       <TableCell>{formatDataBr(item.competencia)}</TableCell>
-                                      <TableCell>{produtoLabel(item.produtoId)}</TableCell>
+                                      <TableCell
+                                        className="max-w-[240px] truncate"
+                                        title={produtoLabel(item.produtoId)}
+                                      >
+                                        {produtoLabel(item.produtoId)}
+                                      </TableCell>
                                       <TableCell>{clienteLabel(item.clienteId)}</TableCell>
                                       <TableCell className="text-right tabular-nums">
                                         {Number(item.quantidade || 0).toLocaleString("pt-BR")}
@@ -807,8 +840,14 @@ export default function Colaboracoes() {
                             <TableHeader>
                               <TableRow>
                                 <TableHead>SKU</TableHead>
+                                <TableHead className="min-w-[180px]">Descrição</TableHead>
                                 <TableHead>Marca</TableHead>
-                                <TableHead>Linha</TableHead>
+                                <TableHead>Gestor</TableHead>
+                                <TableHead className="min-w-[140px]">Modalidade</TableHead>
+                                <TableHead>Tipo</TableHead>
+                                <TableHead>Classif.</TableHead>
+                                <TableHead>Tp</TableHead>
+                                <TableHead className="text-right">R$ Venda</TableHead>
                                 {MES_KEYS.map((_, i) => (
                                   <TableHead key={i}>{cicloMesLabel(i)}</TableHead>
                                 ))}
@@ -818,7 +857,7 @@ export default function Colaboracoes() {
                             <TableBody>
                               {filteredItens.length === 0 ? (
                                 <TableRow>
-                                  <TableCell colSpan={16} className="text-center text-muted-foreground">
+                                  <TableCell colSpan={24} className="text-center text-muted-foreground">
                                     Nenhum card CRM. Importe o Excel para preencher a grade.
                                   </TableCell>
                                 </TableRow>
@@ -837,8 +876,29 @@ export default function Colaboracoes() {
                                       <TableCell className="max-w-[140px] truncate font-medium">
                                         {item.sku}
                                       </TableCell>
-                                      <TableCell>{item.marca}</TableCell>
-                                      <TableCell>{item.linha}</TableCell>
+                                      <TableCell
+                                        className="max-w-[200px] truncate"
+                                        title={descricaoDoItem(item)}
+                                      >
+                                        {descricaoDoItem(item)}
+                                      </TableCell>
+                                      <TableCell>{item.marca || "—"}</TableCell>
+                                      <TableCell className="max-w-[120px] truncate" title={item.gestorSnapshot || ""}>
+                                        {item.gestorSnapshot || "—"}
+                                      </TableCell>
+                                      <TableCell className="max-w-[160px] truncate text-xs" title={(item as { crmModalidade?: string }).crmModalidade || ""}>
+                                        {(item as { crmModalidade?: string }).crmModalidade || "—"}
+                                      </TableCell>
+                                      <TableCell className="text-xs">{(item as { crmTipoNegocio?: string }).crmTipoNegocio || "—"}</TableCell>
+                                      <TableCell className="text-xs">{item.crmTipo || "—"}</TableCell>
+                                      <TableCell className="text-xs">{item.crmTemperatura || "—"}</TableCell>
+                                      <TableCell className="text-right tabular-nums text-xs">
+                                        {Number(item.valorVendaSnapshot || 0) > 0
+                                          ? Number(item.valorVendaSnapshot).toLocaleString("pt-BR", {
+                                              minimumFractionDigits: 2,
+                                            })
+                                          : "—"}
+                                      </TableCell>
                                       {MES_KEYS.map(key => (
                                         <TableCell key={key} className="p-1">
                                           <Input
