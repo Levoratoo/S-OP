@@ -1035,8 +1035,7 @@ export const appRouter = router({
         if (ciclo.status === "FECHADO") {
           return { status: "FECHADO" as const };
         }
-        const [pvCrm, resumoRs, itens] = await Promise.all([
-          getPvVsCrmDetalhado(input.id),
+        const [resumoRs, itens] = await Promise.all([
           getResumoRs(input.id),
           db.listCicloComercialItens(input.id),
         ]);
@@ -1044,12 +1043,6 @@ export const appRouter = router({
           throw new TRPCError({
             code: "PRECONDITION_FAILED",
             message: "O ciclo não possui itens para fechar.",
-          });
-        }
-        if (pvCrm.sobrepostos > 0) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message: `Corrija ${pvCrm.sobrepostos} sobreposições PV x CRM antes de fechar.`,
           });
         }
         if (resumoRs.skusSemPreco.length > 0) {

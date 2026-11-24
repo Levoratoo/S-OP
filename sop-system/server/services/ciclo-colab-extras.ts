@@ -23,6 +23,8 @@ import {
   type InsertCicloComercialItem,
 } from "../../drizzle/schema";
 import { loadDeParaMap, resolveCodigoAtual } from "./de-para-map";
+import { isCrmSkuCodigoValido } from "@shared/crm-import-helpers";
+import { ensureProdutoFromCrmImport } from "./crm-produto-auto";
 import { carteiraPvAbertoWhere } from "./carteira-pv-aberto";
 import {
   cicloHorizonCalendar,
@@ -340,11 +342,10 @@ export async function importCrmParaCiclo(cicloId: number, rows: CrmImportRow[]) 
 
   const { byCode, dimensionsByProductId } = await loadProdutoMaps();
   const dePara = await loadDeParaMap();
-  const existentes = await listCicloComercialItens(cicloId, "PV_MTO");
-  const pvSkus = new Set(existentes.map(i => i.sku.toUpperCase()));
 
   const erros: string[] = [];
   const avisos: string[] = [];
+  const skusCriados: string[] = [];
 
   type Agg = {
     sku: string;
@@ -372,6 +373,10 @@ export async function importCrmParaCiclo(cicloId: number, rows: CrmImportRow[]) 
       continue;
     }
     const sku = resolveCodigoAtual(skuRaw, dePara);
+    if (!isCrmSkuCodigoValido(sku)) {
+      avisos.push(`${skuRaw}: sem código SKU válido (NN.NN.NNNNNN); linha ignorada`);
+      continue;
+    }
     const crmTipo = normalizeCrmTipo(row.tipo || "");
     const crmTemperatura = (row.temperatura || "")
       .trim()
@@ -450,10 +455,24 @@ export async function importCrmParaCiclo(cicloId: number, rows: CrmImportRow[]) 
 
   const itens: InsertCicloComercialItem[] = [];
   for (const agg of Array.from(byKey.values())) {
-    const prod = byCode.get(agg.sku.toUpperCase()) || byCode.get(agg.skuRaw.toUpperCase());
+    let prod = byCode.get(agg.sku.toUpperCase()) || byCode.get(agg.skuRaw.toUpperCase());
     if (!prod) {
-      erros.push(`SKU não cadastrado: ${agg.skuRaw}`);
-      continue;
+      const ensured = await ensureProdutoFromCrmImport({
+        sku: agg.sku,
+        descricao: agg.descricao,
+        marca: agg.marca,
+        gestor: agg.gestor,
+        valorVenda: agg.valorVenda,
+        tipoNegocioExcel: agg.crmTipoNegocio,
+      });
+      if (ensured.produto) {
+        prod = ensured.produto;
+        byCode.set(agg.sku.toUpperCase(), prod);
+        if (ensured.created) skusCriados.push(agg.sku);
+      } else {
+        erros.push(`SKU não cadastrado: ${agg.skuRaw}`);
+        continue;
+      }
     }
     const generic =
       /generico|genérico/i.test(agg.sku) ||
@@ -466,11 +485,6 @@ export async function importCrmParaCiclo(cicloId: number, rows: CrmImportRow[]) 
       erros.push(`${agg.sku}: aposta com SKU genérico exige orçamento`);
       continue;
     }
-    if (pvSkus.has(agg.sku.toUpperCase())) {
-      erros.push(`${agg.sku}: sobreposição com PV_MTO`);
-      continue;
-    }
-
     const meses = emptyMeses();
     let total = 0;
     for (let i = 0; i < 12; i++) {
@@ -516,6 +530,7 @@ export async function importCrmParaCiclo(cicloId: number, rows: CrmImportRow[]) 
   if (!itens.length) {
     return {
       itensCriados: 0,
+      skusCriados,
       erros: erros.slice(0, 100),
       avisos: avisos.slice(0, 50),
       foraHorizonte,
@@ -539,6 +554,7 @@ export async function importCrmParaCiclo(cicloId: number, rows: CrmImportRow[]) 
 
   return {
     itensCriados: itens.length,
+    skusCriados,
     erros: erros.slice(0, 100),
     avisos: avisos.slice(0, 50),
     foraHorizonte,

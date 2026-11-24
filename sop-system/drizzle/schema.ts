@@ -192,6 +192,8 @@ export const produtos = mysqlTable("produtos", {
   unidade: varchar("unidade", { length: 20 }).default("UN"),
   /** Se false, SKU não entra na estatística (usa projeção comercial/cliente). */
   projetarEstatistica: boolean("projetarEstatistica").default(true).notNull(),
+  /** Ex.: CRM_AUTO — produto criado na importação CRM. */
+  cadastroOrigem: varchar("cadastroOrigem", { length: 40 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });

@@ -209,6 +209,12 @@ export default function Colaboracoes() {
   const importCrm = trpc.cicloComercial.importCrm.useMutation({
     onSuccess: result => {
       toast.success(`CRM importado: ${result.itensCriados} itens.`);
+      if (result.skusCriados?.length) {
+        const preview = result.skusCriados.slice(0, 8).join(", ");
+        const mais =
+          result.skusCriados.length > 8 ? ` (+${result.skusCriados.length - 8})` : "";
+        toast.message(`Produtos criados (CRM_AUTO): ${preview}${mais}`);
+      }
       if (result.foraHorizonte > 0) {
         toast.message(
           `${result.foraHorizonte} linha(s) com data fora do horizonte do ciclo (ignoradas).`

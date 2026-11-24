@@ -100,6 +100,13 @@ export function ColaboracaoResumos({
   const importCrm = trpc.cicloComercial.importCrm.useMutation({
     onSuccess: r => {
       toast.success(`CRM: ${r.itensCriados} itens`);
+      if (r.skusCriados?.length) {
+        toast.message(
+          `${r.skusCriados.length} SKU(s) cadastrados automaticamente: ${r.skusCriados.slice(0, 6).join(", ")}${
+            r.skusCriados.length > 6 ? "…" : ""
+          }`
+        );
+      }
       if (r.avisos.length) toast.message(`${r.avisos.length} avisos de validação`);
       if (r.erros.length) toast.error(`${r.erros.length} erros — confira SKUs`);
       utils.cicloComercial.itens.invalidate();
