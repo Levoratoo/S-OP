@@ -1,30 +1,39 @@
 import { describe, expect, it } from "vitest";
-import { TRPCError } from "@trpc/server";
 import { assertCicloStatusTransition } from "./services/ciclo-status-flow";
+import { TRPCError } from "@trpc/server";
 
 function expectForbidden(fn: () => void) {
-  try {
-    fn();
-    expect.fail("expected TRPCError");
-  } catch (err) {
-    expect(err).toBeInstanceOf(TRPCError);
-    expect((err as TRPCError).code).toBe("FORBIDDEN");
-  }
+  expect(fn).toThrow(TRPCError);
 }
 
-describe("cicloComercial status flow", () => {
-  it("bloqueia FECHADO e CONSOLIDADO via updateStatus", () => {
-    expectForbidden(() => assertCicloStatusTransition("ABERTO", "FECHADO", false));
-    expectForbidden(() => assertCicloStatusTransition("EM_COLABORACAO", "CONSOLIDADO", true));
+describe("ciclo status", () => {
+  it("avança um passo", () => {
+    expect(() =>
+      assertCicloStatusTransition("ABERTO", "EM_COLABORACAO", { isAdmin: false })
+    ).not.toThrow();
   });
 
-  it("permite ABERTO <-> EM_COLABORACAO", () => {
-    expect(() => assertCicloStatusTransition("ABERTO", "EM_COLABORACAO", false)).not.toThrow();
-    expect(() => assertCicloStatusTransition("EM_COLABORACAO", "ABERTO", false)).not.toThrow();
+  it("não volta de APROVADO", () => {
+    expectForbidden(() =>
+      assertCicloStatusTransition("APROVADO", "CONSENSO", { isAdmin: true, motivo: "x" })
+    );
   });
 
-  it("reabrir FECHADO exige admin", () => {
-    expectForbidden(() => assertCicloStatusTransition("FECHADO", "ABERTO", false));
-    expect(() => assertCicloStatusTransition("FECHADO", "ABERTO", true)).not.toThrow();
+  it("reabrir exige admin e motivo", () => {
+    expectForbidden(() =>
+      assertCicloStatusTransition("EM_COLABORACAO", "ABERTO", { isAdmin: false, motivo: "x" })
+    );
+    expectForbidden(() =>
+      assertCicloStatusTransition("EM_COLABORACAO", "ABERTO", { isAdmin: true })
+    );
+    expect(() =>
+      assertCicloStatusTransition("EM_COLABORACAO", "ABERTO", { isAdmin: true, motivo: "ajuste" })
+    ).not.toThrow();
+  });
+
+  it("fecharCiclo pode ir a APROVADO a partir da colaboração", () => {
+    expect(() =>
+      assertCicloStatusTransition("EM_COLABORACAO", "APROVADO", { isAdmin: false, viaFechar: true })
+    ).not.toThrow();
   });
 });

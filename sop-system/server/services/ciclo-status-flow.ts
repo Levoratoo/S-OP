@@ -1,32 +1,57 @@
 import { TRPCError } from "@trpc/server";
+import {
+  nextCicloStatus,
+  prevCicloStatus,
+  type CicloStatus,
+} from "@shared/ciclo-status";
 
-export type CicloStatus = "ABERTO" | "EM_COLABORACAO" | "CONSOLIDADO" | "FECHADO";
+export type { CicloStatus };
 
-/** Transições permitidas fora de fecharCiclo (fechamento único via fecharCiclo). */
 export function assertCicloStatusTransition(
   current: CicloStatus,
   next: CicloStatus,
-  isAdmin: boolean
+  opts: { isAdmin: boolean; motivo?: string | null; viaFechar?: boolean }
 ): void {
-  if (next === "CONSOLIDADO" || next === "FECHADO") {
+  if (current === next) return;
+
+  if (current === "CONGELADO" || (current === "APROVADO" && next !== "CONGELADO")) {
     throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "Use o botão Fechar ciclo na aba Consolidado para encerrar o ciclo.",
+      code: "PRECONDITION_FAILED",
+      message: "Ciclo aprovado só pode ir para CONGELADO. Congelado não volta.",
     });
   }
 
-  if (current === "FECHADO") {
-    if (next !== "ABERTO") {
-      throw new TRPCError({
-        code: "PRECONDITION_FAILED",
-        message: "Ciclo fechado só pode ser reaberto para ABERTO (Master/Admin).",
-      });
-    }
-    if (!isAdmin) {
+  const forward = nextCicloStatus(current);
+  const back = prevCicloStatus(current);
+
+  if (next === forward) return;
+
+  if (opts.viaFechar && next === "APROVADO" && (current === "EM_COLABORACAO" || current === "CONSENSO")) {
+    return;
+  }
+
+  if (next === back) {
+    if (!opts.isAdmin) {
       throw new TRPCError({
         code: "FORBIDDEN",
-        message: "Somente Master/Admin pode reabrir um ciclo fechado.",
+        message: "Somente admin pode reabrir um passo do ciclo.",
       });
     }
+    if (!opts.motivo?.trim()) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Reabrir exige motivo obrigatório.",
+      });
+    }
+    return;
   }
+
+  throw new TRPCError({
+    code: "PRECONDITION_FAILED",
+    message: `Transição ${current} → ${next} não é permitida. Avance um passo ou reabra um passo (admin).`,
+  });
+}
+
+export function mensagemCicloSomenteLeitura(): string {
+  return "Ciclo aprovado ou congelado está somente leitura (foto imutável). Não é possível alterar MTS, CRM, PV nem sincronizar este ciclo.";
 }

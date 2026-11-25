@@ -23,6 +23,8 @@ import { ColaboracaoArquivo } from "./ColaboracaoArquivo";
 import { ColaboracaoResumos } from "./ColaboracaoResumos";
 import { PvMtoPivotGrade } from "./PvMtoPivotGrade";
 import { cicloHorizonCalendar } from "@shared/ciclo-horizon";
+import { isCicloSomenteLeitura } from "@shared/ciclo-status";
+import { CicloLifecycleBar } from "@/components/ciclo/CicloLifecycleBar";
 import { CrmExcelLayoutError, parseCrmExcel } from "./parse-crm-excel";
 import { PipedriveCrmSync } from "./PipedriveCrmSync";
 
@@ -168,7 +170,7 @@ export default function Colaboracoes() {
   });
 
   useEffect(() => {
-    if (!selectedCicloId || ciclo?.id !== selectedCicloId || ciclo.status === "FECHADO") return;
+    if (!selectedCicloId || ciclo?.id !== selectedCicloId || isCicloSomenteLeitura(ciclo.status)) return;
     if (autoPvSynced.current === selectedCicloId || syncPv.isPending) return;
     autoPvSynced.current = selectedCicloId;
     syncPv.mutate({ cicloId: selectedCicloId });
@@ -406,14 +408,7 @@ export default function Colaboracoes() {
               </Select>
             )}
             {ciclo && (
-              <div className="flex items-center gap-2 text-sm">
-                <Badge>{ciclo.status}</Badge>
-                <span className="text-muted-foreground">
-                  Ciclo {String(ciclo.mesInicio).padStart(2, "0")}/{ciclo.anoInicio} · prev{" "}
-                  {cicloMesLabel(0)}–{cicloMesLabel(11)}
-                  {ciclo.jobId ? ` · job #${ciclo.jobId}` : ""}
-                </span>
-              </div>
+              <CicloLifecycleBar cicloId={ciclo.id} status={ciclo.status} />
             )}
           </CardContent>
         </Card>
@@ -518,7 +513,7 @@ export default function Colaboracoes() {
                             : "MTS: total 12M do script redistribuído por fator % do SKU (badge “Fator %”); sem fator, sazonalidade histórica. Colab do vendedor sobrepõe a estatística (e*)."}
                     </CardDescription>
                   </div>
-                  {abaGrade === "PV_MTO" && ciclo?.status !== "FECHADO" && (
+                  {abaGrade === "PV_MTO" && ciclo?.status && !isCicloSomenteLeitura(ciclo.status) && (
                     <Button
                       size="sm"
                       variant="outline"
@@ -562,7 +557,7 @@ export default function Colaboracoes() {
                     </TabsList>
                     {abaGrade === "CRM" && selectedCicloId && ciclo ? (
                       <PipedriveCrmSync cicloId={selectedCicloId} status={ciclo.status}>
-                        {ciclo.status !== "FECHADO" ? (
+                        {!isCicloSomenteLeitura(ciclo.status) ? (
                           <Label className="inline-flex h-9 w-full cursor-pointer items-center justify-center gap-2 rounded-md border bg-background px-3 text-sm font-medium hover:bg-accent sm:w-auto">
                             {importCrm.isPending ? (
                               <Loader2 className="h-4 w-4 animate-spin" />
@@ -690,7 +685,7 @@ export default function Colaboracoes() {
                                                 className="h-8 w-[4.5rem] px-1 text-right"
                                                 placeholder="—"
                                                 defaultValue={empty ? "" : String(Math.round(Number(raw || 0)))}
-                                                disabled={ciclo?.status === "FECHADO"}
+                                                disabled={isCicloSomenteLeitura(ciclo?.status || "")}
                                                 onBlur={e =>
                                                   handleMonthEdit(item.id, key, e.target.value)
                                                 }
@@ -793,7 +788,7 @@ export default function Colaboracoes() {
                                                 ? ""
                                                 : String(Math.round(Number(item[key] || 0)))
                                             }
-                                            disabled={ciclo?.status === "FECHADO"}
+                                            disabled={isCicloSomenteLeitura(ciclo?.status || "")}
                                             onBlur={e => handleMonthEdit(item.id, key, e.target.value)}
                                           />
                                         </TableCell>

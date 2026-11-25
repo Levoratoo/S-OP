@@ -3,6 +3,7 @@ import { getCicloComercial, getDb } from "../../db";
 import {
   cicloComercialItens,
   cicloCrmPipedriveSync,
+  cicloStatusHistorico,
   ciclosComerciais,
   gestores,
   produtos,
@@ -152,6 +153,15 @@ export function criarRepositorioPipedrive(): RepositorioPipedrive {
           },
           async substituirCarga(cicloId, itens) {
             await substituirCargaCrmDoCiclo(tx, cicloId, itens as InsertCicloComercialItem[]);
+          },
+          async registrarHistorico(entrada) {
+            await tx.insert(cicloStatusHistorico).values({
+              cicloId: entrada.cicloId,
+              statusDe: entrada.status,
+              statusPara: entrada.status,
+              usuario: entrada.usuario,
+              comentario: entrada.comentario,
+            });
           },
           async registrarSync(registro) {
             await tx.insert(cicloCrmPipedriveSync).values({

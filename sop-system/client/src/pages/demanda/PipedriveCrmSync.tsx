@@ -14,7 +14,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { exportToCsv } from "@/lib/exportCsv";
 import { trpc } from "@/lib/trpc";
-import { gravidadeAlerta, ORDEM_ALERTAS, ROTULOS_ALERTA, type TipoAlertaPipedrive } from "@shared/pipedrive-crm";
+import {
+  cicloAceitaSyncPipedrive,
+  gravidadeAlerta,
+  mensagemSyncPipedriveRecusada,
+  ORDEM_ALERTAS,
+  ROTULOS_ALERTA,
+  type TipoAlertaPipedrive,
+} from "@shared/pipedrive-crm";
 import { Download, Loader2, RefreshCw, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -84,18 +91,18 @@ export function PipedriveCrmSync({
   const [aberto, setAberto] = useState(false);
   const [previa, setPrevia] = useState<Previa | null>(null);
   const [abaAlerta, setAbaAlerta] = useState<TipoAlertaPipedrive>("sem_codigo");
-  const emColaboracao = status === "EM_COLABORACAO";
+  const aceitaSync = cicloAceitaSyncPipedrive(status);
   const { data: statusPd, isLoading: carregandoStatus } = trpc.cicloComercial.pipedriveStatus.useQuery(
     { cicloId },
     { enabled: Boolean(cicloId) }
   );
   const tokenConfigurado = statusPd?.tokenConfigurado === true;
-  const motivoDesabilitado = !emColaboracao
-    ? "Disponível apenas com o ciclo em colaboração."
+  const motivoDesabilitado = !aceitaSync
+    ? mensagemSyncPipedriveRecusada(status)
     : !tokenConfigurado
       ? "Configure PIPEDRIVE_API_TOKEN no servidor para habilitar a sincronização."
       : "";
-  const desabilitado = !emColaboracao || !tokenConfigurado || carregandoStatus;
+  const desabilitado = !aceitaSync || !tokenConfigurado || carregandoStatus;
 
   const preview = trpc.cicloComercial.previewPipedrive.useMutation({
     onSuccess: data => {
@@ -187,7 +194,7 @@ export function PipedriveCrmSync({
           </TooltipTrigger>
           {motivoDesabilitado ? <TooltipContent>{motivoDesabilitado}</TooltipContent> : null}
         </Tooltip>
-        {ultima && emColaboracao ? (
+        {ultima && aceitaSync ? (
           <Button
             type="button"
             size="sm"

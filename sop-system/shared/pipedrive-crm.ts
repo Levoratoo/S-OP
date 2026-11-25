@@ -16,6 +16,7 @@
  * 7. A gravação substitui a carga CRM; isto aqui só monta as linhas.
  */
 import { cicloHorizonCalendar, cicloHorizonIndexFromCalendar } from "@shared/ciclo-horizon";
+import { isCicloSomenteLeitura } from "@shared/ciclo-status";
 import { orcamentoFromCalculoOr } from "@shared/crm-excel-parse";
 import { isCrmSkuCodigoValido, textoPareceSkuGenerico } from "@shared/crm-import-helpers";
 import {
@@ -1243,6 +1244,24 @@ export function prepararItemCrm(row: Record<string, unknown>, cicloId: number): 
   if (!out.planoColab) out.planoColab = "CRM";
   if (!out.origem) out.origem = "CRM";
   return out;
+}
+
+/**
+ * Mesmo recorte em que o Excel ainda importa (não é somente leitura) menos CONSENSO.
+ * A importação Excel recusa só APROVADO e CONGELADO; a sync do Pipedrive também recusa CONSENSO.
+ */
+export function cicloAceitaSyncPipedrive(status: string): boolean {
+  return status === "ABERTO" || status === "EM_COLABORACAO";
+}
+
+export function mensagemSyncPipedriveRecusada(status: string): string {
+  if (isCicloSomenteLeitura(status)) {
+    return "Ciclo aprovado ou congelado está somente leitura (foto imutável). Não é possível sincronizar o Pipedrive nem desfazer a carga CRM.";
+  }
+  if (status === "CONSENSO") {
+    return "Ciclo em consenso não aceita sincronização do Pipedrive. A importação do Excel continua disponível; a sync do Pipedrive só entra com o ciclo aberto ou em colaboração.";
+  }
+  return `O status ${status} não aceita sincronização do Pipedrive.`;
 }
 
 export function configPadraoParaTeste(): ConfigPipedrive {

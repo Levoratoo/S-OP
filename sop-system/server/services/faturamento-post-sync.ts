@@ -1,7 +1,8 @@
 import { seedProdutosClientesFromFaturamento } from "./seed-from-faturamento";
 import { enrichProdutoMetadataFromFaturamento } from "./enrich-produto-from-faturamento";
-import { invalidateFatSkuCatalogReady, refreshFatSkuCatalog } from "./fat-sku-catalog";
+import { refreshFatSkuCatalog, invalidateFatSkuCatalogReady } from "./fat-sku-catalog";
 import { invalidatePendingMarcasCache, invalidatePendingSkusCache } from "./seed-from-faturamento";
+import { refreshPrecosProdutosAutomatico } from "./produto-preco-backfill";
 import {
   autoCreateMarcasWithGestorFromImportMap,
   reconcileGestorMarcaImportMapAfterFaturamento,
@@ -64,6 +65,7 @@ export async function runAfterFaturamentoSync(): Promise<FaturamentoPostSyncResu
     await refreshFatSkuCatalog();
     invalidatePendingSkusCache();
     invalidatePendingMarcasCache();
+    await refreshPrecosProdutosAutomatico();
   } catch (err) {
     console.warn("[faturamento] fat_sku_catalog:", err);
   }

@@ -79,6 +79,9 @@ function criarMemoria() {
       if (falharInsert) throw new Error("insert falhou");
       itens.push(...(novos as Item[]));
     },
+    async registrarHistorico() {
+      return undefined;
+    },
     async registrarSync(registro: Omit<RegistroSync, "id" | "createdAt" | "desfeitoEm">) {
       audits.push({
         ...registro,
@@ -293,7 +296,7 @@ describe("sync Pipedrive", () => {
     expect(memoria.audits()).toHaveLength(0);
 
     memoria.setFalharInsert(false);
-    memoria.setStatus("FECHADO");
+    memoria.setStatus("CONGELADO");
     await expect(
       syncPipedrive({
         config: http.config,
@@ -303,9 +306,9 @@ describe("sync Pipedrive", () => {
         previewHash: previa.previewHash,
         usuario: "pedro@example.com",
       })
-    ).rejects.toMatchObject({ codigo: "CICLO_FECHADO" });
+    ).rejects.toMatchObject({ codigo: "SOMENTE_LEITURA" });
 
-    memoria.setStatus("ABERTO");
+    memoria.setStatus("APROVADO");
     await expect(
       previaPipedrive({
         config: http.config,
@@ -313,7 +316,30 @@ describe("sync Pipedrive", () => {
         extrair: http.extrair,
         cicloId: 7,
       })
-    ).rejects.toMatchObject({ codigo: "FORA_COLABORACAO" });
+    ).rejects.toMatchObject({ codigo: "SOMENTE_LEITURA" });
+
+    memoria.setStatus("CONSENSO");
+    await expect(
+      syncPipedrive({
+        config: http.config,
+        repo: memoria.repo,
+        extrair: http.extrair,
+        cicloId: 7,
+        previewHash: previa.previewHash,
+        usuario: "pedro@example.com",
+      })
+    ).rejects.toMatchObject({ codigo: "CONSENSO" });
+
+    memoria.setStatus("ABERTO");
+    const emAberto = await syncPipedrive({
+      config: http.config,
+      repo: memoria.repo,
+      extrair: http.extrair,
+      cicloId: 7,
+      previewHash: previa.previewHash,
+      usuario: "pedro@example.com",
+    });
+    expect(emAberto.itensCriados).toBe(1);
 
     const semToken = configPadraoParaTeste();
     semToken.token = "";

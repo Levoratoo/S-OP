@@ -5,6 +5,7 @@ import { orcamentoFromCalculoOr, parseCrmExcel } from "@shared/crm-excel-parse";
 import { carregarConfigPipedrive } from "@shared/pipedrive-config";
 import {
   casarGestor,
+  cicloAceitaSyncPipedrive,
   classificarColaboracao,
   classificarEtiquetas,
   configPadraoParaTeste,
@@ -194,6 +195,11 @@ describe("configuração e horizonte", () => {
       "https://printbag.pipedrive.com"
     );
     expect(carregarConfigPipedrive({}).token).toBe("");
+    expect(cicloAceitaSyncPipedrive("ABERTO")).toBe(true);
+    expect(cicloAceitaSyncPipedrive("EM_COLABORACAO")).toBe(true);
+    expect(cicloAceitaSyncPipedrive("CONSENSO")).toBe(false);
+    expect(cicloAceitaSyncPipedrive("APROVADO")).toBe(false);
+    expect(cicloAceitaSyncPipedrive("CONGELADO")).toBe(false);
   });
 });
 

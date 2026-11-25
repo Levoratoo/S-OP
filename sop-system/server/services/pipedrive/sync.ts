@@ -1,7 +1,9 @@
 import { carregarConfigPipedrive, type ConfigPipedrive } from "@shared/pipedrive-config";
 import {
   canonicoPreviaPipedrive,
+  cicloAceitaSyncPipedrive,
   extrairLinhasExportacao,
+  mensagemSyncPipedriveRecusada,
   montarPreviaCrm,
   prepararItemCrm,
   tratarLinhasExportacao,
@@ -11,6 +13,7 @@ import {
   type PacotePipedrive,
   type PreviaCrm,
 } from "@shared/pipedrive-crm";
+import { isCicloSomenteLeitura } from "@shared/ciclo-status";
 import { hashPreviaPipedrive } from "./hash";
 
 export class PipedriveSyncError extends Error {
@@ -19,7 +22,8 @@ export class PipedriveSyncError extends Error {
     readonly codigo:
       | "SEM_TOKEN"
       | "CICLO_AUSENTE"
-      | "CICLO_FECHADO"
+      | "SOMENTE_LEITURA"
+      | "CONSENSO"
       | "FORA_COLABORACAO"
       | "HASH_DIVERGENTE"
       | "VAZIO"
@@ -79,6 +83,12 @@ export type TransacaoPipedrive = {
   snapshotCarga: (cicloId: number) => Promise<object[]>;
   substituirCarga: (cicloId: number, itens: object[]) => Promise<void>;
   registrarSync: (registro: NovoRegistroSync) => Promise<void>;
+  registrarHistorico: (entrada: {
+    cicloId: number;
+    status: string;
+    usuario: string;
+    comentario: string;
+  }) => Promise<void>;
   ultimaSync: (cicloId: number) => Promise<RegistroSync | null>;
   marcarDesfeita: (id: number, quando: Date) => Promise<void>;
 };
@@ -96,19 +106,14 @@ export type RepositorioPipedrive = {
 
 export type PreviaPipedrive = PreviaCrm & { previewHash: string };
 
-export function assertCicloEmColaboracao(status: string) {
-  if (status === "FECHADO") {
-    throw new PipedriveSyncError(
-      "Ciclo fechado não aceita sincronização do Pipedrive.",
-      "CICLO_FECHADO"
-    );
-  }
-  if (status !== "EM_COLABORACAO") {
-    throw new PipedriveSyncError(
-      "A sincronização do Pipedrive só é permitida com o ciclo em colaboração.",
-      "FORA_COLABORACAO"
-    );
-  }
+export function assertCicloAceitaSyncPipedrive(status: string) {
+  if (cicloAceitaSyncPipedrive(status)) return;
+  const codigo = isCicloSomenteLeitura(status)
+    ? "SOMENTE_LEITURA"
+    : status === "CONSENSO"
+      ? "CONSENSO"
+      : "FORA_COLABORACAO";
+  throw new PipedriveSyncError(mensagemSyncPipedriveRecusada(status), codigo);
 }
 
 function exigirToken(config: ConfigPipedrive) {
@@ -163,7 +168,7 @@ export function avaliarPacotePipedrive(input: {
 async function cicloEmColaboracao(repo: RepositorioPipedrive, cicloId: number) {
   const ciclo = await repo.obterCiclo(cicloId);
   if (!ciclo) throw new PipedriveSyncError("Ciclo não encontrado.", "CICLO_AUSENTE");
-  assertCicloEmColaboracao(ciclo.status);
+  assertCicloAceitaSyncPipedrive(ciclo.status);
   return ciclo;
 }
 
@@ -251,7 +256,7 @@ export async function syncPipedrive(input: {
   await input.repo.transacao(async tx => {
     const status = await tx.statusCiclo(ciclo.id);
     if (!status) throw new PipedriveSyncError("Ciclo não encontrado.", "CICLO_AUSENTE");
-    assertCicloEmColaboracao(status);
+    assertCicloAceitaSyncPipedrive(status);
     const anteriores = await tx.snapshotCarga(ciclo.id);
     await tx.substituirCarga(ciclo.id, itens);
     await tx.registrarSync({
@@ -265,6 +270,12 @@ export async function syncPipedrive(input: {
       alertasQtd: avaliado.tratamento.alertas.length,
       totaisJson: JSON.stringify({ totais: previa.totais, contagens: previa.contagens }),
       snapshotJson: JSON.stringify(anteriores),
+    });
+    await tx.registrarHistorico({
+      cicloId: ciclo.id,
+      status,
+      usuario: input.usuario,
+      comentario: `Sincronização do Pipedrive: ${materializado.itens.length} itens, ${previa.totais.quantidade} un., R$ ${previa.totais.valor}, ${avaliado.tratamento.alertas.length} alertas.`,
     });
   });
   return {
@@ -285,12 +296,13 @@ export async function syncPipedrive(input: {
 export async function desfazerPipedrive(input: {
   repo: RepositorioPipedrive;
   cicloId: number;
+  usuario?: string;
 }): Promise<{ itensRestaurados: number }> {
   const ciclo = await cicloEmColaboracao(input.repo, input.cicloId);
   return input.repo.transacao(async tx => {
     const status = await tx.statusCiclo(ciclo.id);
     if (!status) throw new PipedriveSyncError("Ciclo não encontrado.", "CICLO_AUSENTE");
-    assertCicloEmColaboracao(status);
+    assertCicloAceitaSyncPipedrive(status);
     const ultima = await tx.ultimaSync(ciclo.id);
     if (!ultima || ultima.desfeitoEm) {
       throw new PipedriveSyncError(
@@ -305,6 +317,12 @@ export async function desfazerPipedrive(input: {
     const itens = bruto.map(item => prepararItemCrm(item as Record<string, unknown>, ciclo.id));
     await tx.substituirCarga(ciclo.id, itens);
     await tx.marcarDesfeita(ultima.id, new Date());
+    await tx.registrarHistorico({
+      cicloId: ciclo.id,
+      status,
+      usuario: input.usuario || "sistema",
+      comentario: `Desfeita a última sincronização do Pipedrive (${itens.length} itens da carga CRM restaurados).`,
+    });
     return { itensRestaurados: itens.length };
   });
 }

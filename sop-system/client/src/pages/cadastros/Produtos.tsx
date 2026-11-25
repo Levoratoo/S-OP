@@ -58,6 +58,7 @@ export default function Produtos() {
   const [searchTerm, setSearchTerm] = useState("");
   const [filterFluxo, setFilterFluxo] = useState<string>("all");
   const [filterFator, setFilterFator] = useState<"all" | "com" | "sem">("all");
+  const [somenteSemPreco, setSomenteSemPreco] = useState(false);
 
   const utils = trpc.useUtils();
   const { data: produtos, isLoading } = trpc.produtos.list.useQuery();
@@ -138,8 +139,10 @@ export default function Produtos() {
     const temFator = comFatorSet.has(produto.id);
     const matchesFator =
       filterFator === "all" || (filterFator === "com" ? temFator : !temFator);
+    const preco = Number(produto.precoUnitario || produto.valorVenda || 0);
+    const matchesPreco = !somenteSemPreco || preco <= 0;
 
-    return matchesSearch && matchesFluxo && matchesFator;
+    return matchesSearch && matchesFluxo && matchesFator && matchesPreco;
   });
 
   // Obter lista única de fluxos para o filtro
@@ -560,6 +563,11 @@ export default function Produtos() {
                 </SelectContent>
               </Select>
             </div>
+            <Button type="button" variant={somenteSemPreco ? "default" : "outline"} onClick={() => setSomenteSemPreco(v => !v)}>
+              Sem preço (
+              {(produtos ?? []).filter(p => p.status === "ATIVO" && Number(p.precoUnitario || p.valorVenda || 0) <= 0).length}
+              )
+            </Button>
             <Select
               value={filterFator}
               onValueChange={v => setFilterFator(v as "all" | "com" | "sem")}
@@ -602,6 +610,8 @@ export default function Produtos() {
                   { key: "modelo", title: "Modelo" },
                   { key: "tamanho", title: "Tamanho" },
                   { key: "marca", title: "Marca" },
+                  { key: "precoUnitario", title: "Preço unitário" },
+                  { key: "precoOrigem", title: "Origem preço" },
                 ]);
               } else {
                 toast.error("Não há dados para exportar");
@@ -903,6 +913,7 @@ export default function Produtos() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Código</TableHead>
+                      <TableHead>Preço unitário</TableHead>
                       <TableHead>Descrição</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Tipo Negócio</TableHead>
@@ -918,7 +929,7 @@ export default function Produtos() {
                   <TableBody>
                     {filteredProdutos?.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={10} className="text-center text-muted-foreground py-8">
+                        <TableCell colSpan={11} className="text-center text-muted-foreground py-8">
                           {searchTerm || filterFluxo !== "all" ? "Nenhum produto encontrado com os filtros aplicados" : "Nenhum produto cadastrado"}
                         </TableCell>
                       </TableRow>
@@ -926,6 +937,14 @@ export default function Produtos() {
                       filteredProdutos?.map((produto) => (
                         <TableRow key={produto.id}>
                           <TableCell className="font-mono">{produto.codItem || "-"}</TableCell>
+                          <TableCell title={produto.precoOrigem || ""}>
+                            {Number(produto.precoUnitario || 0) > 0
+                              ? Number(produto.precoUnitario).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 4 })
+                              : "—"}
+                            {produto.precoOrigem ? (
+                              <span className="ml-1 text-[10px] text-muted-foreground">{produto.precoOrigem}</span>
+                            ) : null}
+                          </TableCell>
                           <TableCell>{produto.descricao || produto.nome || "-"}</TableCell>
                           <TableCell>
                             <Badge variant={produto.status === "ATIVO" ? "default" : "secondary"}>

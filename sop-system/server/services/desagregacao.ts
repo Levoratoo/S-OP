@@ -452,7 +452,7 @@ async function loadColabCicloAnterior(
     .orderBy(desc(ciclosComerciais.id))
     .limit(100);
   const ciclo = candidates
-    .filter(item => item.status === "FECHADO" || item.status === "CONSOLIDADO")
+    .filter(item => item.status === "CONGELADO" || item.status === "APROVADO" || item.status === "CONSENSO")
     .filter(item => cycleMonthAbsolute(item.anoInicio, item.mesInicio) < targetAbsolute)
     .sort(
       (a, b) =>

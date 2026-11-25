@@ -1,4 +1,5 @@
 import { isSkuAcabado } from "@shared/sku-acabado";
+import { isCicloSomenteLeitura } from "@shared/ciclo-status";
 import { eq, desc, and, sql, asc, gte, lt, inArray } from "drizzle-orm";
 import { cfopDigitosSqlIn } from "@shared/cfop-faturamento";
 import { drizzle } from "drizzle-orm/mysql2";
@@ -2627,8 +2628,8 @@ export async function updateCicloComercialItem(
     .from(ciclosComerciais)
     .where(eq(ciclosComerciais.id, current.cicloId))
     .limit(1);
-  if (ciclo?.status === "FECHADO") {
-    throw new Error("Ciclo fechado não pode ser alterado.");
+  if (isCicloSomenteLeitura(ciclo?.status || "")) {
+    throw new Error("Ciclo aprovado ou congelado não pode ser alterado.");
   }
   const merged = { ...current, ...data };
   await db

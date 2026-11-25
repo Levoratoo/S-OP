@@ -66,10 +66,23 @@ function ListaTab() {
     refetch,
   } = trpc.deParaCodigos.listEnriched.useQuery();
 
+  const importBatch = trpc.deParaCodigos.importBatch.useMutation({
+    onSuccess: () => {
+      utils.deParaCodigos.list.invalidate();
+      utils.deParaCodigos.listEnriched.invalidate();
+      utils.deParaCodigos.diagnostico.invalidate();
+      toast.success("De-Para criado");
+      resetForm();
+    },
+    onError: e => toast.error(e.message),
+  });
+  const { data: diagnostico } = trpc.deParaCodigos.diagnostico.useQuery();
+
   const createMutation = trpc.deParaCodigos.create.useMutation({
     onSuccess: () => {
       utils.deParaCodigos.list.invalidate();
       utils.deParaCodigos.listEnriched.invalidate();
+      utils.deParaCodigos.diagnostico.invalidate();
       toast.success("De-Para criado com sucesso!");
       resetForm();
     },
@@ -108,9 +121,17 @@ function ListaTab() {
     e.preventDefault();
     if (editingId) {
       updateMutation.mutate({ id: editingId, ...formData });
-    } else {
-      createMutation.mutate(formData);
+      return;
     }
+    const antigos = formData.skuAntigo
+      .split(/[\n,;]+/)
+      .map(s => s.trim())
+      .filter(Boolean);
+    if (antigos.length > 1) {
+      importBatch.mutate(antigos.map(skuAntigo => ({ skuAntigo, skuNovo: formData.skuNovo })));
+      return;
+    }
+    createMutation.mutate({ skuAntigo: antigos[0] || formData.skuAntigo, skuNovo: formData.skuNovo });
   };
 
   const handleEdit = (item: NonNullable<typeof deParaList>[0]) => {
@@ -131,6 +152,17 @@ function ListaTab() {
         searchTerm
       )
     ) || [];
+
+  const gruposDePara = (() => {
+    const map = new Map<string, typeof filteredList>();
+    for (const item of filteredList) {
+      const key = item.skuNovo;
+      const list = map.get(key) ?? [];
+      list.push(item);
+      map.set(key, list);
+    }
+    return [...map.entries()];
+  })();
 
   const handleExport = () => {
     if (!deParaList || deParaList.length === 0) {
@@ -161,7 +193,14 @@ function ListaTab() {
         <div>
           <CardTitle>Mapeamento De-Para</CardTitle>
           <CardDescription>
-            Quando um código antigo é consultado, o sistema retorna o código atual seguindo a cadeia de migrações
+            Um SKU antigo aponta para um único novo (1:1 ou N:1). Cadeia A→B→C resolve até o código final.
+            {diagnostico ? (
+              <span className="block mt-1">
+                {diagnostico.total} mapeamentos · {diagnostico.gruposNpara1} grupos N:1
+                {diagnostico.loops.length ? ` · loops: ${diagnostico.loops.length}` : ""}
+                {diagnostico.conflitos1n.length ? ` · 1:N: ${diagnostico.conflitos1n.length}` : ""}
+              </span>
+            ) : null}
           </CardDescription>
         </div>
         <div className="flex gap-2">
@@ -180,12 +219,13 @@ function ListaTab() {
               </DialogHeader>
               <form onSubmit={handleSubmit} className="space-y-4">
                 <div className="space-y-2">
-                  <Label>SKU Antigo *</Label>
-                  <Input 
-                    value={formData.skuAntigo} 
-                    onChange={(e) => setFormData({ ...formData, skuAntigo: e.target.value })} 
-                    placeholder="Ex: 1.00.000001"
-                    required 
+                  <Label>SKUs antigos * (um por linha para N:1)</Label>
+                  <textarea
+                    className="flex min-h-[88px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    value={formData.skuAntigo}
+                    onChange={e => setFormData({ ...formData, skuAntigo: e.target.value })}
+                    placeholder={"80.02.000100\n80.02.000101"}
+                    required
                   />
                 </div>
                 <div className="space-y-2">
@@ -253,44 +293,38 @@ function ListaTab() {
                   </TableCell>
                 </TableRow>
               ) : (
-                filteredList.map((item) => (
-                  <TableRow key={item.id}>
-                    <TableCell className="font-mono text-sm">{item.skuAntigo}</TableCell>
+                gruposDePara.map(([skuNovo, antigos]) => (
+                  <TableRow key={skuNovo}>
+                    <TableCell className="align-top text-sm">
+                      <details>
+                        <summary className="cursor-pointer">
+                          {antigos.length} antigo(s)
+                        </summary>
+                        <ul className="mt-1 space-y-1">
+                          {antigos.map(a => (
+                            <li key={a.id} className="font-mono text-xs">
+                              {a.skuAntigo}
+                              <span className="ml-1 text-muted-foreground">{a.descricaoAntigo || "—"}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    </TableCell>
                     <TableCell className="max-w-xs whitespace-normal text-sm text-muted-foreground">
-                      {item.descricaoAntigo || "—"}
+                      {antigos.map(a => a.descricaoAntigo).filter(Boolean)[0] || "—"}
                     </TableCell>
                     <TableCell className="text-center"><ArrowRight className="h-4 w-4 text-muted-foreground" /></TableCell>
-                    <TableCell className="font-mono text-sm">{item.skuNovo}</TableCell>
+                    <TableCell className="font-mono text-sm">
+                      {skuNovo}
+                      <Badge variant="outline" className="ml-2">{antigos.length > 1 ? "N:1" : "1:1"}</Badge>
+                    </TableCell>
                     <TableCell className="max-w-xs whitespace-normal text-sm text-muted-foreground">
-                      {item.descricaoNovo || "—"}
+                      {antigos[0]?.descricaoNovo || "—"}
                     </TableCell>
                     <TableCell className="text-right">
-                      <div className="flex justify-end gap-2">
-                        <Button variant="ghost" size="icon" onClick={() => handleEdit(item)}>
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                            <Button variant="ghost" size="icon" className="text-destructive hover:text-destructive">
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent>
-                            <AlertDialogHeader>
-                              <AlertDialogTitle>Confirmar exclusão</AlertDialogTitle>
-                              <AlertDialogDescription>
-                                Tem certeza que deseja excluir o mapeamento {item.skuAntigo} → {item.skuNovo}? Esta ação não pode ser desfeita.
-                              </AlertDialogDescription>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                              <AlertDialogAction onClick={() => deleteMutation.mutate({ id: item.id })} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-                                Excluir
-                              </AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
-                      </div>
+                      <Button size="sm" variant="ghost" onClick={() => handleEdit(antigos[0]!)}>
+                        <Pencil className="h-4 w-4" />
+                      </Button>
                     </TableCell>
                   </TableRow>
                 ))

@@ -233,7 +233,7 @@ export function ColaboracaoArquivo({
             <Download className="mr-2 h-4 w-4" />
             Exportar Excel
           </Button>
-          {cicloStatus !== "FECHADO" && onFecharCiclo ? (
+          {cicloStatus !== "FECHADO" && cicloStatus !== "APROVADO" && cicloStatus !== "CONGELADO" && onFecharCiclo ? (
             <Button type="button" size="sm" onClick={onFecharCiclo} disabled={fechando}>
               {fechando ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               Fechar ciclo
