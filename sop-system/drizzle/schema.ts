@@ -895,7 +895,7 @@ export const cicloCrmPipedriveSync = mysqlTable("ciclo_crm_pipedrive_sync", {
   negocios: int("negocios").default(0).notNull(),
   linhas: int("linhas").default(0).notNull(),
   quantidade: decimal("quantidade", { precision: 18, scale: 2 }).default("0").notNull(),
-  valor: decimal("valor", { precision: 18, scale: 2 }).default("0").notNull(),
+  valor: decimal("valor", { precision: 18, scale: 4 }).default("0").notNull(),
   alertasQtd: int("alertasQtd").default(0).notNull(),
   totaisJson: text("totaisJson").notNull(),
   snapshotJson: text("snapshotJson").notNull(),

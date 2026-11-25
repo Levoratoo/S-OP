@@ -3,6 +3,7 @@ import * as XLSX from "xlsx";
 import { CRM_EXCEL_HEADERS } from "@shared/crm-excel-layout";
 import { orcamentoFromCalculoOr, parseCrmExcel } from "@shared/crm-excel-parse";
 import { carregarConfigPipedrive } from "@shared/pipedrive-config";
+import { precoUnitario4 } from "@shared/preco-unitario";
 import {
   casarGestor,
   cicloAceitaSyncPipedrive,
@@ -15,7 +16,7 @@ import {
   mesesConsecutivos,
   montarPreviaCrm,
   parseMatrizExportacaoAq,
-  ratearCentavos,
+  ratearValor4,
   ratearInteiro,
   resolverCamposPipedrive,
   separarCodigoProduto,
@@ -31,7 +32,8 @@ function doDeal(linhas: LinhaCrmTratada[], dealId: number) {
 }
 
 function soma(linhas: LinhaCrmTratada[], campo: "qtdMes" | "valorTotalMes") {
-  return Math.round(linhas.reduce((total, linha) => total + linha[campo], 0) * 100) / 100;
+  const fator = campo === "valorTotalMes" ? 10000 : 100;
+  return Math.round(linhas.reduce((total, linha) => total + linha[campo], 0) * fator) / fator;
 }
 
 function assinatura(linhas: LinhaExportacaoPipedrive[]) {
@@ -149,9 +151,11 @@ describe("etiquetas, entregas e rateio", () => {
     expect(doze[11]).toBe(416_674);
     expect(ratearInteiro(8000, 1)).toEqual([8000]);
     expect(ratearInteiro(10, 3)).toEqual([3, 3, 4]);
-    const dinheiro = ratearCentavos(100, 3);
-    expect(dinheiro).toEqual([33.33, 33.33, 33.34]);
-    expect(Math.round(dinheiro.reduce((a, b) => a + b, 0) * 100) / 100).toBe(100);
+    const dinheiro = ratearValor4(100, 3);
+    expect(dinheiro.map(precoUnitario4)).toEqual(["33.3333", "33.3333", "33.3334"]);
+    expect(precoUnitario4(dinheiro.reduce((a, b) => a + b, 0))).toBe("100.0000");
+    expect(ratearValor4(0.675, 1).map(precoUnitario4)).toEqual(["0.6750"]);
+    expect(precoUnitario4(ratearValor4(0.675, 2).reduce((a, b) => a + b, 0))).toBe("0.6750");
     const virada = mesesConsecutivos("2026-12-15", 2);
     expect(virada.map(mes => mes.iso)).toEqual(["2026-12-01", "2027-01-01"]);
   });
@@ -295,7 +299,7 @@ describe("pacote fictício da API v2", () => {
     expect(parcial).toHaveLength(1);
     expect(parcial[0]?.dataFaturamento).toBe("2027-11-01");
     expect(parcial[0]?.qtdMes).toBe(3);
-    expect(parcial[0]?.valorTotalMes).toBe(3.33);
+    expect(precoUnitario4(parcial[0]?.valorTotalMes ?? 0)).toBe("3.3333");
     expect(parcial[0]?.tipoNegocio).toBe("ATD");
     expect(tratamento.parcelasFora).toBeGreaterThanOrEqual(3);
   });

@@ -17,6 +17,7 @@
  */
 import { cicloHorizonCalendar, cicloHorizonIndexFromCalendar } from "@shared/ciclo-horizon";
 import { isCicloSomenteLeitura } from "@shared/ciclo-status";
+import { precoUnitario4 } from "@shared/preco-unitario";
 import { orcamentoFromCalculoOr } from "@shared/crm-excel-parse";
 import { isCrmSkuCodigoValido, textoPareceSkuGenerico } from "@shared/crm-import-helpers";
 import {
@@ -405,15 +406,16 @@ export function ratearInteiro(total: number, partes: number): number[] {
   return out;
 }
 
-export function ratearCentavos(total: number, partes: number): number[] {
+/** Rateio monetário na mesma escala de `precoUnitario4` (4 casas). A sobra fica na última parcela. */
+export function ratearValor4(total: number, partes: number): number[] {
   const n = Math.max(1, Math.floor(partes));
   const sinal = total < 0 ? -1 : 1;
-  const cents = Math.round(Math.abs(total) * 100);
-  const base = Math.trunc(cents / n);
-  const resto = cents - base * n;
+  const unidades = Math.round(Math.abs(total) * 10000);
+  const base = Math.trunc(unidades / n);
+  const resto = unidades - base * n;
   const out = Array.from({ length: n }, () => base);
   out[n - 1] = base + resto;
-  return out.map(c => (c * sinal) / 100);
+  return out.map(unidade => Number(precoUnitario4((unidade * sinal) / 10000)));
 }
 
 export function mesesConsecutivos(isoDate: string, quantidade: number): Array<{ ano: number; mes: number; iso: string }> {
@@ -901,7 +903,7 @@ export function tratarLinhasExportacao(
 
     const meses = linha.dataFechamento ? mesesConsecutivos(linha.dataFechamento, entregas.entregas) : [];
     const quantidades = ratearInteiro(linha.quantidade, entregas.entregas);
-    const valores = ratearCentavos(linha.valor, entregas.entregas);
+    const valores = ratearValor4(linha.valor, entregas.entregas);
     if (!meses.length) {
       parcelasFora += entregas.entregas;
       alertas.push(alerta("fora_horizonte", linha, codigo.sku ?? "", "sem data de fechamento esperada"));
@@ -967,8 +969,8 @@ export function tratarLinhasExportacao(
         orcamento: index === 0 ? orcamento : 0,
         dataFaturamento: parcela.iso,
         qtdMes: parcela.qtd,
-        valorVenda: linha.preco,
-        valorTotalMes: parcela.valor,
+        valorVenda: Number(precoUnitario4(linha.preco)),
+        valorTotalMes: Number(precoUnitario4(parcela.valor)),
         modalidade: classes.modalidadeRotulo,
         tipoNegocio: linha.tipo.trim(),
         dealId: linha.dealId,
@@ -1005,8 +1007,8 @@ export function tratarPacotePipedrive(
   return tratarLinhasExportacao(extraido.linhas, ctx, extraido);
 }
 
-function cents(valor: number): number {
-  return Math.round(valor * 100);
+function unidadesPreco4(valor: number): number {
+  return Math.round((Number(valor) || 0) * 10000);
 }
 
 export function montarPreviaCrm(input: {
@@ -1042,7 +1044,7 @@ export function montarPreviaCrm(input: {
     const marca = item.marca?.trim() || "Sem marca";
     for (let i = 0; i < 12; i++) {
       const qtd = Number(item.meses[i] ?? 0) || 0;
-      const valorCents = cents(qtd * item.valorVenda);
+      const valorCents = unidadesPreco4(qtd * item.valorVenda);
       meses[i]!.antesQtd += qtd;
       meses[i]!.antesValor += valorCents;
       somarMarca(antesMarca, marca, qtd, valorCents);
@@ -1062,7 +1064,7 @@ export function montarPreviaCrm(input: {
     );
     if (indice == null) continue;
     const marca = linha.marca.trim() || "Sem marca";
-    const linhaCents = cents(linha.valorTotalMes);
+    const linhaCents = unidadesPreco4(linha.valorTotalMes);
     meses[indice]!.linhas += 1;
     meses[indice]!.depoisQtd += linha.qtdMes;
     meses[indice]!.depoisValor += linhaCents;
@@ -1072,8 +1074,8 @@ export function montarPreviaCrm(input: {
   }
 
   for (const mes of meses) {
-    mes.antesValor = mes.antesValor / 100;
-    mes.depoisValor = mes.depoisValor / 100;
+    mes.antesValor = mes.antesValor / 10000;
+    mes.depoisValor = mes.depoisValor / 10000;
   }
 
   const marcasNomes = new Set([...antesMarca.keys(), ...depoisMarca.keys()]);
@@ -1084,8 +1086,8 @@ export function montarPreviaCrm(input: {
       marca,
       antesQtd: antes.qtd,
       depoisQtd: depois.qtd,
-      antesValor: antes.cents / 100,
-      depoisValor: depois.cents / 100,
+      antesValor: antes.cents / 10000,
+      depoisValor: depois.cents / 10000,
     };
   });
   marcas.sort((a, b) => b.depoisValor - a.depoisValor || b.antesValor - a.antesValor || a.marca.localeCompare(b.marca));
@@ -1108,7 +1110,7 @@ export function montarPreviaCrm(input: {
       parcelas: input.tratamento.linhas.length,
       parcelasFora: input.tratamento.parcelasFora,
       quantidade,
-      valor: valorCents / 100,
+      valor: valorCents / 10000,
       produtosDesabilitados: input.tratamento.produtosDesabilitados,
       skusNovos,
     },
