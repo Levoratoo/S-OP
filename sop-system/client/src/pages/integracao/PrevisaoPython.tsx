@@ -295,7 +295,18 @@ export default function PrevisaoPython() {
     setGerandoPrevisao(true);
     setEtapaGeracao("base");
     try {
-      const sync = await refreshFaturamento.mutateAsync({ force: true });
+      await refreshFaturamento.mutateAsync({ force: true });
+      let sync: { maxDepois: string | null } | null = null;
+      for (let i = 0; i < 200; i++) {
+        const st = await utils.faturamento.refreshRecentStatus.fetch();
+        if (st.status === "done") {
+          sync = st.result;
+          break;
+        }
+        if (st.status === "error") throw new Error(st.error || "Falha ao atualizar faturamento");
+        await new Promise(r => setTimeout(r, 2000));
+      }
+      if (!sync) throw new Error("Tempo esgotado ao atualizar o faturamento");
       void utils.faturamento.list.invalidate();
       void utils.faturamento.stats.invalidate();
       void utils.faturamento.porMes.invalidate();

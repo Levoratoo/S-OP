@@ -5,6 +5,17 @@ export function toNum(value: unknown): number {
 }
 
 /** Preço cadastro; senão receitaBruta/quantidade do pedido/carteira. */
+export function precoCadastroProduto(
+  prod: { precoUnitario?: unknown; valorVenda?: unknown } | null | undefined
+): number {
+  const unit = toNum(prod?.precoUnitario);
+  if (unit > 0) return unit;
+  return toNum(prod?.valorVenda);
+}
+
+export function precoUnitario4(value: number): string {
+  return (Math.round((Number(value) || 0) * 10000) / 10000).toFixed(4);
+}
 export function resolveValorVendaUnitario(
   valorCadastro: unknown,
   receitaBruta: unknown,

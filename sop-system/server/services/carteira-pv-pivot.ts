@@ -10,6 +10,7 @@ import { getDb } from "../db";
 import { carteiraPvAbertoWhere } from "./carteira-pv-aberto";
 import { sql } from "drizzle-orm";
 import { loadFaturamentoSkuMeta } from "./seed-from-faturamento";
+import { precoCadastroProduto } from "@shared/preco-unitario";
 import {
   buildCarteiraPrecoPorSkuFromEntregas,
   resolvePvPrecoUnitarioComOrigem,
@@ -115,7 +116,7 @@ export async function getCarteiraPvPivotGrade() {
         receitaBruta: line.receitaTotal,
         quantidade: line.quantidadeTotal,
         sku: line.sku,
-        cadastroPreco: prod ? toNum(prod.valorVenda) : undefined,
+        cadastroPreco: prod ? precoCadastroProduto(prod) : undefined,
         carteiraPrecoPorSku,
         faturamento12mPorSku: fatLookup.precoBySku,
       });

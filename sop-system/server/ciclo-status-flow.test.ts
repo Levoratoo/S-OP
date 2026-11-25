@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertCicloStatusTransition } from "./services/ciclo-status-flow";
+import { assertCicloStatusTransition, passosFecharCiclo } from "./services/ciclo-status-flow";
 import { TRPCError } from "@trpc/server";
 
 function expectForbidden(fn: () => void) {
@@ -31,9 +31,14 @@ describe("ciclo status", () => {
     ).not.toThrow();
   });
 
-  it("fecharCiclo pode ir a APROVADO a partir da colaboração", () => {
-    expect(() =>
-      assertCicloStatusTransition("EM_COLABORACAO", "APROVADO", { isAdmin: false, viaFechar: true })
-    ).not.toThrow();
+  it("fechar a partir da colaboração passa por CONSENSO e APROVADO", () => {
+    expect(passosFecharCiclo("EM_COLABORACAO")).toEqual(["CONSENSO", "APROVADO"]);
+    expect(passosFecharCiclo("CONSENSO")).toEqual(["APROVADO"]);
+  });
+
+  it("não pula de colaboração para aprovado num único passo", () => {
+    expectForbidden(() =>
+      assertCicloStatusTransition("EM_COLABORACAO", "APROVADO", { isAdmin: true })
+    );
   });
 });

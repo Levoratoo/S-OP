@@ -3,6 +3,7 @@
  * em grade SKU × mês usando sazonalidade por SKU (fallback uniforme in-memory) e rateio (6M preferencial, senão 12M).
  */
 import { and, desc, eq } from "drizzle-orm";
+import { precoCadastroProduto, precoUnitario4 } from "@shared/preco-unitario";
 import XLSX from "xlsx";
 import { getDb } from "../db";
 import {
@@ -271,6 +272,7 @@ async function computeRateiosPorSku(now = new Date()) {
       tipoNegocio: produtos.tipoNegocio,
       projetarEstatistica: produtos.projetarEstatistica,
       valorVenda: produtos.valorVenda,
+      precoUnitario: produtos.precoUnitario,
       familiaId: produtos.familiaId,
       marcaId: produtos.marcaId,
       status: produtos.status,
@@ -816,7 +818,7 @@ export async function desagregarJobParaCicloComercial(input: DesagregarInput) {
         rateioConsiderar: String(Math.round(rateio * 1e6) / 1e6),
         qtdeTotalEstatistica: String(Math.round(total12m * rateio * 100) / 100),
         estatUsouFatorSku: usouFatorSku,
-        valorVendaSnapshot: String(toNumber(skuInfo.valorVenda)),
+        valorVendaSnapshot: precoUnitario4(precoCadastroProduto(skuInfo)),
         familiaSnapshot: skuInfo.familia,
         gestorSnapshot: skuInfo.gestor,
         ...estatisticaMeses,
@@ -877,7 +879,7 @@ export async function desagregarJobParaCicloComercial(input: DesagregarInput) {
       rateio6m: "0",
       rateioConsiderar: "0",
       qtdeTotalEstatistica: "0",
-      valorVendaSnapshot: String(toNumber(prod.valorVenda)),
+      valorVendaSnapshot: precoUnitario4(precoCadastroProduto(prod)),
       ...meses,
       qtdeColaborada: String(Math.round(totalSku * 100) / 100),
       origem: "MANUAL",
@@ -982,7 +984,7 @@ export async function desagregarJobParaCicloComercial(input: DesagregarInput) {
       rateioConsiderar: "1",
       qtdeTotalEstatistica: String(Math.round(total12m * 100) / 100),
       estatUsouFatorSku: usouFatorSku,
-      valorVendaSnapshot: String(toNumber(skuInfo.valorVenda)),
+      valorVendaSnapshot: precoUnitario4(precoCadastroProduto(skuInfo)),
       familiaSnapshot: skuInfo.familia,
       gestorSnapshot: skuInfo.gestor,
       m1: null,

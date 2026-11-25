@@ -52,14 +52,19 @@ function num(value: unknown) {
 
 function asDateStr(value: unknown) {
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+    const y = value.getUTCFullYear();
+    const m = value.getUTCMonth() + 1;
+    const d = value.getUTCDate();
+    return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  }
+  if (typeof value === "number" && value > 20000 && value < 80000) {
+    const dt = new Date(Date.UTC(1899, 11, 30) + Math.round(value) * 86400000);
+    return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}`;
   }
   const text = String(value ?? "").trim();
   const br = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-  if (br) {
-    return `${br[3]}-${br[2].padStart(2, "0")}-${br[1].padStart(2, "0")}`;
-  }
-  return text;
+  if (br) return `${br[3]}-${br[2]!.padStart(2, "0")}-${br[1]!.padStart(2, "0")}`;
+  return text.slice(0, 10);
 }
 
 /** Primeira ocorrência do padrão de SKU no texto do Produto. */

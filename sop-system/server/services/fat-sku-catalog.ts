@@ -14,10 +14,17 @@ export type FatSkuCatalogRow = {
 };
 
 /** Rebuild completo a partir de faturamento (uma varredura agregada). */
-export async function refreshFatSkuCatalog(): Promise<{ linhas: number; ms: number }> {
+export async function refreshFatSkuCatalog(range?: {
+  desde?: string;
+  ate?: string;
+}): Promise<{ linhas: number; ms: number }> {
   const conn = await getDb();
   if (!conn) return { linhas: 0, ms: 0 };
   const t0 = performance.now();
+  const filtro =
+    range?.desde && range?.ate
+      ? sql`AND dataEmissao >= ${range.desde} AND dataEmissao < ${range.ate}`
+      : sql``;
 
   await conn.execute(sql`
     INSERT INTO fat_sku_catalog (
@@ -25,44 +32,53 @@ export async function refreshFatSkuCatalog(): Promise<{ linhas: number; ms: numb
     )
     SELECT
       codMaterial,
-      MAX(descricaoItem) AS descricaoItem,
-      MAX(marca) AS marca,
-      MAX(linhaProduto) AS linhaProduto,
-      MAX(tipoNegocio) AS tipoNegocio,
-      MAX(tipoEstoque) AS tipoEstoque,
-      MAX(grupoProduto) AS grupoProduto,
-      COUNT(*) AS notas
+      MAX(descricaoItem),
+      MAX(marca),
+      MAX(linhaProduto),
+      MAX(tipoNegocio),
+      MAX(tipoEstoque),
+      MAX(grupoProduto),
+      COUNT(*)
     FROM faturamento
     WHERE codMaterial IS NOT NULL AND codMaterial <> ''
+      ${filtro}
     GROUP BY codMaterial
     ON DUPLICATE KEY UPDATE
-      descricaoItem = VALUES(descricaoItem),
-      marca = VALUES(marca),
-      linhaProduto = VALUES(linhaProduto),
-      tipoNegocio = VALUES(tipoNegocio),
-      tipoEstoque = VALUES(tipoEstoque),
-      grupoProduto = VALUES(grupoProduto),
-      notas = VALUES(notas)
+      descricaoItem = IF(VALUES(descricaoItem) IS NULL OR VALUES(descricaoItem) = '', descricaoItem, VALUES(descricaoItem)),
+      marca = IF(VALUES(marca) IS NULL OR VALUES(marca) = '', marca, VALUES(marca)),
+      linhaProduto = IF(VALUES(linhaProduto) IS NULL OR VALUES(linhaProduto) = '', linhaProduto, VALUES(linhaProduto)),
+      tipoNegocio = IF(VALUES(tipoNegocio) IS NULL OR VALUES(tipoNegocio) = '', tipoNegocio, VALUES(tipoNegocio)),
+      tipoEstoque = IF(VALUES(tipoEstoque) IS NULL, tipoEstoque, VALUES(tipoEstoque)),
+      grupoProduto = IF(VALUES(grupoProduto) IS NULL OR VALUES(grupoProduto) = '', grupoProduto, VALUES(grupoProduto)),
+      notas = ${range?.desde ? sql`GREATEST(notas, VALUES(notas))` : sql`VALUES(notas)`}
   `);
 
-  const countRows = await conn.select({ codMaterial: fatSkuCatalog.codMaterial }).from(fatSkuCatalog);
+  const [countRow] = await conn.execute(sql`SELECT COUNT(*) AS n FROM fat_sku_catalog`);
+  const n = Number((countRow as unknown as Array<{ n: number }>)[0]?.n ?? 0);
   const ms = Math.round(performance.now() - t0);
-  console.info(`[fat_sku_catalog] refresh ${countRows.length} SKUs em ${ms}ms`);
+  console.info(`[fat_sku_catalog] refresh ${n} SKUs em ${ms}ms`);
   catalogReady = true;
-  return { linhas: countRows.length, ms };
+  return { linhas: n, ms };
 }
 
 let catalogReady = false;
+let catalogRefreshInflight: Promise<unknown> | null = null;
 
 export async function ensureFatSkuCatalog(): Promise<void> {
   if (catalogReady) return;
-  const rows = await listFatSkuCatalog();
-  if (rows.length > 0) {
+  const conn = await getDb();
+  if (!conn) return;
+  const [countRow] = await conn.execute(sql`SELECT COUNT(*) AS n FROM fat_sku_catalog`);
+  const n = Number((countRow as unknown as Array<{ n: number }>)[0]?.n ?? 0);
+  if (n > 0) {
     catalogReady = true;
     return;
   }
-  await refreshFatSkuCatalog();
-  catalogReady = true;
+  if (!catalogRefreshInflight) {
+    catalogRefreshInflight = refreshFatSkuCatalog().finally(() => {
+      catalogRefreshInflight = null;
+    });
+  }
 }
 
 export function invalidateFatSkuCatalogReady() {

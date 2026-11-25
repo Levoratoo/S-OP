@@ -169,7 +169,7 @@ export default function Colaboracoes() {
   });
 
   useEffect(() => {
-    if (!selectedCicloId || ciclo?.id !== selectedCicloId || isCicloSomenteLeitura(ciclo.status)) return;
+    if (!selectedCicloId || ciclo?.id !== selectedCicloId || isCicloSomenteLeitura(ciclo.status) || ciclo.status === "CONSENSO") return;
     if (autoPvSynced.current === selectedCicloId || syncPv.isPending) return;
     autoPvSynced.current = selectedCicloId;
     syncPv.mutate({ cicloId: selectedCicloId });
