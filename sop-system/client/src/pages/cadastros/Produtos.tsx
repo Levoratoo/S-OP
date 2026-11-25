@@ -16,6 +16,7 @@ import { Plus, Pencil, Trash2, Loader2, Download, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { exportToCsv } from "@/lib/exportCsv";
 import { ProdutoFatoresSazonaisSection } from "@/components/ProdutoFatoresSazonaisSection";
+import { PendingSkuDeParaAcceptDialog } from "@/components/cadastros/PendingSkuDeParaAcceptDialog";
 import { FATOR_MESES_LABEL } from "@shared/sku-fator-sazonalidade";
 import * as XLSX from "xlsx";
 
@@ -87,38 +88,29 @@ export default function Produtos() {
   const { data: marcasList } = trpc.marcas.list.useQuery();
   const { data: fluxosComRecursos } = trpc.fluxos.listComRecursos.useQuery();
 
-  const acceptPendingSkuMutation = trpc.cadastrosSistema.acceptPendingSku.useMutation({
-    onSuccess: () => {
-      utils.cadastrosSistema.pendingSkusFromFaturamento.invalidate();
-      utils.produtos.list.invalidate();
-      utils.deParaCodigos.list.invalidate();
-      toast.success("SKU aceito e cadastrado!");
-    },
-    onError: (error) => toast.error(error.message),
-  });
-
-  const acceptPendingSkusBatchMutation = trpc.cadastrosSistema.acceptPendingSkusBatch.useMutation({
-    onSuccess: result => {
-      utils.cadastrosSistema.pendingSkusFromFaturamento.invalidate();
-      utils.produtos.list.invalidate();
-      utils.deParaCodigos.list.invalidate();
-      setSelectedPendingSkus(new Set());
-      setPendingAcceptDialog(null);
-      toast.success(
-        `${result.criados} SKU(s) cadastrados` +
-          (result.jaExistiam ? ` · ${result.jaExistiam} já existiam` : "") +
-          (result.erros.length ? ` · ${result.erros.length} com erro` : "")
-      );
-      if (result.erros.length > 0) {
-        console.warn("[aceitar SKUs em lote]", result.erros);
-      }
-    },
-    onError: error => toast.error(error.message),
-  });
+  const acceptPendingSkusWithDeParaMutation =
+    trpc.cadastrosSistema.acceptPendingSkusWithDePara.useMutation({
+      onSuccess: result => {
+        utils.cadastrosSistema.pendingSkusFromFaturamento.invalidate();
+        utils.produtos.list.invalidate();
+        utils.deParaCodigos.list.invalidate();
+        utils.deParaCodigos.listEnriched.invalidate();
+        setSelectedPendingSkus(new Set());
+        setAcceptDialogSkus(null);
+        toast.success(
+          `${result.criados} SKU(s) cadastrados` +
+            (result.deParaCriados ? ` · ${result.deParaCriados} De-Para` : "") +
+            (result.erros.length ? ` · ${result.erros.length} com erro` : "")
+        );
+      },
+      onError: error => toast.error(error.message),
+    });
 
   const [pendingSkuSearch, setPendingSkuSearch] = useState("");
   const [selectedPendingSkus, setSelectedPendingSkus] = useState<Set<string>>(new Set());
-  const [pendingAcceptDialog, setPendingAcceptDialog] = useState<"selected" | "filtered" | null>(null);
+  const [acceptDialogSkus, setAcceptDialogSkus] = useState<
+    Array<{ codMaterial: string; marca?: string | null; descricaoItem?: string | null }> | null
+  >(null);
 
   const filteredPendingSkus = useMemo(() => {
     const term = pendingSkuSearch.trim();
@@ -366,25 +358,20 @@ export default function Produtos() {
 
   const isPending = createMutation.isPending || updateMutation.isPending;
 
-  const acceptingCod = acceptPendingSkuMutation.isPending
-    ? acceptPendingSkuMutation.variables?.codMaterial
-    : null;
-
-  const pendingAcceptCount =
-    pendingAcceptDialog === "selected" && selectedPendingSkus.size > 0
-      ? selectedPendingSkus.size
-      : filteredPendingSkus.length;
-
-  const confirmPendingAccept = () => {
-    const codes =
-      pendingAcceptDialog === "selected" && selectedPendingSkus.size > 0
-        ? Array.from(selectedPendingSkus)
-        : filteredPendingSkus.map(s => s.codMaterial);
-    if (codes.length === 0) {
+  const openPendingAcceptDialog = (mode: "selected" | "filtered" | "single", sku?: (typeof pendingSkus)[0]) => {
+    if (mode === "single" && sku) {
+      setAcceptDialogSkus([sku]);
+      return;
+    }
+    const list =
+      mode === "selected" && selectedPendingSkus.size > 0
+        ? pendingSkus.filter(s => selectedPendingSkus.has(s.codMaterial))
+        : filteredPendingSkus;
+    if (!list.length) {
       toast.error("Nenhum SKU para aceitar.");
       return;
     }
-    acceptPendingSkusBatchMutation.mutate({ codMaterials: codes });
+    setAcceptDialogSkus(list);
   };
 
   return (
@@ -434,9 +421,9 @@ export default function Produtos() {
                 size="sm"
                 variant="outline"
                 disabled={
-                  filteredPendingSkus.length === 0 || acceptPendingSkusBatchMutation.isPending
+                  filteredPendingSkus.length === 0 || acceptPendingSkusWithDeParaMutation.isPending
                 }
-                onClick={() => setPendingAcceptDialog("filtered")}
+                onClick={() => openPendingAcceptDialog("filtered")}
               >
                 Aceitar todos (filtro atual)
               </Button>
@@ -444,9 +431,9 @@ export default function Produtos() {
                 type="button"
                 size="sm"
                 disabled={
-                  selectedPendingSkus.size === 0 || acceptPendingSkusBatchMutation.isPending
+                  selectedPendingSkus.size === 0 || acceptPendingSkusWithDeParaMutation.isPending
                 }
-                onClick={() => setPendingAcceptDialog("selected")}
+                onClick={() => openPendingAcceptDialog("selected")}
               >
                 Aceitar selecionados ({selectedPendingSkus.size})
               </Button>
@@ -521,16 +508,10 @@ export default function Produtos() {
                           <Button
                             size="sm"
                             variant="outline"
-                            disabled={acceptPendingSkuMutation.isPending}
-                            onClick={() =>
-                              acceptPendingSkuMutation.mutate({ codMaterial: sku.codMaterial })
-                            }
+                            disabled={acceptPendingSkusWithDeParaMutation.isPending}
+                            onClick={() => openPendingAcceptDialog("single", sku)}
                           >
-                            {acceptingCod === sku.codMaterial ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              "Aceitar"
-                            )}
+                            Aceitar
                           </Button>
                         </TableCell>
                       </TableRow>
@@ -541,33 +522,14 @@ export default function Produtos() {
               </div>
             )}
 
-            <AlertDialog
-              open={pendingAcceptDialog !== null}
-              onOpenChange={open => !open && setPendingAcceptDialog(null)}
-            >
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Confirmar aceite em lote</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    Serão aceitos{" "}
-                    <strong>{pendingAcceptCount.toLocaleString("pt-BR")}</strong> SKU(s)
-                    {pendingAcceptDialog === "selected"
-                      ? " selecionados"
-                      : " do filtro atual"}
-                    . O cadastro e o De-Para serão criados em uma única operação no servidor.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                  <AlertDialogAction
-                    disabled={acceptPendingSkusBatchMutation.isPending}
-                    onClick={confirmPendingAccept}
-                  >
-                    Aceitar
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
+            <PendingSkuDeParaAcceptDialog
+              open={acceptDialogSkus !== null}
+              onOpenChange={open => !open && setAcceptDialogSkus(null)}
+              skus={acceptDialogSkus ?? []}
+              mode="produtos"
+              isPending={acceptPendingSkusWithDeParaMutation.isPending}
+              onConfirm={items => acceptPendingSkusWithDeParaMutation.mutate({ items })}
+            />
           </CardContent>
         </Card>
       )}
