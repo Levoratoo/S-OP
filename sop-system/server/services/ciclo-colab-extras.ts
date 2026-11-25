@@ -43,6 +43,7 @@ import {
 import { resolveProdutoFamilia } from "@shared/produto-familia";
 import { resolveGestorPorMarca } from "@shared/gestor-marca-resolve";
 import { resolveValorVendaUnitario } from "@shared/preco-unitario";
+import { isCicloSomenteLeitura } from "@shared/ciclo-status";
 import {
   buildCarteiraPrecoPorSkuFromEntregas,
   precoOrigemPvLabel,
@@ -149,8 +150,8 @@ export async function syncPvFromCarteira(cicloId: number) {
   const ciclo = await getCicloComercial(cicloId);
   if (!ciclo) throw new Error("Ciclo não encontrado");
 
-  if (ciclo.status === "FECHADO") {
-    throw new Error("Ciclo fechado não recebe atualização da carteira.");
+  if (isCicloSomenteLeitura(ciclo.status)) {
+    throw new Error("Ciclo aprovado ou congelado não recebe atualização da carteira.");
   }
 
   const { byId, byCode, dimensionsByProductId } = await loadProdutoMaps();
@@ -442,7 +443,7 @@ export async function syncPvFromCarteiraEmCiclosAbertos() {
     .from(ciclosComerciais);
   const resultados: Array<{ cicloId: number; itensCriados: number; pedidosLidos: number }> = [];
   for (const ciclo of ciclos) {
-    if (ciclo.status === "FECHADO") continue;
+    if (isCicloSomenteLeitura(ciclo.status)) continue;
     const synced = await syncPvFromCarteira(ciclo.id);
     resultados.push({
       cicloId: ciclo.id,

@@ -177,6 +177,10 @@ export const produtos = mysqlTable("produtos", {
   grupo: varchar("grupo", { length: 100 }),
   ramoAtuacao: varchar("ramoAtuacao", { length: 100 }),
   valorVenda: decimal("valorVenda", { precision: 15, scale: 2 }),
+  /** Preço unitário canônico (4 casas) usado em dashboard, PV e snapshot. */
+  precoUnitario: decimal("precoUnitario", { precision: 15, scale: 4 }),
+  precoOrigem: varchar("precoOrigem", { length: 40 }),
+  precoAtualizadoEm: timestamp("precoAtualizadoEm"),
   valorCusto: decimal("valorCusto", { precision: 15, scale: 2 }),
   qtdePallet: int("qtdePallet"),
   loteEconomicoViavel: int("loteEconomicoViavel"),
@@ -777,7 +781,7 @@ export const ciclosComerciais = mysqlTable("ciclos_comerciais", {
   mesInicio: int("mesInicio").notNull(), // 1-12
   horizonteMeses: int("horizonteMeses").default(12).notNull(),
   jobId: int("jobId"), // job Python origem (Visao_Executiva)
-  status: mysqlEnum("status", ["ABERTO", "EM_COLABORACAO", "CONSOLIDADO", "FECHADO"])
+  status: mysqlEnum("status", ["ABERTO", "EM_COLABORACAO", "CONSENSO", "APROVADO", "CONGELADO"])
     .default("ABERTO")
     .notNull(),
   observacoes: text("observacoes"),
@@ -788,6 +792,34 @@ export const ciclosComerciais = mysqlTable("ciclos_comerciais", {
 
 export type CicloComercial = typeof ciclosComerciais.$inferSelect;
 export type InsertCicloComercial = typeof ciclosComerciais.$inferInsert;
+
+export const cicloStatusHistorico = mysqlTable("ciclo_status_historico", {
+  id: int("id").autoincrement().primaryKey(),
+  cicloId: int("cicloId").notNull(),
+  statusDe: varchar("statusDe", { length: 40 }),
+  statusPara: varchar("statusPara", { length: 40 }).notNull(),
+  usuario: varchar("usuario", { length: 320 }),
+  comentario: text("comentario"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export const cicloSnapshot = mysqlTable("ciclo_snapshot", {
+  id: int("id").autoincrement().primaryKey(),
+  cicloId: int("cicloId").notNull(),
+  versao: int("versao").notNull(),
+  hash: varchar("hash", { length: 64 }).notNull(),
+  retroativo: boolean("retroativo").default(false).notNull(),
+  createdBy: varchar("createdBy", { length: 320 }),
+  comentario: text("comentario"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export const cicloSnapshotLinhas = mysqlTable("ciclo_snapshot_linhas", {
+  id: int("id").autoincrement().primaryKey(),
+  snapshotId: int("snapshotId").notNull(),
+  tipo: varchar("tipo", { length: 40 }).notNull(),
+  payloadJson: text("payloadJson").notNull(),
+});
 
 /** Linhas do ciclo: desagregação estatística + edição comercial (MTS/JITO/PV/CRM). */
 export const cicloComercialItens = mysqlTable("ciclo_comercial_itens", {

@@ -92,6 +92,12 @@ export async function syncCarteiraFromErp(): Promise<CarteiraSqlSyncResult> {
   });
 
   const pvCiclos = await syncPvFromCarteiraEmCiclosAbertos();
+  try {
+    const { refreshPrecosProdutosAutomatico } = await import("./produto-preco-backfill");
+    await refreshPrecosProdutosAutomatico();
+  } catch (err) {
+    console.warn("[carteira] refresh preços:", err);
+  }
 
   return {
     fetched,

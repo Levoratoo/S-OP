@@ -1,4 +1,11 @@
 import { COOKIE_NAME } from "@shared/const";
+import { isCicloSomenteLeitura, isCicloStatus, type CicloStatus } from "@shared/ciclo-status";
+import { transicionarCiclo } from "./services/ciclo-transicao";
+import { compararCiclos, getLatestSnapshot, materializarSnapshotsRetroativos } from "./services/ciclo-snapshot";
+import { diagnosticarDePara } from "./services/de-para-aggregate";
+import { refreshPrecosProdutosAutomatico } from "./services/produto-preco-backfill";
+import { cicloStatusHistorico } from "../drizzle/schema";
+import { eq } from "drizzle-orm";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
@@ -148,6 +155,25 @@ export const appRouter = router({
   // ==================== PRODUTOS ====================
   produtos: router({
     list: protectedProcedure.query(() => db.listProdutos()),
+    backfillPrecos: protectedProcedure.mutation(() => refreshPrecosProdutosAutomatico()),
+    setPrecoManual: protectedProcedure
+      .input(z.object({ id: z.number(), precoUnitario: z.number().positive() }))
+      .mutation(async ({ input, ctx }) => {
+        const database = await db.getDb();
+        if (!database) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Sem banco" });
+        const { produtos } = await import("../drizzle/schema");
+        const { eq: eqOp } = await import("drizzle-orm");
+        await database
+          .update(produtos)
+          .set({
+            precoUnitario: String(input.precoUnitario),
+            valorVenda: String(Math.round(input.precoUnitario * 100) / 100),
+            precoOrigem: "manual",
+            precoAtualizadoEm: new Date(),
+          })
+          .where(eqOp(produtos.id, input.id));
+        return { ok: true, usuario: ctx.user?.email ?? ctx.user?.name ?? "usuario" };
+      }),
     
     getById: protectedProcedure
       .input(z.object({ id: z.number() }))
@@ -941,31 +967,53 @@ export const appRouter = router({
       .input(
         z.object({
           id: z.number(),
-          status: z.enum(["ABERTO", "EM_COLABORACAO", "CONSOLIDADO", "FECHADO"]),
+          status: z.enum(["ABERTO", "EM_COLABORACAO", "CONSENSO", "APROVADO", "CONGELADO"]),
+          comentario: z.string().optional(),
         })
       )
       .mutation(async ({ input, ctx }) => {
-        const ciclo = await db.getCicloComercial(input.id);
-        if (!ciclo) {
-          throw new TRPCError({ code: "NOT_FOUND", message: "Ciclo não encontrado." });
+        if (!isCicloStatus(input.status)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Status inválido" });
         }
-        const isAdmin = ctx.user?.role === "admin";
-        assertCicloStatusTransition(
-          ciclo.status as "ABERTO" | "EM_COLABORACAO" | "CONSOLIDADO" | "FECHADO",
-          input.status,
-          isAdmin
-        );
-        return db.updateCicloComercial(input.id, { status: input.status });
+        return transicionarCiclo({
+          cicloId: input.id,
+          next: input.status as CicloStatus,
+          usuario: ctx.user?.email || ctx.user?.name || null,
+          comentario: input.comentario,
+          isAdmin: ctx.user?.role === "admin",
+        });
       }),
+
+    historicoStatus: protectedProcedure
+      .input(z.object({ cicloId: z.number() }))
+      .query(async ({ input }) => {
+        const database = await db.getDb();
+        if (!database) return [];
+        return database
+          .select()
+          .from(cicloStatusHistorico)
+          .where(eq(cicloStatusHistorico.cicloId, input.cicloId));
+      }),
+
+    snapshot: protectedProcedure
+      .input(z.object({ cicloId: z.number() }))
+      .query(async ({ input }) => {
+        await materializarSnapshotsRetroativos();
+        return getLatestSnapshot(input.cicloId);
+      }),
+
+    compararCiclos: protectedProcedure
+      .input(z.object({ cicloA: z.number(), cicloB: z.number() }))
+      .query(({ input }) => compararCiclos(input.cicloA, input.cicloB)),
 
     delete: protectedProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ input }) => {
         const ciclo = await db.getCicloComercial(input.id);
-        if (ciclo?.status === "FECHADO") {
+        if (ciclo?.status && isCicloSomenteLeitura(ciclo.status)) {
           throw new TRPCError({
             code: "PRECONDITION_FAILED",
-            message: "Ciclo fechado faz parte do histórico e não pode ser excluído.",
+            message: "Ciclo aprovado ou congelado não pode ser excluído.",
           });
         }
         return db.deleteCicloComercial(input.id);
@@ -1037,21 +1085,25 @@ export const appRouter = router({
           ),
         })
       )
-      .mutation(({ input }) => {
+      .mutation(async ({ input }) => {
         assertCrmExcelHeaders(input.headers);
         assertCrmImportRows(input.rows);
+        const ciclo = await db.getCicloComercial(input.cicloId);
+        if (ciclo && isCicloSomenteLeitura(ciclo.status)) {
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Ciclo aprovado ou congelado não aceita importação CRM." });
+        }
         return importCrmParaCiclo(input.cicloId, input.rows);
       }),
 
     fecharCiclo: protectedProcedure
       .input(z.object({ id: z.number() }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ input, ctx }) => {
         const ciclo = await db.getCicloComercial(input.id);
         if (!ciclo) {
           throw new TRPCError({ code: "NOT_FOUND", message: "Ciclo não encontrado." });
         }
-        if (ciclo.status === "FECHADO") {
-          return { status: "FECHADO" as const };
+        if (isCicloSomenteLeitura(ciclo.status)) {
+          return { status: ciclo.status as "APROVADO" | "CONGELADO" };
         }
         const [resumoRs, itens] = await Promise.all([
           getResumoRs(input.id),
@@ -1070,15 +1122,21 @@ export const appRouter = router({
               "Existem SKUs sem preço de venda: " + resumoRs.skusSemPreco.slice(0, 20).join(", "),
           });
         }
-        const crmIncompletos = itens.filter(item => item.planoColab === "CRM" && !item.crmTipo);
-        if (crmIncompletos.length > 0) {
+        const crmSemTipo = itens.filter(item => item.planoColab === "CRM" && !item.crmTipo);
+        if (crmSemTipo.length > 0) {
           throw new TRPCError({
             code: "PRECONDITION_FAILED",
-            message: `Reimporte ${crmIncompletos.length} itens CRM sem classificação (Colaboração/Aposta).`,
+            message: `Reimporte ${crmSemTipo.length} itens CRM sem classificação (Colaboração/Aposta).`,
           });
         }
-        await db.updateCicloComercial(input.id, { status: "FECHADO" });
-        return { status: "FECHADO" as const };
+        return transicionarCiclo({
+          cicloId: input.id,
+          next: "APROVADO",
+          usuario: ctx.user?.email || ctx.user?.name || null,
+          comentario: "Fechar ciclo → aprovado (foto imutável)",
+          isAdmin: ctx.user?.role === "admin",
+          viaFechar: true,
+        });
       }),
 
     pvVsCrm: protectedProcedure
@@ -1428,6 +1486,10 @@ export const appRouter = router({
     list: protectedProcedure.query(() => db.listDeParaCodigos()),
 
     listEnriched: protectedProcedure.query(() => listDeParaCodigosComDescricoes()),
+    diagnostico: protectedProcedure.query(async () => {
+      const rows = await db.listDeParaCodigos();
+      return diagnosticarDePara(rows);
+    }),
     create: protectedProcedure
       .input(z.object({ 
         skuAntigo: z.string().min(1), 
