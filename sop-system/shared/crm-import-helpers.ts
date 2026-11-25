@@ -27,3 +27,27 @@ export function crmTipoExcelParaNegocio(tipoExcel: string | null | undefined): s
 }
 
 export const CADASTRO_ORIGEM_CRM_AUTO = "CRM_AUTO";
+
+const GENERICO_RE = /generico|genérico/i;
+
+/** Mesma regex usada na carga CRM: código ou descrição com “genérico”. */
+export function textoPareceSkuGenerico(
+  sku: string | null | undefined,
+  ...textos: Array<string | null | undefined>
+): boolean {
+  if (GENERICO_RE.test(String(sku ?? ""))) return true;
+  return textos.some(texto => GENERICO_RE.test(String(texto ?? "")));
+}
+
+/**
+ * A importação Excel bloqueia Aposta genérica sem orçamento.
+ * A sincronização do Pipedrive passa `permitirSemOrcamento` e só alerta.
+ */
+export function apostaGenericaSemOrcamentoDeveBloquear(
+  generico: boolean,
+  crmTipo: string,
+  orcamento: number,
+  permitirSemOrcamento = false
+): boolean {
+  return generico && crmTipo === "APOSTA" && orcamento <= 0 && !permitirSemOrcamento;
+}
