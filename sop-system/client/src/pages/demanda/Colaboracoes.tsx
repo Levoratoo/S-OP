@@ -21,7 +21,12 @@ import { Loader2, Plus, RefreshCw, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { ColaboracaoArquivo } from "./ColaboracaoArquivo";
 import { ColaboracaoResumos } from "./ColaboracaoResumos";
-import { parseCrmExcel } from "./parse-crm-excel";
+import { PvMtoPivotGrade } from "./PvMtoPivotGrade";
+import { cicloHorizonCalendar } from "@shared/ciclo-horizon";
+import { formatPreco4 } from "@shared/pv-preco-round";
+import { isCicloSomenteLeitura } from "@shared/ciclo-status";
+import { CicloLifecycleBar } from "@/components/ciclo/CicloLifecycleBar";
+import { CrmExcelLayoutError, parseCrmExcel } from "./parse-crm-excel";
 
 type PlanoColab = "MTS" | "PV_MTO" | "CRM";
 type GradeAba = PlanoColab | "CONSOLIDADO";
@@ -56,10 +61,9 @@ function formatNum(value: string | number | null | undefined) {
   return n.toLocaleString("pt-BR", { maximumFractionDigits: 0 });
 }
 
-/** Próximo mês = início do ciclo (equiv. aba Dias e Data C2). */
+/** Mês corrente = mês do ciclo; previsão m1…m12 começa no mês seguinte. */
 function defaultCicloInicio(now = new Date()) {
-  const next = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-  return { mesInicio: next.getMonth() + 1, anoInicio: next.getFullYear() };
+  return { mesInicio: now.getMonth() + 1, anoInicio: now.getFullYear() };
 }
 
 export default function Colaboracoes() {
@@ -100,7 +104,32 @@ export default function Colaboracoes() {
     { enabled: Boolean(selectedCicloId) && abaGrade === "MTS" }
   );
 
+  const { data: produtosCadastro } = trpc.produtos.list.useQuery();
+  const descricaoPorSku = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of produtosCadastro ?? []) {
+      const text = (p.descricao || p.nome || "").trim();
+      if (!text) continue;
+      if (p.codItem) map.set(p.codItem.trim().toUpperCase(), text);
+      if (p.codigo) map.set(p.codigo.trim().toUpperCase(), text);
+    }
+    return map;
+  }, [produtosCadastro]);
+  const descricaoDoItem = (item: { sku: string; descricao?: string | null }) => {
+    const fromItem = (item.descricao || "").trim();
+    if (fromItem) return fromItem;
+    return descricaoPorSku.get((item.sku || "").trim().toUpperCase()) || "—";
+  };
   const { data: jobs } = trpc.previsaoPython.list.useQuery({ limit: 20 });
+
+  const fecharCicloMutation = trpc.cicloComercial.fecharCiclo.useMutation({
+    onSuccess: () => {
+      toast.success("Ciclo fechado.");
+      utils.cicloComercial.list.invalidate();
+      if (selectedCicloId) utils.cicloComercial.getById.invalidate({ id: selectedCicloId });
+    },
+    onError: error => toast.error(error.message),
+  });
 
   const desagregarMutation = trpc.cicloComercial.desagregarDoJob.useMutation({
     onSuccess: result => {
@@ -120,21 +149,13 @@ export default function Colaboracoes() {
     onError: error => toast.error(error.message),
   });
 
-  const updateStatusMutation = trpc.cicloComercial.updateStatus.useMutation({
-    onSuccess: () => {
-      toast.success("Status do ciclo atualizado.");
-      utils.cicloComercial.list.invalidate();
-      if (selectedCicloId) utils.cicloComercial.getById.invalidate({ id: selectedCicloId });
-    },
-    onError: error => toast.error(error.message),
-  });
-
   const manualPvSync = useRef(false);
   const autoPvSynced = useRef<number | null>(null);
   const syncPv = trpc.cicloComercial.syncPvFromCarteira.useMutation({
     onSuccess: result => {
       utils.cicloComercial.itens.invalidate();
       utils.cicloComercial.consolidado.invalidate();
+      utils.cicloComercial.pvMtoGrade.invalidate();
       if (manualPvSync.current) {
         manualPvSync.current = false;
         toast.success(
@@ -149,7 +170,7 @@ export default function Colaboracoes() {
   });
 
   useEffect(() => {
-    if (!selectedCicloId || ciclo?.id !== selectedCicloId || ciclo.status === "FECHADO") return;
+    if (!selectedCicloId || ciclo?.id !== selectedCicloId || isCicloSomenteLeitura(ciclo.status) || ciclo.status === "CONSENSO") return;
     if (autoPvSynced.current === selectedCicloId || syncPv.isPending) return;
     autoPvSynced.current = selectedCicloId;
     syncPv.mutate({ cicloId: selectedCicloId });
@@ -158,7 +179,19 @@ export default function Colaboracoes() {
   const importCrm = trpc.cicloComercial.importCrm.useMutation({
     onSuccess: result => {
       toast.success(`CRM importado: ${result.itensCriados} itens.`);
-      if (result.avisos.length) toast.message(`${result.avisos.length} avisos de validação`);
+      if (result.skusCriados?.length) {
+        const preview = result.skusCriados.slice(0, 8).join(", ");
+        const mais =
+          result.skusCriados.length > 8 ? ` (+${result.skusCriados.length - 8})` : "";
+        toast.message(`Produtos criados (CRM_AUTO): ${preview}${mais}`);
+      }
+      if (result.foraHorizonte > 0) {
+        toast.message(
+          `${result.foraHorizonte} linha(s) com data fora do horizonte do ciclo (ignoradas).`
+        );
+      } else if (result.avisos.length) {
+        toast.message(`${result.avisos.length} aviso(s) na importação`);
+      }
       if (result.erros.length) toast.error(`${result.erros.length} erros — confira SKUs`);
       utils.cicloComercial.itens.invalidate();
       utils.cicloComercial.consolidado.invalidate();
@@ -169,13 +202,17 @@ export default function Colaboracoes() {
   const handleCrmFile = async (file: File) => {
     if (!selectedCicloId) return;
     try {
-      const rows = parseCrmExcel(await file.arrayBuffer());
-      if (!rows.length) {
+    const parsed = parseCrmExcel(await file.arrayBuffer());
+      if (!parsed.rows.length) {
         toast.error("Nenhuma linha com SKU no Excel.");
         return;
       }
-      importCrm.mutate({ cicloId: selectedCicloId, rows });
+      importCrm.mutate({ cicloId: selectedCicloId, headers: parsed.headers, rows: parsed.rows });
     } catch (error) {
+      if (error instanceof CrmExcelLayoutError) {
+        toast.error(error.message);
+        return;
+      }
       toast.error(`Falha ao ler CRM: ${String(error)}`);
     }
   };
@@ -255,14 +292,12 @@ export default function Colaboracoes() {
 
   const cicloMesLabel = (offset: number) => {
     if (!ciclo) return `M${offset + 1}`;
-    const abs = ciclo.mesInicio - 1 + offset;
-    const mes = (abs % 12) + 1;
-    const ano = ciclo.anoInicio + Math.floor(abs / 12);
-    return `${MESES_CURTO[mes - 1]}/${String(ano).slice(-2)}`;
+    const { year, month } = cicloHorizonCalendar(ciclo.anoInicio, ciclo.mesInicio, offset);
+    return `${MESES_CURTO[month - 1]}/${String(year).slice(-2)}`;
   };
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 max-w-full space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Colaboração Comercial</h1>
@@ -280,8 +315,8 @@ export default function Colaboracoes() {
             <DialogHeader>
               <DialogTitle>Novo ciclo S&OP</DialogTitle>
               <DialogDescription>
-                Equivalente a copiar o “0 - Novo Modelo Colaboração Comercial”. Desagrega a Visão
-                Executiva do job Python (aba Dias e Data = 1º dia do mês de início).
+                Desagrega a Visão Executiva do job Python. O mês do ciclo é o mês corrente do
+                processo; a previsão colaborável (m1…m12) começa no mês seguinte.
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-3 py-2">
@@ -306,7 +341,7 @@ export default function Colaboracoes() {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <Label>Mês início</Label>
+                  <Label>Mês do ciclo</Label>
                   <Select value={mesInicio} onValueChange={setMesInicio}>
                     <SelectTrigger>
                       <SelectValue />
@@ -373,27 +408,7 @@ export default function Colaboracoes() {
               </Select>
             )}
             {ciclo && (
-              <div className="flex items-center gap-2 text-sm">
-                <Badge>{ciclo.status}</Badge>
-                <span className="text-muted-foreground">
-                  Início {String(ciclo.mesInicio).padStart(2, "0")}/{ciclo.anoInicio}
-                  {ciclo.jobId ? ` · job #${ciclo.jobId}` : ""}
-                </span>
-              </div>
-            )}
-            {ciclo && ciclo.status !== "FECHADO" && (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() =>
-                  updateStatusMutation.mutate({
-                    id: ciclo.id,
-                    status: ciclo.status === "CONSOLIDADO" ? "FECHADO" : "CONSOLIDADO",
-                  })
-                }
-              >
-                {ciclo.status === "CONSOLIDADO" ? "Fechar ciclo" : "Marcar consolidado"}
-              </Button>
+              <CicloLifecycleBar cicloId={ciclo.id} status={ciclo.status} />
             )}
           </CardContent>
         </Card>
@@ -492,13 +507,13 @@ export default function Colaboracoes() {
                       {abaGrade === "CONSOLIDADO"
                         ? "Arquivo consolidado do ciclo: uma linha por SKU e mês, no modelo padrão."
                         : abaGrade === "PV_MTO"
-                          ? "Pedidos em aberto da Carteira / PV (Liberado + PRG), somados por SKU no horizonte do ciclo"
+                          ? "Pivot PV MTO: uma linha por pedido × SKU × preço, com quantidades por mês de entrega (Liberado + PRG)"
                           : abaGrade === "CRM"
                             ? "Cards do comercial. Importe o Excel para preencher a grade deste ciclo."
-                            : "MTS: realizado 2025/2026 e, em cada mês do ciclo, previsão estatística ao lado da Colab do vendedor (em branco = usa a previsão)"}
+                            : "MTS: total 12M do script redistribuído por fator % do SKU (badge “Fator %”); sem fator, sazonalidade histórica. Colab do vendedor sobrepõe a estatística (e*)."}
                     </CardDescription>
                   </div>
-                  {abaGrade === "PV_MTO" && ciclo?.status !== "FECHADO" && (
+                  {abaGrade === "PV_MTO" && ciclo?.status && !isCicloSomenteLeitura(ciclo.status) && (
                     <Button
                       size="sm"
                       variant="outline"
@@ -521,7 +536,7 @@ export default function Colaboracoes() {
                   <div className="w-64 space-y-1">
                     <Label>Buscar</Label>
                     <Input
-                      placeholder="SKU, marca, linha..."
+                      placeholder="SKU, descrição, linha..."
                       value={search}
                       onChange={e => setSearch(e.target.value)}
                     />
@@ -540,7 +555,7 @@ export default function Colaboracoes() {
                       ))}
                       <TabsTrigger value="CONSOLIDADO">Consolidado</TabsTrigger>
                     </TabsList>
-                    {abaGrade === "CRM" && ciclo?.status !== "FECHADO" && (
+                    {abaGrade === "CRM" && ciclo?.status && !isCicloSomenteLeitura(ciclo.status) && (
                       <Label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-md border bg-background px-3 text-sm font-medium hover:bg-accent">
                         {importCrm.isPending ? (
                           <Loader2 className="h-4 w-4 animate-spin" />
@@ -564,7 +579,9 @@ export default function Colaboracoes() {
                   </div>
                   {PLANOS.map(p => (
                     <TabsContent key={p} value={p} className="mt-4">
-                      {loadingItens ? (
+                      {(
+                        p === "PV_MTO" ? false : loadingItens
+                      ) ? (
                         <div className="flex justify-center py-8">
                           <Loader2 className="h-5 w-5 animate-spin" />
                         </div>
@@ -576,7 +593,7 @@ export default function Colaboracoes() {
                                 <TableHead className="sticky left-0 z-20 bg-background min-w-[120px]">
                                   SKU
                                 </TableHead>
-                                <TableHead>Marca</TableHead>
+                                <TableHead className="min-w-[200px]">Descrição</TableHead>
                                 {MESES_CURTO.map((m, i) => (
                                   <TableHead key={`r25-${i}`} className="text-right text-xs text-muted-foreground">
                                     {m}/25
@@ -623,9 +640,21 @@ export default function Colaboracoes() {
                                   return (
                                     <TableRow key={item.id} className="text-sm">
                                       <TableCell className="sticky left-0 z-10 bg-background max-w-[140px] truncate font-medium">
-                                        {item.sku}
+                                        <span className="inline-flex items-center gap-1">
+                                          {item.sku}
+                                          {(item as { estatUsouFatorSku?: boolean }).estatUsouFatorSku ? (
+                                            <Badge variant="outline" className="text-[10px] px-1 py-0">
+                                              Fator %
+                                            </Badge>
+                                          ) : null}
+                                        </span>
                                       </TableCell>
-                                      <TableCell className="max-w-[100px] truncate">{item.marca}</TableCell>
+                                      <TableCell
+                                        className="max-w-[220px] truncate"
+                                        title={descricaoDoItem(item)}
+                                      >
+                                        {descricaoDoItem(item)}
+                                      </TableCell>
                                       {r25.map((q, i) => (
                                         <TableCell key={`r25-${i}`} className="p-1 text-right text-muted-foreground tabular-nums">
                                           {q ? formatNum(q) : "·"}
@@ -652,7 +681,7 @@ export default function Colaboracoes() {
                                                 className="h-8 w-[4.5rem] px-1 text-right"
                                                 placeholder="—"
                                                 defaultValue={empty ? "" : String(Math.round(Number(raw || 0)))}
-                                                disabled={ciclo?.status === "FECHADO"}
+                                                disabled={isCicloSomenteLeitura(ciclo?.status || "")}
                                                 onBlur={e =>
                                                   handleMonthEdit(item.id, key, e.target.value)
                                                 }
@@ -671,14 +700,30 @@ export default function Colaboracoes() {
                             </TableBody>
                           </Table>
                         </div>
+                      ) : p === "PV_MTO" ? (
+                        selectedCicloId ? (
+                          <PvMtoPivotGrade
+                            cicloId={selectedCicloId}
+                            searchGlobal={search}
+                            marcasPermitidas={
+                              podeVerTodasMarcas ? null : marcasPermitidasNomes
+                            }
+                          />
+                        ) : null
                       ) : (
                         <div className="overflow-auto rounded-md border">
                           <Table>
                             <TableHeader>
                               <TableRow>
                                 <TableHead>SKU</TableHead>
+                                <TableHead className="min-w-[180px]">Descrição</TableHead>
                                 <TableHead>Marca</TableHead>
-                                <TableHead>Linha</TableHead>
+                                <TableHead>Gestor</TableHead>
+                                <TableHead className="min-w-[140px]">Modalidade</TableHead>
+                                <TableHead>Tipo</TableHead>
+                                <TableHead>Classif.</TableHead>
+                                <TableHead>Tp</TableHead>
+                                <TableHead className="text-right">R$ Venda</TableHead>
                                 {MES_KEYS.map((_, i) => (
                                   <TableHead key={i}>{cicloMesLabel(i)}</TableHead>
                                 ))}
@@ -688,12 +733,8 @@ export default function Colaboracoes() {
                             <TableBody>
                               {filteredItens.length === 0 ? (
                                 <TableRow>
-                                  <TableCell colSpan={16} className="text-center text-muted-foreground">
-                                    {p === "PV_MTO"
-                                      ? "Nenhum pedido da carteira neste horizonte."
-                                      : p === "CRM"
-                                        ? "Nenhum card CRM. Importe o Excel para preencher a grade."
-                                        : "Sem itens neste plano."}
+                                  <TableCell colSpan={24} className="text-center text-muted-foreground">
+                                    Nenhum card CRM. Importe o Excel para preencher a grade.
                                   </TableCell>
                                 </TableRow>
                               ) : (
@@ -711,8 +752,27 @@ export default function Colaboracoes() {
                                       <TableCell className="max-w-[140px] truncate font-medium">
                                         {item.sku}
                                       </TableCell>
-                                      <TableCell>{item.marca}</TableCell>
-                                      <TableCell>{item.linha}</TableCell>
+                                      <TableCell
+                                        className="max-w-[200px] truncate"
+                                        title={descricaoDoItem(item)}
+                                      >
+                                        {descricaoDoItem(item)}
+                                      </TableCell>
+                                      <TableCell>{item.marca || "—"}</TableCell>
+                                      <TableCell className="max-w-[120px] truncate" title={item.gestorSnapshot || ""}>
+                                        {item.gestorSnapshot || "—"}
+                                      </TableCell>
+                                      <TableCell className="max-w-[160px] truncate text-xs" title={(item as { crmModalidade?: string }).crmModalidade || ""}>
+                                        {(item as { crmModalidade?: string }).crmModalidade || "—"}
+                                      </TableCell>
+                                      <TableCell className="text-xs">{(item as { crmTipoNegocio?: string }).crmTipoNegocio || "—"}</TableCell>
+                                      <TableCell className="text-xs">{item.crmTipo || "—"}</TableCell>
+                                      <TableCell className="text-xs">{item.crmTemperatura || "—"}</TableCell>
+                                      <TableCell className="text-right tabular-nums text-xs">
+                                        {Number(item.valorVendaSnapshot || 0) > 0
+                                          ? formatPreco4(Number(item.valorVendaSnapshot))
+                                          : "—"}
+                                      </TableCell>
                                       {MES_KEYS.map(key => (
                                         <TableCell key={key} className="p-1">
                                           <Input
@@ -722,7 +782,7 @@ export default function Colaboracoes() {
                                                 ? ""
                                                 : String(Math.round(Number(item[key] || 0)))
                                             }
-                                            disabled={ciclo?.status === "FECHADO"}
+                                            disabled={isCicloSomenteLeitura(ciclo?.status || "")}
                                             onBlur={e => handleMonthEdit(item.id, key, e.target.value)}
                                           />
                                         </TableCell>
@@ -739,7 +799,14 @@ export default function Colaboracoes() {
                     </TabsContent>
                   ))}
                   <TabsContent value="CONSOLIDADO" className="mt-4">
-                    {selectedCicloId ? <ColaboracaoArquivo cicloId={selectedCicloId} /> : null}
+                    {selectedCicloId ? (
+                      <ColaboracaoArquivo
+                        cicloId={selectedCicloId}
+                        cicloStatus={ciclo?.status}
+                        onFecharCiclo={() => fecharCicloMutation.mutate({ id: selectedCicloId })}
+                        fechando={fecharCicloMutation.isPending}
+                      />
+                    ) : null}
                   </TabsContent>
                 </Tabs>
               </CardContent>
@@ -751,6 +818,7 @@ export default function Colaboracoes() {
               cicloId={selectedCicloId}
               consolidado={consolidado}
               marcasConsolidado={marcasConsolidado}
+              marcasSemGestor={consolidado?.marcasSemGestor}
             />
           </TabsContent>
         </Tabs>

@@ -1,7 +1,10 @@
 import { isSkuAcabado } from "@shared/sku-acabado";
+import { isCicloSomenteLeitura } from "@shared/ciclo-status";
+import { TRPCError } from "@trpc/server";
 import { eq, desc, and, sql, asc, gte, lt, inArray } from "drizzle-orm";
 import { cfopDigitosSqlIn } from "@shared/cfop-faturamento";
 import { drizzle } from "drizzle-orm/mysql2";
+import { carteiraListWhere } from "./services/carteira-pv-aberto";
 import { 
   InsertUser, users, User,
   niveisAcesso, InsertNivelAcesso, NivelAcesso,
@@ -9,6 +12,7 @@ import {
   familias, InsertFamilia, Familia,
   subfamilias, InsertSubfamilia, Subfamilia,
   produtos, InsertProduto, Produto,
+  produtoSazonalidadeFatores, InsertProdutoSazonalidadeFatores, ProdutoSazonalidadeFatores,
   clientes, InsertCliente, Cliente,
   recursos, InsertRecurso, Recurso,
   diasUteis, InsertDiaUtil, DiaUtil,
@@ -274,6 +278,32 @@ export async function setProjetarEstatisticaBatch(input: {
     naoEncontrados,
     totalProjetar: Number(countRow?.n ?? 0),
   };
+}
+
+/** Define projetar por IDs (Skus Projetar — seleção filtrada). */
+export async function setProjetarByProductIds(input: {
+  productIds: number[];
+  projetar: boolean;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const ids = Array.from(new Set(input.productIds.filter(id => Number.isInteger(id) && id > 0)));
+  if (ids.length === 0) {
+    const [countRow] = await db
+      .select({ n: sql<number>`count(*)` })
+      .from(produtos)
+      .where(eq(produtos.projetarEstatistica, true));
+    return { atualizados: 0, totalProjetar: Number(countRow?.n ?? 0) };
+  }
+  await db
+    .update(produtos)
+    .set({ projetarEstatistica: input.projetar })
+    .where(inArray(produtos.id, ids));
+  const [countRow] = await db
+    .select({ n: sql<number>`count(*)` })
+    .from(produtos)
+    .where(eq(produtos.projetarEstatistica, true));
+  return { atualizados: ids.length, totalProjetar: Number(countRow?.n ?? 0) };
 }
 
 /** Cobertura do faturamento vs mês fechado (passo a passo: até o mês anterior). */
@@ -578,14 +608,15 @@ export async function createVendasBatch(data: InsertVenda[]) {
 }
 
 // ==================== CARTEIRA DE PEDIDOS ====================
-export async function listCarteiraPedidos(limit = 100) {
+export async function listCarteiraPedidos(limit = 100, apenasPvAberto = false) {
   const db = await getDb();
   if (!db) return [];
-  return db
-    .select()
-    .from(carteiraPedidos)
-    .orderBy(desc(carteiraPedidos.competencia), desc(carteiraPedidos.id))
-    .limit(limit);
+  const pvWhere = carteiraListWhere(apenasPvAberto);
+  const base = db.select().from(carteiraPedidos);
+  const ordered = pvWhere
+    ? base.where(pvWhere).orderBy(desc(carteiraPedidos.competencia), desc(carteiraPedidos.id))
+    : base.orderBy(desc(carteiraPedidos.competencia), desc(carteiraPedidos.id));
+  return ordered.limit(limit);
 }
 
 export async function createCarteiraPedido(data: InsertCarteiraPedido) {
@@ -1597,17 +1628,32 @@ export async function createDeParaCodigo(data: InsertDeParaCodigo) {
   if (!skuAntigo || !skuNovo || skuAntigo === skuNovo.toUpperCase()) {
     throw new Error("Relação De-Para inválida.");
   }
+  const { validateDeParaEdge, inheritProjetarFromAntigo } = await import(
+    "./services/de-para-validate"
+  );
+  await validateDeParaEdge(skuAntigo, skuNovo);
   const result = await db
     .insert(deParaCodigos)
     .values({ ...data, skuAntigo, skuNovo })
     .onDuplicateKeyUpdate({ set: { skuNovo } });
+  await inheritProjetarFromAntigo(skuAntigo, skuNovo);
   return { id: result[0].insertId };
 }
 
 export async function updateDeParaCodigo(id: number, data: Partial<InsertDeParaCodigo>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
+  const [current] = await db.select().from(deParaCodigos).where(eq(deParaCodigos.id, id)).limit(1);
+  if (!current) throw new Error("De-Para não encontrado.");
+  const skuAntigo = (data.skuAntigo ?? current.skuAntigo).trim().toUpperCase();
+  const skuNovo = (data.skuNovo ?? current.skuNovo).trim();
+  const { validateDeParaEdge, inheritProjetarFromAntigo } = await import(
+    "./services/de-para-validate"
+  );
+  const others = (await db.select().from(deParaCodigos)).filter(r => r.id !== id);
+  await validateDeParaEdge(skuAntigo, skuNovo, others);
   await db.update(deParaCodigos).set(data).where(eq(deParaCodigos.id, id));
+  await inheritProjetarFromAntigo(skuAntigo, skuNovo);
 }
 
 export async function deleteDeParaCodigo(id: number) {
@@ -1627,11 +1673,21 @@ export async function createDeParaCodigosBatch(data: InsertDeParaCodigo[]) {
     if (!skuAntigo || !skuNovo || skuAntigo === skuNovo.toUpperCase()) continue;
     normalized.set(skuAntigo, skuNovo);
   }
+  const { validateDeParaEdge, inheritProjetarFromAntigo } = await import(
+    "./services/de-para-validate"
+  );
+  const existing = await db.select().from(deParaCodigos);
+  const accPairs = existing.map(r => ({ skuAntigo: r.skuAntigo, skuNovo: r.skuNovo }));
   for (const [skuAntigo, skuNovo] of normalized) {
+    await validateDeParaEdge(skuAntigo, skuNovo, accPairs.filter(p => p.skuAntigo !== skuAntigo));
     await db
       .insert(deParaCodigos)
       .values({ skuAntigo, skuNovo })
       .onDuplicateKeyUpdate({ set: { skuNovo } });
+    await inheritProjetarFromAntigo(skuAntigo, skuNovo);
+    const existingIdx = accPairs.findIndex(p => p.skuAntigo === skuAntigo);
+    if (existingIdx >= 0) accPairs[existingIdx] = { skuAntigo, skuNovo };
+    else accPairs.push({ skuAntigo, skuNovo });
   }
   return { count: normalized.size };
 }
@@ -2558,7 +2614,8 @@ export async function listCicloComercialItens(
 
 export async function updateCicloComercialItem(
   id: number,
-  data: Partial<InsertCicloComercialItem>
+  data: Partial<InsertCicloComercialItem>,
+  actor?: { isAdmin?: boolean; usuario?: string | null }
 ) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -2567,21 +2624,49 @@ export async function updateCicloComercialItem(
     .from(cicloComercialItens)
     .where(eq(cicloComercialItens.id, id))
     .limit(1);
-  if (!current) throw new Error("Item do ciclo não encontrado.");
+  if (!current) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Item do ciclo não encontrado." });
+  }
   const [ciclo] = await db
     .select({ status: ciclosComerciais.status })
     .from(ciclosComerciais)
     .where(eq(ciclosComerciais.id, current.cicloId))
     .limit(1);
-  if (ciclo?.status === "FECHADO") {
-    throw new Error("Ciclo fechado não pode ser alterado.");
+  if (isCicloSomenteLeitura(ciclo?.status || "")) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "Ciclo aprovado ou congelado não pode ser alterado.",
+    });
+  }
+  if (ciclo?.status === "CONSENSO") {
+    const plano = (data.planoColab ?? current.planoColab) as string;
+    const bloqueado = plano === "MTS" || plano === "JITO" || plano === "CRM" || plano === "PV_MTO";
+    if (bloqueado && !actor?.isAdmin) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message:
+          "Em CONSENSO a edição de MTS, CRM e PV fica só com admin (com auditoria). Vendedor pode voltar para EM_COLABORACAO com motivo.",
+      });
+    }
+    if (actor?.isAdmin) {
+      await db.execute(sql`
+        INSERT INTO ciclo_status_historico (cicloId, statusDe, statusPara, usuario, comentario)
+        VALUES (
+          ${current.cicloId},
+          'CONSENSO',
+          'CONSENSO',
+          ${actor.usuario ?? "admin"},
+          ${`ajuste admin item ${id}`}
+        )
+      `);
+    }
   }
   const merged = { ...current, ...data };
   await db
     .update(cicloComercialItens)
     .set({
       ...data,
-      qtdeColaborada: String(Math.round(sumItemMonths(merged) * 100) / 100),
+      qtdeColaborada: String(Math.round(sumItemMonths(merged as Record<string, unknown>) * 100) / 100),
     })
     .where(eq(cicloComercialItens.id, id));
 }
@@ -2590,10 +2675,7 @@ const MES_KEYS_SUM = ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10
 const EST_KEYS_SUM = ["e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8", "e9", "e10", "e11", "e12"] as const;
 
 /** Vendedor prevalece quando informou o mês; senão usa estatística e*. */
-export function monthEffectiveQty(
-  item: Record<string, string | number | null | undefined>,
-  monthIndex: number
-): number {
+export function monthEffectiveQty(item: Record<string, unknown>, monthIndex: number): number {
   const mKey = MES_KEYS_SUM[monthIndex];
   const eKey = EST_KEYS_SUM[monthIndex];
   const mRaw = item[mKey];
@@ -2605,7 +2687,7 @@ export function monthEffectiveQty(
   return Number.isFinite(e) ? e : 0;
 }
 
-export function sumItemMonths(item: Record<string, string | number | null | undefined>) {
+export function sumItemMonths(item: Record<string, unknown>) {
   let total = 0;
   for (let i = 0; i < 12; i++) total += monthEffectiveQty(item, i);
   return total;
@@ -2648,13 +2730,13 @@ export async function getCicloComercialConsolidado(cicloId: number) {
     byMarca[marcaKey].estatistica += estat;
 
     const anoBase = ciclo?.anoInicio ?? new Date().getFullYear();
-    const mesBase = ciclo?.mesInicio ?? 1;
+    const mesCiclo = ciclo?.mesInicio ?? 1;
     for (let i = 0; i < 12; i++) {
-      const qMes = monthEffectiveQty(item as Record<string, string | number | null | undefined>, i);
+      const qMes = monthEffectiveQty(item as Record<string, unknown>, i);
       if (qMes === 0) continue;
-      const mesAbs = mesBase + i;
-      const ano = anoBase + Math.floor((mesAbs - 1) / 12);
-      const mes = ((mesAbs - 1) % 12) + 1;
+      const t = mesCiclo + i;
+      const mes = (t % 12) + 1;
+      const ano = anoBase + Math.floor(t / 12);
       baseCiclo.push({
         ano,
         mes,
@@ -2673,12 +2755,38 @@ export async function getCicloComercialConsolidado(cicloId: number) {
   const mts = (byPlano["MTS"]?.qtde ?? 0) + (byPlano["JITO"]?.qtde ?? 0);
   const crm = byPlano["CRM"]?.qtde ?? 0;
 
+  const dbConn = await getDb();
+  const marcasSemGestor: string[] = [];
+  if (dbConn) {
+    const [vinculos, marcasRows] = await Promise.all([
+      dbConn
+        .select({ marcaId: gestorMarca.marcaId })
+        .from(gestorMarca)
+        .where(eq(gestorMarca.ativo, true)),
+      dbConn.select({ id: marcas.id, nome: marcas.nome }).from(marcas),
+    ]);
+    const marcaIdComGestor = new Set(vinculos.map(v => v.marcaId));
+    const nomeComGestor = new Set<string>();
+    for (const m of marcasRows) {
+      if (marcaIdComGestor.has(m.id) && m.nome) {
+        nomeComGestor.add(m.nome.trim().toLowerCase());
+      }
+    }
+    for (const marcaKey of Object.keys(byMarca)) {
+      const norm = marcaKey.trim().toLowerCase();
+      if (norm === "sem-marca" || !norm) continue;
+      if (!nomeComGestor.has(norm)) marcasSemGestor.push(marcaKey);
+    }
+    marcasSemGestor.sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }
+
   return {
     totalQtde: total,
     totalEstatistica,
     gapColabVsEstatistica: total - totalEstatistica,
     byPlano,
     byMarca,
+    marcasSemGestor,
     resumoPlanos: {
       mts,
       jito: 0,

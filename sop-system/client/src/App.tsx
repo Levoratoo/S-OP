@@ -11,7 +11,6 @@ const NotFound = lazy(() => import("./pages/NotFound"));
 const Home = lazy(() => import("./pages/Home"));
 const Acuracidade = lazy(() => import("./pages/demanda/Acuracidade"));
 const Colaboracoes = lazy(() => import("./pages/demanda/Colaboracoes"));
-const Familias = lazy(() => import("./pages/cadastros/Familias"));
 const Produtos = lazy(() => import("./pages/cadastros/Produtos"));
 const SkusProjetar = lazy(() => import("./pages/cadastros/SkusProjetar"));
 const Clientes = lazy(() => import("./pages/cadastros/Clientes"));
@@ -29,7 +28,6 @@ const DeParaCodigos = lazy(() => import("./pages/cadastros/DeParaCodigos"));
 const ImportacaoDadosSistema = lazy(
   () => import("./pages/cadastros/ImportacaoDadosSistema")
 );
-const SazonalidadeMarca = lazy(() => import("./pages/cadastros/SazonalidadeMarca"));
 const PrevisaoPython = lazy(() => import("./pages/integracao/PrevisaoPython"));
 const PrevisaoPythonCiclo13 = lazy(
   () => import("./pages/integracao/PrevisaoPythonCiclo13")
@@ -51,6 +49,9 @@ function RedirectTo({ href }: { href: string }) {
 
   return null;
 }
+
+const FamiliasRemoved = () => <RedirectTo href="/cadastros/produtos" />;
+const SazonalidadeMarcaRemoved = () => <RedirectTo href="/previsao-python" />;
 
 function LegacyPrevisaoPythonRedirect() {
   return <RedirectTo href="/previsao-python" />;
@@ -91,7 +92,7 @@ function Router() {
           <Route path="/demanda/colaboracoes" component={Colaboracoes} />
           <Route path="/demanda/acuracidade" component={Acuracidade} />
 
-          <Route path="/cadastros/familias" component={Familias} />
+          <Route path="/cadastros/familias" component={FamiliasRemoved} />
           <Route path="/cadastros/produtos" component={Produtos} />
           <Route path="/cadastros/skus-projetar" component={SkusProjetar} />
           <Route path="/cadastros/clientes" component={Clientes} />
@@ -105,7 +106,7 @@ function Router() {
           <Route path="/cadastros/gestor-marca" component={GestorMarca} />
           <Route path="/cadastros/depara" component={DeParaCodigos} />
           <Route path="/cadastros/importacao-base" component={ImportacaoDadosSistema} />
-          <Route path="/cadastros/sazonalidade-marca" component={SazonalidadeMarca} />
+          <Route path="/cadastros/sazonalidade-marca" component={SazonalidadeMarcaRemoved} />
 
           <Route path="/admin/usuarios" component={GerenciamentoUsuarios} />
           <Route path="/admin/permissoes" component={GerenciamentoUsuarios} />

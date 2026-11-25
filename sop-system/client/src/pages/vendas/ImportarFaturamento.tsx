@@ -1,18 +1,15 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { formatCalendarDate } from "@shared/calendar-date";
-import { isCfopFaturamentoPermitido } from "@shared/cfop-faturamento";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { trpc } from "@/lib/trpc";
-import { Upload, FileSpreadsheet, CheckCircle2, AlertCircle, Loader2, Trash2, Download, Database, RefreshCw, Users } from "lucide-react";
+import { AlertCircle, CheckCircle2, Loader2, Trash2, Download, Database, RefreshCw, Users } from "lucide-react";
 import { toast } from "sonner";
-import { useRefreshFaturamentoRecent } from "./useRefreshFaturamentoRecent";
-import * as XLSX from "xlsx";
+import { useRefreshFaturamentoRecent, toastPostSyncAlerts } from "./useRefreshFaturamentoRecent";
 
 const MONTH_OPTIONS = [
   { value: "all", label: "Todos os meses" },
@@ -30,71 +27,10 @@ const MONTH_OPTIONS = [
   { value: "12", label: "Dezembro" },
 ] as const;
 
-// Mapeamento de colunas do Excel para campos do banco
-const COLUMN_MAPPING: Record<string, string> = {
-  "Data Emissão": "dataEmissao",
-  "Data Emissao": "dataEmissao",
-  "Cod. Cliente": "codCliente",
-  "Cod Cliente": "codCliente",
-  "CNPJ": "cnpj",
-  "Unidade": "unidade",
-  "Nº da NF": "nfNumero",
-  "N° da NF": "nfNumero",
-  "No da NF": "nfNumero",
-  "Cidade": "cidade",
-  "UF": "uf",
-  "Marca": "marca",
-  "Cod. Material": "codMaterial",
-  "Cod Material": "codMaterial",
-  "Descrição Item": "descricaoItem",
-  "Descricao Item": "descricaoItem",
-  "Tipo Negocio": "tipoNegocio",
-  "Tipo Negócio": "tipoNegocio",
-  "Tipo Estoque": "tipoEstoque",
-  "Linha Produto": "linhaProduto",
-  "Qtd.": "qtd",
-  "Qtd": "qtd",
-  "Valor Total": "valorTotal",
-  "Gestor": "gestor",
-  "CFOP": "cfop",
-  "Desc. CFOP": "descCfop",
-  "Desc CFOP": "descCfop",
-  "Tipo de Fatur.": "tipoFaturamento",
-  "Tipo de Faturamento": "tipoFaturamento",
-  "Tipo Faturamento": "tipoFaturamento",
-};
-
-interface ParsedRow {
-  dataEmissao: string;
-  codCliente?: string;
-  cnpj?: string;
-  unidade?: string;
-  nfNumero?: string;
-  cidade?: string;
-  uf?: string;
-  marca?: string;
-  codMaterial?: string;
-  descricaoItem?: string;
-  tipoNegocio?: string;
-  tipoEstoque?: "MTS" | "MTO";
-  linhaProduto?: string;
-  qtd: string;
-  valorTotal: string;
-  gestor?: string;
-  cfop?: string;
-  descCfop?: string;
-  tipoFaturamento?: "DEVOLUCAO" | "SAIDA";
-}
-
 export default function ImportarFaturamento() {
   const currentYear = new Date().getFullYear();
   const [year, setYear] = useState(currentYear);
   const [month, setMonth] = useState<string>("all");
-  const [file, setFile] = useState<File | null>(null);
-  const [parsedData, setParsedData] = useState<ParsedRow[]>([]);
-  const [errors, setErrors] = useState<string[]>([]);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [importProgress, setImportProgress] = useState(0);
 
   const utils = trpc.useUtils();
   const refreshRecent = useRefreshFaturamentoRecent();
@@ -109,27 +45,7 @@ export default function ImportarFaturamento() {
     limit: 50,
   });
   
-  const importMutation = trpc.faturamento.importBatch.useMutation({
-    onSuccess: (result) => {
-      const skipped = result.skippedCfop ?? 0;
-      toast.success(
-        skipped > 0
-          ? `${result.count} registros importados. ${skipped} linhas fora do CFOP foram ignoradas.`
-          : `${result.count} registros importados com sucesso!`
-      );
-      utils.faturamento.stats.invalidate();
-      utils.faturamento.list.invalidate();
-      utils.faturamento.porMes.invalidate();
-      setParsedData([]);
-      setFile(null);
-      setImportProgress(100);
-    },
-    onError: (error) => {
-      toast.error(`Erro na importação: ${error.message}`);
-      setImportProgress(0);
-    },
-  });
-
+  
   const clearMutation = trpc.faturamento.clear.useMutation({
     onSuccess: () => {
       toast.success("Base de faturamento limpa com sucesso!");
@@ -168,6 +84,7 @@ export default function ImportarFaturamento() {
         .map(year => `${year.year}: ${year.inserted.toLocaleString("pt-BR")}`)
         .join(" · ");
       toast.success(`Anos recarregados. ${detail}`);
+      if (status.result.postSync) toastPostSyncAlerts(status.result.postSync);
       utils.faturamento.stats.invalidate();
       utils.faturamento.list.invalidate();
       utils.faturamento.porMes.invalidate();
@@ -181,6 +98,7 @@ export default function ImportarFaturamento() {
       toast.success(
         `Carga salva: ${result.inserted.toLocaleString("pt-BR")} registros de ${result.desde} em diante`
       );
+      if (result.postSync) toastPostSyncAlerts(result.postSync);
       utils.faturamento.stats.invalidate();
       utils.faturamento.list.invalidate();
       utils.faturamento.porMes.invalidate();
@@ -200,181 +118,6 @@ export default function ImportarFaturamento() {
     },
     onError: error => toast.error(`Falha ao gerar cadastros: ${error.message}`),
   });
-
-  const parseExcelDate = (value: unknown): string => {
-    if (typeof value === "number") {
-      // Excel date serial number
-      const date = XLSX.SSF.parse_date_code(value);
-      return `${date.y}-${String(date.m).padStart(2, "0")}-${String(date.d).padStart(2, "0")}`;
-    }
-    if (typeof value === "string") {
-      // Try to parse DD/MM/YYYY format
-      const parts = value.split("/");
-      if (parts.length === 3) {
-        return `${parts[2]}-${parts[1].padStart(2, "0")}-${parts[0].padStart(2, "0")}`;
-      }
-      return value;
-    }
-    return new Date().toISOString().split("T")[0];
-  };
-
-  const parseNumber = (value: unknown): string => {
-    if (typeof value === "number") return value.toString();
-    if (typeof value === "string") {
-      // Remove thousand separators and convert decimal comma to dot
-      return value.replace(/\./g, "").replace(",", ".").trim();
-    }
-    return "0";
-  };
-
-  const handleFileUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFile = e.target.files?.[0];
-    if (!selectedFile) return;
-
-    setFile(selectedFile);
-    setIsProcessing(true);
-    setErrors([]);
-    setParsedData([]);
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      try {
-        const data = new Uint8Array(event.target?.result as ArrayBuffer);
-        const workbook = XLSX.read(data, { type: "array" });
-        const sheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[sheetName];
-        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as unknown[][];
-
-        if (jsonData.length < 2) {
-          setErrors(["Arquivo vazio ou sem dados"]);
-          setIsProcessing(false);
-          return;
-        }
-
-        // Get headers from first row
-        const headers = jsonData[0] as string[];
-        const mappedHeaders: string[] = headers.map(h => {
-          const normalized = String(h).trim();
-          return COLUMN_MAPPING[normalized] || normalized.toLowerCase().replace(/\s+/g, "");
-        });
-
-        // Find required column indexes
-        const dataEmissaoIdx = mappedHeaders.indexOf("dataEmissao");
-        const qtdIdx = mappedHeaders.indexOf("qtd");
-        const valorTotalIdx = mappedHeaders.indexOf("valorTotal");
-
-        const parseErrors: string[] = [];
-        if (dataEmissaoIdx === -1) parseErrors.push("Coluna 'Data Emissão' não encontrada");
-        if (qtdIdx === -1) parseErrors.push("Coluna 'Qtd.' não encontrada");
-        if (valorTotalIdx === -1) parseErrors.push("Coluna 'Valor Total' não encontrada");
-
-        if (parseErrors.length > 0) {
-          setErrors(parseErrors);
-          setIsProcessing(false);
-          return;
-        }
-
-        // Parse data rows
-        const rows: ParsedRow[] = [];
-        const cfopIdx = mappedHeaders.indexOf("cfop");
-        let cfopIgnorados = 0;
-        for (let i = 1; i < jsonData.length; i++) {
-          const row = jsonData[i] as unknown[];
-          if (!row || row.length === 0) continue;
-
-          const dataEmissao = parseExcelDate(row[dataEmissaoIdx]);
-          const qtd = parseNumber(row[qtdIdx]);
-          const valorTotal = parseNumber(row[valorTotalIdx]);
-
-          // Skip empty rows
-          if (!dataEmissao || qtd === "0" || qtd === "") continue;
-          const cfopValor = cfopIdx >= 0 ? row[cfopIdx] : "";
-          if (!isCfopFaturamentoPermitido(cfopValor)) {
-            cfopIgnorados += 1;
-            continue;
-          }
-
-          const parsedRow: ParsedRow = {
-            dataEmissao,
-            qtd,
-            valorTotal,
-          };
-
-          // Map optional fields
-          mappedHeaders.forEach((field, idx) => {
-            if (idx === dataEmissaoIdx || idx === qtdIdx || idx === valorTotalIdx) return;
-            const value = row[idx];
-            if (value !== undefined && value !== null && value !== "") {
-              if (field === "tipoEstoque") {
-                const v = String(value).toUpperCase();
-                if (v === "MTS" || v === "MTO") {
-                  parsedRow.tipoEstoque = v;
-                }
-              } else if (field === "tipoFaturamento") {
-                const v = String(value).toUpperCase();
-                if (v.includes("DEVOL")) {
-                  parsedRow.tipoFaturamento = "DEVOLUCAO";
-                } else {
-                  parsedRow.tipoFaturamento = "SAIDA";
-                }
-              } else if (field in parsedRow || ["codCliente", "cnpj", "unidade", "nfNumero", "cidade", "uf", "marca", "codMaterial", "descricaoItem", "tipoNegocio", "linhaProduto", "gestor", "cfop", "descCfop"].includes(field)) {
-                (parsedRow as unknown as Record<string, unknown>)[field] = String(value);
-              }
-            }
-          });
-
-          rows.push(parsedRow);
-        }
-
-        setParsedData(rows);
-        setIsProcessing(false);
-        toast.success(
-          cfopIgnorados > 0
-            ? `${rows.length} registros carregados. ${cfopIgnorados} linhas fora do CFOP foram ignoradas.`
-            : `${rows.length} registros carregados do arquivo`
-        );
-      } catch (error) {
-        setErrors([`Erro ao processar arquivo: ${error}`]);
-        setIsProcessing(false);
-      }
-    };
-
-    reader.readAsArrayBuffer(selectedFile);
-  }, []);
-
-  const handleImport = async () => {
-    if (parsedData.length === 0) return;
-    
-    setImportProgress(10);
-    
-    // Import in batches to show progress
-    const batchSize = 1000;
-    const batches = Math.ceil(parsedData.length / batchSize);
-    
-    for (let i = 0; i < batches; i++) {
-      const batch = parsedData.slice(i * batchSize, (i + 1) * batchSize);
-      await importMutation.mutateAsync(batch);
-      setImportProgress(Math.round(((i + 1) / batches) * 90) + 10);
-    }
-  };
-
-  const downloadTemplate = () => {
-    const headers = [
-      "Data Emissão", "Cod. Cliente", "CNPJ", "Unidade", "Nº da NF", "Cidade", "UF",
-      "Marca", "Cod. Material", "Descrição Item", "Tipo Negocio", "Tipo Estoque",
-      "Linha Produto", "Qtd.", "Valor Total", "Gestor", "CFOP", "Desc. CFOP", "Tipo de Fatur."
-    ];
-    const exampleRow = [
-      "15/12/2024", "12345", "12.345.678/0001-90", "Franquia", "1234", "São Paulo", "SP",
-      "Marca X", "99.99.999999", "Produto Exemplo", "VAR", "MTS",
-      "Classic", "100", "5000.00", "João Silva", "5102", "Venda de mercadoria", "Saída"
-    ];
-    
-    const ws = XLSX.utils.aoa_to_sheet([headers, exampleRow]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Template");
-    XLSX.writeFile(wb, "template_faturamento.xlsx");
-  };
 
   const yearOptions = [currentYear, currentYear - 1, currentYear - 2];
 
@@ -412,17 +155,13 @@ export default function ImportarFaturamento() {
               ))}
             </SelectContent>
           </Select>
-          <Button variant="outline" onClick={downloadTemplate}>
-            <Download className="h-4 w-4 mr-2" />
-            Template
-          </Button>
         </div>
       </div>
 
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <FileSpreadsheet className="h-5 w-5" />
+            <Database className="h-5 w-5" />
             Histórico armazenado — {year}
             {monthNum ? ` / ${MONTH_OPTIONS.find(m => m.value === month)?.label}` : ""}
           </CardTitle>
@@ -590,7 +329,7 @@ export default function ImportarFaturamento() {
             Carregar histórico do ERP
           </CardTitle>
           <CardDescription>
-            Uma carga grava o histórico local (desde {sqlTestQuery.data?.desde ?? "2020-01-01"}),
+            Uma carga grava o histórico local (desde {sqlTestQuery.data?.desde ?? "2022-01-01"}),
             ano a ano. Depois disso basta filtrar por mês — só rode de novo para atualizar.
           </CardDescription>
         </CardHeader>
@@ -623,7 +362,7 @@ export default function ImportarFaturamento() {
                 ) : (
                   <p className="text-xs text-muted-foreground">
                     Contagem por ano indisponível ou zerada na view a partir de{" "}
-                    {sqlTestQuery.data?.desde ?? "2020-01-01"}.
+                    {sqlTestQuery.data?.desde ?? "2022-01-01"}.
                   </p>
                 )}
               </>
@@ -648,7 +387,7 @@ export default function ImportarFaturamento() {
               onClick={() => {
                 if (
                   confirm(
-                    "Isso atualiza o histórico local a partir do MetricsPROD (substitui o período desde 2020-01-01, ano a ano). Continuar?"
+                    "Isso atualiza o histórico local a partir do MetricsPROD (substitui o período desde 2022-01-01, ano a ano). Continuar?"
                   )
                 ) {
                   syncSqlMutation.mutate({ clearBefore: true });
@@ -692,10 +431,26 @@ export default function ImportarFaturamento() {
               <AlertDescription>
                 {yearsRunning
                   ? "Recarregando 2024 e 2025 no MetricsPROD com o mesmo ajuste de 2026. Os outros anos ficam como estão."
-                  : `Buscando faturamento desde ${sqlTestQuery.data?.desde ?? "2020-01-01"} no MetricsPROD (um ano por vez) e gravando na base local. Pode levar vários minutos.`}
+                  : `Buscando faturamento desde ${sqlTestQuery.data?.desde ?? "2022-01-01"} no MetricsPROD (um ano por vez) e gravando na base local. Pode levar vários minutos.`}
               </AlertDescription>
             </Alert>
           ) : null}
+          <Alert className="border-muted bg-muted/30">
+            <AlertCircle className="h-4 w-4" />
+            <AlertTitle>Runbook faturamento (spec Parte 2)</AlertTitle>
+            <AlertDescription className="text-sm space-y-1">
+              <p>
+                Histórico ERP de <strong>2022-01-01</strong> (<code>ERP_FATURAMENTO_DESDE</code>) até{" "}
+                <strong>D-1</strong>, via sync incremental ao abrir a tela e botão &quot;Carregar / atualizar
+                do ERP&quot;.
+              </p>
+              <p>
+                Se 2024 ou 2025 estiverem incorretos frente a 2026, use &quot;Recarregar 2024 e 2025&quot;
+                (substitui só esses anos; 2026+ intactos). Clientes e vínculos gestor×marca rodam sozinhos após
+                cada carga.
+              </p>
+            </AlertDescription>
+          </Alert>
           {syncSqlMutation.data ? (
             <Alert>
               <CheckCircle2 className="h-4 w-4" />
@@ -761,211 +516,15 @@ export default function ImportarFaturamento() {
         </CardContent>
       </Card>
 
-      {/* Upload Card (fallback) */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Upload de Arquivo (fallback)</CardTitle>
-          <CardDescription>
-            Use só se o SQL estiver indisponível. Excel (.xlsx, .xls) ou CSV.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-4">
-            <div className="border-2 border-dashed rounded-lg p-8 text-center">
-              <input
-                type="file"
-                accept=".xlsx,.xls,.csv"
-                onChange={handleFileUpload}
-                className="hidden"
-                id="file-upload"
-                disabled={isProcessing}
-              />
-              <label htmlFor="file-upload" className="cursor-pointer">
-                <Upload className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-                <p className="text-lg font-medium">
-                  {file ? file.name : "Clique para selecionar ou arraste o arquivo"}
-                </p>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Formatos suportados: .xlsx, .xls, .csv
-                </p>
-              </label>
-            </div>
-
-            {isProcessing && (
-              <div className="flex items-center gap-2">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span>Processando arquivo...</span>
-              </div>
-            )}
-
-            {errors.length > 0 && (
-              <Alert variant="destructive">
-                <AlertCircle className="h-4 w-4" />
-                <AlertTitle>Erros encontrados</AlertTitle>
-                <AlertDescription>
-                  <ul className="list-disc list-inside">
-                    {errors.map((error, idx) => (
-                      <li key={idx}>{error}</li>
-                    ))}
-                  </ul>
-                </AlertDescription>
-              </Alert>
-            )}
-
-            {importProgress > 0 && importProgress < 100 && (
-              <div className="space-y-2">
-                <div className="flex justify-between text-sm">
-                  <span>Importando...</span>
-                  <span>{importProgress}%</span>
-                </div>
-                <Progress value={importProgress} />
-              </div>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Preview Card */}
-      {parsedData.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center justify-between">
-              <span className="flex items-center gap-2">
-                <CheckCircle2 className="h-5 w-5 text-green-600" />
-                Preview dos Dados ({parsedData.length} registros)
-              </span>
-              <Button onClick={handleImport} disabled={importMutation.isPending}>
-                {importMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                Importar Dados
-              </Button>
-            </CardTitle>
-            <CardDescription>
-              Verifique os dados antes de importar. Mostrando os primeiros 10 registros.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Data</TableHead>
-                    <TableHead>NF</TableHead>
-                    <TableHead>Cliente</TableHead>
-                    <TableHead>Material</TableHead>
-                    <TableHead>Descrição</TableHead>
-                    <TableHead className="text-right">Qtd</TableHead>
-                    <TableHead className="text-right">Valor</TableHead>
-                    <TableHead>Tipo</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {parsedData.slice(0, 10).map((row, idx) => (
-                    <TableRow key={idx}>
-                      <TableCell>{formatCalendarDate(row.dataEmissao)}</TableCell>
-                      <TableCell>{row.nfNumero || "-"}</TableCell>
-                      <TableCell>{row.codCliente || "-"}</TableCell>
-                      <TableCell className="font-mono text-xs">{row.codMaterial || "-"}</TableCell>
-                      <TableCell className="max-w-[200px] truncate">{row.descricaoItem || "-"}</TableCell>
-                      <TableCell className="text-right">{parseFloat(row.qtd).toLocaleString("pt-BR")}</TableCell>
-                      <TableCell className="text-right">R$ {parseFloat(row.valorTotal).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</TableCell>
-                      <TableCell>
-                        <Badge variant={row.tipoFaturamento === "DEVOLUCAO" ? "destructive" : "default"}>
-                          {row.tipoFaturamento || "SAIDA"}
-                        </Badge>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-            {parsedData.length > 10 && (
-              <p className="text-sm text-muted-foreground mt-4 text-center">
-                ... e mais {parsedData.length - 10} registros
-              </p>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Column Mapping Reference */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Colunas Esperadas</CardTitle>
-          <CardDescription>O arquivo deve conter as seguintes colunas (nomes flexíveis)</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-2 md:grid-cols-3 text-sm">
-            <div className="flex items-center gap-2">
-              <Badge variant="destructive">Obrigatório</Badge>
-              <span>Data Emissão</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Badge variant="destructive">Obrigatório</Badge>
-              <span>Qtd.</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Badge variant="destructive">Obrigatório</Badge>
-              <span>Valor Total</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Badge variant="secondary">Opcional</Badge>
-              <span>Cod. Cliente</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Badge variant="secondary">Opcional</Badge>
-              <span>CNPJ</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Badge variant="secondary">Opcional</Badge>
-              <span>Unidade</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Badge variant="secondary">Opcional</Badge>
-              <span>Nº da NF</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Badge variant="secondary">Opcional</Badge>
-              <span>Cidade / UF</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Badge variant="secondary">Opcional</Badge>
-              <span>Marca</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Badge variant="secondary">Opcional</Badge>
-              <span>Cod. Material</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Badge variant="secondary">Opcional</Badge>
-              <span>Descrição Item</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Badge variant="secondary">Opcional</Badge>
-              <span>Tipo Negocio</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Badge variant="secondary">Opcional</Badge>
-              <span>Tipo Estoque (MTS/MTO)</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Badge variant="secondary">Opcional</Badge>
-              <span>Linha Produto</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Badge variant="secondary">Opcional</Badge>
-              <span>Gestor</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Badge variant="secondary">Opcional</Badge>
-              <span>CFOP / Desc. CFOP</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Badge variant="secondary">Opcional</Badge>
-              <span>Tipo de Fatur. (Devolução/Saída)</span>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      <Alert className="border-muted bg-muted/30">
+        <AlertCircle className="h-4 w-4" />
+        <AlertTitle>Importação por arquivo desativada</AlertTitle>
+        <AlertDescription>
+          O histórico de faturamento vem somente do ERP (MetricsPROD). Use a sincronização e, se
+          necessário, &quot;Recarregar 2024 e 2025&quot; acima. A única importação manual do S&amp;OP
+          é o Excel do CRM na Colaboração Comercial.
+        </AlertDescription>
+      </Alert>
     </div>
   );
 }

@@ -4,8 +4,14 @@
  */
 import { sql } from "drizzle-orm";
 import * as db from "../db";
+import { getDb } from "../db";
+import { deParaCodigos, produtos } from "../../drizzle/schema";
+import { eq } from "drizzle-orm";
 import type { InsertCliente, InsertProduto } from "../../drizzle/schema";
+import { isSkuAcabado } from "@shared/sku-acabado";
 import { invalidateDeParaCache } from "./de-para-map";
+import { normalizeTipoNegocioComercial } from "@shared/tipo-negocio";
+import { ensureFatSkuCatalog, invalidateFatSkuCatalogReady, listFatSkuCatalog } from "./fat-sku-catalog";
 
 export type SeedFromFaturamentoResult = {
   dryRun: boolean;
@@ -35,6 +41,7 @@ type FatProdutoRow = {
   linhaProduto: string | null;
   tipoNegocio: string | null;
   tipoEstoque: string | null;
+  grupoProduto: string | null;
 };
 
 type FatClienteRow = {
@@ -75,7 +82,8 @@ async function loadDistinctProdutos(): Promise<FatProdutoRow[]> {
       MAX(marca) AS marca,
       MAX(linhaProduto) AS linhaProduto,
       MAX(tipoNegocio) AS tipoNegocio,
-      MAX(tipoEstoque) AS tipoEstoque
+      MAX(tipoEstoque) AS tipoEstoque,
+      MAX(grupoProduto) AS grupoProduto
     FROM faturamento
     WHERE codMaterial IS NOT NULL AND TRIM(codMaterial) <> ''
     GROUP BY TRIM(codMaterial)
@@ -106,16 +114,23 @@ async function loadDistinctClientes(): Promise<FatClienteRow[]> {
   return ((result[0] as unknown) as FatClienteRow[]) ?? [];
 }
 
+type AntigoProdutoRef = Pick<
+  InsertProduto,
+  "projetarEstatistica" | "tipoNegocio" | "grupo" | "linha" | "modelo" | "tipoEstoque"
+>;
+
 function buildProduto(
   row: FatProdutoRow,
   marcaIdByName: Map<string, number>,
+  herdar?: AntigoProdutoRef | null
 ): InsertProduto {
   const cod = clean(row.codMaterial)!;
   const desc = clean(row.descricaoItem) || cod;
   const marca = clean(row.marca);
   const linha = clean(row.linhaProduto);
-  const tipoNegocio = clean(row.tipoNegocio);
+  const tipoNegocio = normalizeTipoNegocioComercial(clean(row.tipoNegocio)) ?? undefined;
   const tipoEstoque = normalizeTipoEstoque(clean(row.tipoEstoque));
+  const grupo = clean(row.grupoProduto);
   const marcaId = marca ? marcaIdByName.get(marca.toLowerCase()) : undefined;
 
   return {
@@ -125,11 +140,13 @@ function buildProduto(
     descricao: desc.slice(0, 300),
     marca: marca ?? undefined,
     marcaId: marcaId ?? undefined,
-    linha: linha ?? undefined,
-    tipoNegocio: tipoNegocio ?? undefined,
-    tipoEstoque: tipoEstoque ?? "MTS",
+    linha: herdar?.linha ?? linha ?? undefined,
+    grupo: herdar?.grupo ?? grupo ?? undefined,
+    modelo: herdar?.modelo ?? undefined,
+    tipoNegocio: herdar?.tipoNegocio ?? tipoNegocio,
+    tipoEstoque: herdar?.tipoEstoque ?? tipoEstoque ?? "MTS",
     status: "ATIVO",
-    projetarEstatistica: true,
+    projetarEstatistica: herdar?.projetarEstatistica ?? true,
     unidade: "UN",
   };
 }
@@ -158,12 +175,15 @@ function buildCliente(row: FatClienteRow): InsertCliente | null {
 
 export async function seedProdutosClientesFromFaturamento(options?: {
   dryRun?: boolean;
+  /** Só clientes (sync automático pós-faturamento). */
+  clientesOnly?: boolean;
 }): Promise<SeedFromFaturamentoResult> {
   const dryRun = Boolean(options?.dryRun);
-  const fatProdutos = await loadDistinctProdutos();
+  const clientesOnly = Boolean(options?.clientesOnly);
+  const fatProdutos = clientesOnly ? [] : await loadDistinctProdutos();
   const fatClientes = await loadDistinctClientes();
 
-  const existingProdutos = await db.listProdutos();
+  const existingProdutos = clientesOnly ? [] : await db.listProdutos();
   const existingCodes = new Set<string>();
   for (const p of existingProdutos) {
     if (p.codItem) existingCodes.add(p.codItem.trim());
@@ -176,17 +196,47 @@ export async function seedProdutosClientesFromFaturamento(options?: {
     if (m.nome) marcaIdByName.set(m.nome.trim().toLowerCase(), m.id);
   }
 
+  const conn = await getDb();
+  const antigoPorNovo = new Map<string, (typeof existingProdutos)[number]>();
+  if (conn && !clientesOnly) {
+    const deParas = await conn.select().from(deParaCodigos);
+    const prodByKey = new Map<string, (typeof existingProdutos)[number]>();
+    for (const p of existingProdutos) {
+      if (p.codItem) prodByKey.set(p.codItem.trim().toUpperCase(), p);
+      if (p.codigo) prodByKey.set(p.codigo.trim().toUpperCase(), p);
+    }
+    for (const dp of deParas) {
+      const novo = dp.skuNovo.trim().toUpperCase();
+      const antigo = dp.skuAntigo.trim().toUpperCase();
+      const prodAntigo = prodByKey.get(antigo);
+      if (prodAntigo && !antigoPorNovo.has(novo)) antigoPorNovo.set(novo, prodAntigo);
+    }
+  }
+
   const produtosToCreate: InsertProduto[] = [];
   let produtosSkipped = 0;
-  for (const row of fatProdutos) {
-    const cod = clean(row.codMaterial);
-    if (!cod) {
-      produtosSkipped += 1;
-      continue;
+  if (!clientesOnly) {
+    for (const row of fatProdutos) {
+      const cod = clean(row.codMaterial);
+      if (!cod) {
+        produtosSkipped += 1;
+        continue;
+      }
+      if (existingCodes.has(cod)) continue;
+      const antigo = antigoPorNovo.get(cod.toUpperCase());
+      const herdar = antigo
+        ? ({
+            projetarEstatistica: antigo.projetarEstatistica ?? undefined,
+            tipoNegocio: antigo.tipoNegocio ?? undefined,
+            grupo: antigo.grupo ?? undefined,
+            linha: antigo.linha ?? undefined,
+            modelo: antigo.modelo ?? undefined,
+            tipoEstoque: antigo.tipoEstoque ?? undefined,
+          } satisfies AntigoProdutoRef)
+        : null;
+      produtosToCreate.push(buildProduto(row, marcaIdByName, herdar));
+      existingCodes.add(cod);
     }
-    if (existingCodes.has(cod)) continue;
-    produtosToCreate.push(buildProduto(row, marcaIdByName));
-    existingCodes.add(cod);
   }
 
   const existingClientes = await db.listClientes();
@@ -220,8 +270,10 @@ export async function seedProdutosClientesFromFaturamento(options?: {
   }
 
   if (!dryRun) {
-    for (const batch of batchSlice(produtosToCreate, 500)) {
-      await db.createProdutosBatch(batch);
+    if (!clientesOnly) {
+      for (const batch of batchSlice(produtosToCreate, 500)) {
+        await db.createProdutosBatch(batch);
+      }
     }
     for (const batch of batchSlice(clientesToCreate, 500)) {
       await db.createClientesBatch(batch);
@@ -261,46 +313,152 @@ export async function seedProdutosClientesFromFaturamento(options?: {
 export type PendingSkuFromFaturamento = FatProdutoRow & { alreadyInDePara: boolean };
 export type PendingClienteFromFaturamento = FatClienteRow;
 
-export async function listPendingSkusFromFaturamento(): Promise<PendingSkuFromFaturamento[]> {
-  const fatProdutos = await loadDistinctProdutos();
-  const existingProdutos = await db.listProdutos();
+let pendingSkusCache: { at: number; data: PendingSkuFromFaturamento[] } | null = null;
+const PENDING_SKUS_TTL_MS = 120_000;
+
+export async function listPendingSkusFromFaturamento(options?: {
+  forceRefresh?: boolean;
+}): Promise<PendingSkuFromFaturamento[]> {
+  const now = Date.now();
+  if (!options?.forceRefresh && pendingSkusCache && now - pendingSkusCache.at < PENDING_SKUS_TTL_MS) {
+    return pendingSkusCache.data;
+  }
+
+  const conn = await getDb();
+  if (!conn) return [];
+
+  await ensureFatSkuCatalog();
+  const [catalog, existingResult, deParaRows] = await Promise.all([
+    listFatSkuCatalog(),
+    conn.select({ codItem: produtos.codItem, codigo: produtos.codigo }).from(produtos),
+    conn.select({ skuAntigo: deParaCodigos.skuAntigo, skuNovo: deParaCodigos.skuNovo }).from(deParaCodigos),
+  ]);
+
   const existingCodes = new Set<string>();
-  for (const p of existingProdutos) {
+  for (const p of existingResult) {
     if (p.codItem) existingCodes.add(p.codItem.trim().toUpperCase());
     if (p.codigo) existingCodes.add(p.codigo.trim().toUpperCase());
   }
-  const dePara = await db.listDeParaCodigos();
   const deParaCodes = new Set(
-    dePara.flatMap(d => [d.skuAntigo, d.skuNovo].map(s => String(s || "").trim().toUpperCase()).filter(Boolean))
+    deParaRows
+      .flatMap(d => [d.skuAntigo, d.skuNovo])
+      .map(s => String(s || "").trim().toUpperCase())
+      .filter(Boolean)
   );
 
-  return fatProdutos
+  const data: PendingSkuFromFaturamento[] = catalog
     .filter(r => {
       const cod = clean(r.codMaterial);
-      return Boolean(cod && !existingCodes.has(cod.toUpperCase()));
+      return Boolean(cod && isSkuAcabado(cod) && !existingCodes.has(cod.toUpperCase()));
     })
     .map(r => ({
-      ...r,
+      codMaterial: r.codMaterial,
+      descricaoItem: r.descricaoItem,
+      marca: r.marca,
+      linhaProduto: r.linhaProduto,
+      tipoNegocio: r.tipoNegocio,
+      tipoEstoque: r.tipoEstoque,
+      grupoProduto: r.grupoProduto,
       alreadyInDePara: deParaCodes.has((clean(r.codMaterial) || "").toUpperCase()),
     }));
+
+  pendingSkusCache = { at: now, data };
+  return data;
+}
+
+export function invalidatePendingSkusCache() {
+  pendingSkusCache = null;
+}
+
+export async function loadFaturamentoSkuMeta(
+  codes: string[]
+): Promise<Map<string, { descricao: string; marca: string | null; tipoNegocio: string | null }>> {
+  const out = new Map<string, { descricao: string; marca: string | null; tipoNegocio: string | null }>();
+  if (!codes.length) return out;
+  const conn = await getDb();
+  if (!conn) return out;
+  const unique = [...new Set(codes.map(c => clean(c)).filter(Boolean) as string[])];
+  for (let i = 0; i < unique.length; i += 200) {
+    const chunk = unique.slice(i, i + 200);
+    const placeholders = sql.join(chunk.map(c => sql`${c}`), sql`, `);
+    const result = await conn.execute(sql`
+      SELECT
+        codMaterial AS cod,
+        MAX(descricaoItem) AS descricaoItem,
+        MAX(marca) AS marca,
+        MAX(tipoNegocio) AS tipoNegocio
+      FROM faturamento
+      WHERE codMaterial IN (${placeholders})
+      GROUP BY codMaterial
+    `);
+    for (const row of (result[0] as unknown as Array<Record<string, unknown>>) ?? []) {
+      const cod = String(row.cod ?? "").trim().toUpperCase();
+      if (!cod) continue;
+      out.set(cod, {
+        descricao: String(row.descricaoItem ?? cod),
+        marca: row.marca ? String(row.marca) : null,
+        tipoNegocio: row.tipoNegocio ? String(row.tipoNegocio) : null,
+      });
+    }
+  }
+  return out;
 }
 
 export async function acceptPendingSkuFromFaturamento(codMaterial: string) {
-  const cod = clean(codMaterial);
-  if (!cod) throw new Error("Código do SKU inválido");
+  const { acceptPendingSkusWithDePara } = await import("./pending-sku-accept");
+  const result = await acceptPendingSkusWithDePara([{ codMaterial, skuAntigo: null }]);
+  if (result.erros.length > 0) {
+    throw new Error(result.erros[0]!.message);
+  }
+  const detail = result.detalhes.find(d => d.codMaterial.toUpperCase() === clean(codMaterial)!.toUpperCase());
+  return {
+    created: detail?.created ?? false,
+    produtoId: detail?.produtoId ?? 0,
+    deParaCriado: detail?.deParaCriado ?? false,
+  };
+}
+
+export type AcceptPendingSkusBatchResult = {
+  criados: number;
+  jaExistiam: number;
+  erros: Array<{ codMaterial: string; message: string }>;
+  detalhes: Array<{
+    codMaterial: string;
+    created: boolean;
+    produtoId: number;
+    deParaCriado: boolean;
+  }>;
+};
+
+export type AcceptPendingSkuItem = { codMaterial: string; skuAntigo?: string | null };
+
+export async function acceptPendingSkusFromFaturamentoBatch(
+  items: string[] | AcceptPendingSkuItem[],
+  opts?: { skipIdentityDePara?: boolean }
+): Promise<AcceptPendingSkusBatchResult> {
+  const normalizedItems: AcceptPendingSkuItem[] = items.map(item =>
+    typeof item === "string" ? { codMaterial: item } : item
+  );
+  const codes = Array.from(
+    new Set(normalizedItems.map(i => clean(i.codMaterial)).filter((c): c is string => Boolean(c)))
+  );
+  const antigoByCod = new Map(
+    normalizedItems
+      .map(i => [clean(i.codMaterial)?.toUpperCase() ?? "", clean(i.skuAntigo)] as const)
+      .filter(([k]) => Boolean(k))
+  );
+  if (codes.length === 0) {
+    return { criados: 0, jaExistiam: 0, erros: [], detalhes: [] };
+  }
+
+  const database = await getDb();
+  if (!database) throw new Error("Database not available");
 
   const fatProdutos = await loadDistinctProdutos();
-  const row = fatProdutos.find(r => (clean(r.codMaterial) || "").toUpperCase() === cod.toUpperCase());
-  if (!row) throw new Error(`SKU ${cod} não encontrado no faturamento`);
-
-  const existing = await db.listProdutos();
-  for (const p of existing) {
-    if (
-      (p.codItem || "").trim().toUpperCase() === cod.toUpperCase() ||
-      (p.codigo || "").trim().toUpperCase() === cod.toUpperCase()
-    ) {
-      return { created: false, produtoId: p.id, deParaCriado: false };
-    }
+  const fatByCode = new Map<string, FatProdutoRow>();
+  for (const row of fatProdutos) {
+    const c = clean(row.codMaterial);
+    if (c) fatByCode.set(c.toUpperCase(), row);
   }
 
   const marcas = await db.listMarcas();
@@ -309,24 +467,95 @@ export async function acceptPendingSkuFromFaturamento(codMaterial: string) {
     if (m.nome) marcaIdByName.set(m.nome.trim().toLowerCase(), m.id);
   }
 
-  const created = await db.createProduto(buildProduto(row, marcaIdByName));
-  const produtoId = Number(created.id ?? 0);
+  const erros: AcceptPendingSkusBatchResult["erros"] = [];
+  const detalhes: AcceptPendingSkusBatchResult["detalhes"] = [];
+  let criados = 0;
+  let jaExistiam = 0;
 
-  let deParaCriado = false;
-  const dePara = await db.listDeParaCodigos();
-  const hasDePara = dePara.some(
-    d => (d.skuAntigo || "").trim().toUpperCase() === cod.toUpperCase()
-  );
-  if (!hasDePara) {
-    await db.createDeParaCodigo({
-      skuAntigo: cod.toUpperCase(),
-      skuNovo: cod,
-    });
+  await database.transaction(async tx => {
+    const existingRows = await tx
+      .select({ id: produtos.id, codItem: produtos.codItem, codigo: produtos.codigo })
+      .from(produtos);
+    const existingByCode = new Map<string, number>();
+    for (const p of existingRows) {
+      if (p.codItem) existingByCode.set(p.codItem.trim().toUpperCase(), p.id);
+      if (p.codigo) existingByCode.set(p.codigo.trim().toUpperCase(), p.id);
+    }
+
+    const deParaRows = await tx
+      .select({ skuAntigo: deParaCodigos.skuAntigo })
+      .from(deParaCodigos);
+    const deParaCodes = new Set(
+      deParaRows.map(d => (d.skuAntigo || "").trim().toUpperCase()).filter(Boolean)
+    );
+
+    for (const raw of codes) {
+      const cod = raw.toUpperCase();
+      const row = fatByCode.get(cod);
+      if (!row) {
+        erros.push({ codMaterial: raw, message: `SKU ${raw} não encontrado no faturamento` });
+        continue;
+      }
+
+      const existingId = existingByCode.get(cod);
+      if (existingId != null) {
+        jaExistiam += 1;
+        detalhes.push({
+          codMaterial: raw,
+          created: false,
+          produtoId: existingId,
+          deParaCriado: false,
+        });
+        continue;
+      }
+
+      const insertProduto = buildProduto(row, marcaIdByName);
+      const insertResult = await tx.insert(produtos).values(insertProduto);
+      const produtoId = Number(insertResult[0].insertId ?? 0);
+      existingByCode.set(cod, produtoId);
+
+      let deParaCriado = false;
+      const skuAntigoRef = antigoByCod.get(cod);
+      if (
+        !opts?.skipIdentityDePara &&
+        skuAntigoRef &&
+        skuAntigoRef.toUpperCase() !== cod &&
+        skuAntigoRef.toUpperCase() !== clean(row.codMaterial)!.toUpperCase()
+      ) {
+        const { validateDeParaEdge, inheritProjetarFromAntigo } = await import("./de-para-validate");
+        const others = (await tx.select().from(deParaCodigos)).map(r => ({
+          skuAntigo: r.skuAntigo,
+          skuNovo: r.skuNovo,
+        }));
+        await validateDeParaEdge(skuAntigoRef.toUpperCase(), clean(row.codMaterial)!, others);
+        await tx.insert(deParaCodigos).values({
+          skuAntigo: skuAntigoRef.toUpperCase(),
+          skuNovo: clean(row.codMaterial)!,
+        });
+        deParaCriado = true;
+      }
+
+      criados += 1;
+      detalhes.push({
+        codMaterial: raw,
+        created: true,
+        produtoId,
+        deParaCriado,
+      });
+    }
+  });
+
+  if (criados > 0) {
     invalidateDeParaCache();
-    deParaCriado = true;
+    pendingSkusCache = null;
+    invalidatePendingMarcasCache();
+    const { invalidateDeParaEnrichedCache } = await import("./de-para-enriched");
+    invalidateDeParaEnrichedCache();
+    const { invalidateSkuSimilarityCandidateCache } = await import("./pending-sku-accept");
+    invalidateSkuSimilarityCandidateCache();
   }
 
-  return { created: true, produtoId, deParaCriado };
+  return { criados, jaExistiam, erros, detalhes };
 }
 
 export async function listPendingClientesFromFaturamento(): Promise<PendingClienteFromFaturamento[]> {
@@ -375,27 +604,45 @@ export async function acceptPendingClienteFromFaturamento(chave: string) {
   return { created: true, clienteId: Number(created.id ?? 0) };
 }
 
-export type PendingMarcaFromFaturamento = { nome: string; notas: number };
+export type PendingMarcaFromFaturamento = { nome: string; notas: number; gestorSugerido?: string | null };
+
+let pendingMarcasCache: { at: number; data: PendingMarcaFromFaturamento[] } | null = null;
+const PENDING_MARCAS_TTL_MS = 120_000;
+
+export function invalidatePendingMarcasCache() {
+  pendingMarcasCache = null;
+}
 
 /** Marcas que aparecem no faturamento e ainda não estão no cadastro de Marcas. */
 export async function listPendingMarcasFromFaturamento(): Promise<PendingMarcaFromFaturamento[]> {
-  const conn = await db.getDb();
-  if (!conn) return [];
-  const result = await conn.execute(sql`
-    SELECT TRIM(f.marca) AS nome, COUNT(*) AS notas
-    FROM faturamento f
-    WHERE f.marca IS NOT NULL AND TRIM(f.marca) <> ''
-      AND NOT EXISTS (
-        SELECT 1 FROM marcas m
-        WHERE LOWER(TRIM(m.nome)) = LOWER(TRIM(f.marca))
-      )
-    GROUP BY TRIM(f.marca)
-    ORDER BY notas DESC
-  `);
-  const rows = (result[0] as unknown as PendingMarcaFromFaturamento[]) ?? [];
-  return rows
-    .map(row => ({ nome: String(row.nome || "").trim(), notas: Number(row.notas) || 0 }))
-    .filter(row => row.nome.length > 0);
+  const now = Date.now();
+  if (pendingMarcasCache && now - pendingMarcasCache.at < PENDING_MARCAS_TTL_MS) {
+    return pendingMarcasCache.data;
+  }
+
+  await ensureFatSkuCatalog();
+  const [catalog, marcasCad] = await Promise.all([listFatSkuCatalog(), db.listMarcas()]);
+  const cadastradas = new Set(marcasCad.map(m => (m.nome || "").trim().toLowerCase()).filter(Boolean));
+
+  const acc = new Map<string, number>();
+  for (const row of catalog) {
+    const nome = (row.marca || "").trim();
+    if (!nome || cadastradas.has(nome.toLowerCase())) continue;
+    acc.set(nome, (acc.get(nome) ?? 0) + (row.notas || 0));
+  }
+
+  const pending = [...acc.entries()]
+    .map(([nome, notas]) => ({ nome, notas }))
+  .sort((a, b) => b.notas - a.notas);
+
+  const { getGestorNomeFromImportMap } = await import("./gestor-marca-import-apply");
+  const enriched: PendingMarcaFromFaturamento[] = [];
+  for (const row of pending) {
+    const gestorSugerido = await getGestorNomeFromImportMap(row.nome);
+    enriched.push({ ...row, gestorSugerido });
+  }
+  pendingMarcasCache = { at: now, data: enriched };
+  return enriched;
 }
 
 export async function acceptPendingMarcasFromFaturamento(nomes?: string[]) {
@@ -404,7 +651,47 @@ export async function acceptPendingMarcasFromFaturamento(nomes?: string[]) {
     ? new Set(nomes.map(nome => nome.trim().toLowerCase()).filter(Boolean))
     : null;
   const toCreate = pending.filter(row => !wanted || wanted.has(row.nome.toLowerCase()));
-  if (toCreate.length === 0) return { created: 0 };
-  await db.createMarcasBatch(toCreate.map(row => ({ nome: row.nome, ativo: true })));
-  return { created: toCreate.length };
+  if (toCreate.length === 0) return { created: 0, vinculos: 0, semGestor: 0 };
+  return acceptPendingMarcasWithGestores(
+    toCreate.map(row => ({ nome: row.nome, gestorId: null as number | null }))
+  );
+}
+
+export type AcceptPendingMarcaInput = { nome: string; gestorId?: number | null };
+
+export async function acceptPendingMarcasWithGestores(items: AcceptPendingMarcaInput[]) {
+  if (!items.length) return { created: 0, vinculos: 0, semGestor: 0 };
+
+  const { applyImportMapLinkForMarcaNome } = await import("./gestor-marca-import-apply");
+
+  const existingMarcas = await db.listMarcas();
+  const existingGestores = await db.listGestores();
+  const gestorById = new Set(existingGestores.map(g => g.id));
+
+  let created = 0;
+  let vinculos = 0;
+  let semGestor = 0;
+
+  for (const item of items) {
+    const nome = item.nome.trim();
+    if (!nome) continue;
+    const already = existingMarcas.some(m => m.nome.trim().toLowerCase() === nome.toLowerCase());
+    if (already) continue;
+
+    const inserted = await db.createMarca({ nome, ativo: true });
+    const marcaId = Number(inserted.id);
+    created += 1;
+
+    const gestorId = item.gestorId ?? null;
+    if (gestorId != null && gestorById.has(gestorId)) {
+      await db.createGestorMarca({ marcaId, gestorId, ativo: true });
+      vinculos += 1;
+    } else {
+      const linked = await applyImportMapLinkForMarcaNome(nome);
+      if (linked) vinculos += 1;
+      else semGestor += 1;
+    }
+  }
+
+  return { created, vinculos, semGestor };
 }

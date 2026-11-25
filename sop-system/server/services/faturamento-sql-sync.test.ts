@@ -8,9 +8,10 @@ describe("mapErpRowToFaturamento", () => {
   it("maps MetricsPROD aliases into SNOP faturamento fields", () => {
     const mapped = mapErpRowToFaturamento({
       Marca: "Printbag",
-      Grupo: "VAR",
+      Grupo: "Sacola",
       Descricao_Item: "Sacola X",
-      Tipo: "MTS",
+      Tipo: "VAR",
+      Tipo_Estoque: "MTS",
       Cod_Material: "11.22.333",
       CNPJ: "12345678000199",
       Cod_Cliente: "1001",
@@ -31,6 +32,7 @@ describe("mapErpRowToFaturamento", () => {
     expect(mapped).not.toBeNull();
     expect(mapped!.marca).toBe("Printbag");
     expect(mapped!.tipoNegocio).toBe("VAR");
+    expect(mapped!.grupoProduto).toBe("Sacola");
     expect(mapped!.codMaterial).toBe("11.22.333");
     expect(mapped!.nfNumero).toBe("555");
     expect(mapped!.qtd).toBe("12.5");

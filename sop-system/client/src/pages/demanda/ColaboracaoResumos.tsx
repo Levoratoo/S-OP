@@ -42,9 +42,19 @@ type Props = {
     baseCiclo?: Array<Record<string, unknown>>;
   } | undefined;
   marcasConsolidado: Array<[string, { itens: number; qtde: number; estatistica: number }]>;
+  marcasSemGestor?: string[];
 };
 
-export function ColaboracaoResumos({ cicloId, consolidado, marcasConsolidado }: Props) {
+export function ColaboracaoResumos({
+  cicloId,
+  consolidado,
+  marcasConsolidado,
+  marcasSemGestor = [],
+}: Props) {
+  const semGestorSet = useMemo(
+    () => new Set(marcasSemGestor.map(m => m.trim().toLowerCase())),
+    [marcasSemGestor]
+  );
   const utils = trpc.useUtils();
   const [aba, setAba] = useState("1");
 
@@ -90,6 +100,13 @@ export function ColaboracaoResumos({ cicloId, consolidado, marcasConsolidado }: 
   const importCrm = trpc.cicloComercial.importCrm.useMutation({
     onSuccess: r => {
       toast.success(`CRM: ${r.itensCriados} itens`);
+      if (r.skusCriados?.length) {
+        toast.message(
+          `${r.skusCriados.length} SKU(s) cadastrados automaticamente: ${r.skusCriados.slice(0, 6).join(", ")}${
+            r.skusCriados.length > 6 ? "…" : ""
+          }`
+        );
+      }
       if (r.avisos.length) toast.message(`${r.avisos.length} avisos de validação`);
       if (r.erros.length) toast.error(`${r.erros.length} erros — confira SKUs`);
       utils.cicloComercial.itens.invalidate();
@@ -101,12 +118,12 @@ export function ColaboracaoResumos({ cicloId, consolidado, marcasConsolidado }: 
 
   const handleCrmFile = async (file: File) => {
     try {
-      const rows = parseCrmExcel(await file.arrayBuffer());
-      if (!rows.length) {
+      const parsed = parseCrmExcel(await file.arrayBuffer());
+      if (!parsed.rows.length) {
         toast.error("Nenhuma linha com SKU no Excel.");
         return;
       }
-      importCrm.mutate({ cicloId, rows });
+      importCrm.mutate({ cicloId, headers: parsed.headers, rows: parsed.rows });
     } catch (e) {
       toast.error(`Falha ao ler CRM: ${String(e)}`);
     }
@@ -262,13 +279,26 @@ export function ColaboracaoResumos({ cicloId, consolidado, marcasConsolidado }: 
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {marcasConsolidado.slice(0, 40).map(([marca, v]) => (
-                      <TableRow key={marca}>
-                        <TableCell>{marca}</TableCell>
-                        <TableCell className="text-right">{formatNum(v.qtde)}</TableCell>
-                        <TableCell className="text-right">{formatNum(v.estatistica)}</TableCell>
-                      </TableRow>
-                    ))}
+                    {marcasConsolidado.slice(0, 40).map(([marca, v]) => {
+                      const pendenteGestor = semGestorSet.has(marca.trim().toLowerCase());
+                      return (
+                        <TableRow
+                          key={marca}
+                          className={pendenteGestor ? "bg-amber-50/80" : undefined}
+                        >
+                          <TableCell>
+                            {marca}
+                            {pendenteGestor ? (
+                              <span className="ml-2 text-xs font-medium text-amber-800">
+                                (vincular gestor)
+                              </span>
+                            ) : null}
+                          </TableCell>
+                          <TableCell className="text-right">{formatNum(v.qtde)}</TableCell>
+                          <TableCell className="text-right">{formatNum(v.estatistica)}</TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
               </CardContent>

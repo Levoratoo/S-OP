@@ -4,6 +4,16 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -25,6 +35,8 @@ export default function SkusProjetar() {
   const [search, setSearch] = useState("");
   const [somenteProjetar, setSomenteProjetar] = useState(false);
   const [filtroTipo, setFiltroTipo] = useState<"all" | "MTS" | "MTO">("all");
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkDialog, setBulkDialog] = useState<"on" | "off" | null>(null);
 
   const updateMutation = trpc.produtos.update.useMutation({
     onSuccess: () => utils.produtos.list.invalidate(),
@@ -38,6 +50,18 @@ export default function SkusProjetar() {
       toast.success(
         `${result.atualizados} SKUs atualizados · ${result.totalProjetar} projetando` +
           (miss ? ` · ${miss} códigos não encontrados` : "")
+      );
+    },
+    onError: e => toast.error(e.message),
+  });
+
+  const batchByIdsMutation = trpc.produtos.setProjetarByIds.useMutation({
+    onSuccess: result => {
+      utils.produtos.list.invalidate();
+      setSelectedIds(new Set());
+      setBulkDialog(null);
+      toast.success(
+        `${result.atualizados} SKU(s) atualizados · ${result.totalProjetar} com projetar=Sim no cadastro`
       );
     },
     onError: e => toast.error(e.message),
@@ -63,10 +87,31 @@ export default function SkusProjetar() {
     return list;
   }, [acabados, search, somenteProjetar, filtroTipo]);
 
+  const filteredIds = useMemo(() => rows.map(p => p.id), [rows]);
+
+  const allFilteredSelected =
+    filteredIds.length > 0 && filteredIds.every(id => selectedIds.has(id));
+
   const stats = useMemo(() => {
     const projetar = acabados.filter(p => p.projetarEstatistica !== false).length;
     return { total: acabados.length, projetar, nao: acabados.length - projetar };
   }, [acabados]);
+
+  const toggleAllFiltered = (checked: boolean) => {
+    if (!checked) {
+      setSelectedIds(prev => {
+        const next = new Set(prev);
+        filteredIds.forEach(id => next.delete(id));
+        return next;
+      });
+      return;
+    }
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      filteredIds.forEach(id => next.add(id));
+      return next;
+    });
+  };
 
   const handleImportLista = async (file: File, somenteEstes: boolean) => {
     try {
@@ -96,6 +141,12 @@ export default function SkusProjetar() {
     } catch (e) {
       toast.error(`Falha ao ler arquivo: ${String(e)}`);
     }
+  };
+
+  const applyBulk = (projetar: boolean) => {
+    const ids =
+      selectedIds.size > 0 ? Array.from(selectedIds) : filteredIds;
+    batchByIdsMutation.mutate({ productIds: ids, projetar });
   };
 
   return (
@@ -229,6 +280,36 @@ export default function SkusProjetar() {
         </div>
       </div>
 
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border bg-muted/40 px-3 py-2">
+        <p className="text-sm font-medium">
+          <span className="text-muted-foreground">SKUs nos filtros atuais:</span>{" "}
+          {rows.length.toLocaleString("pt-BR")}
+          {selectedIds.size > 0 ? (
+            <span className="ml-2 text-muted-foreground">
+              · {selectedIds.size} selecionado(s)
+            </span>
+          ) : null}
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={rows.length === 0 || batchByIdsMutation.isPending}
+            onClick={() => setBulkDialog("on")}
+          >
+            Ligar projetar ({selectedIds.size > 0 ? selectedIds.size : rows.length})
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={rows.length === 0 || batchByIdsMutation.isPending}
+            onClick={() => setBulkDialog("off")}
+          >
+            Desligar projetar ({selectedIds.size > 0 ? selectedIds.size : rows.length})
+          </Button>
+        </div>
+      </div>
+
       <Card>
         <CardContent className="p-0">
           {isLoading ? (
@@ -240,6 +321,13 @@ export default function SkusProjetar() {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-10">
+                      <Checkbox
+                        checked={allFilteredSelected}
+                        onCheckedChange={v => toggleAllFiltered(Boolean(v))}
+                        aria-label="Selecionar todos filtrados"
+                      />
+                    </TableHead>
                     <TableHead>SKU</TableHead>
                     <TableHead>Descrição</TableHead>
                     <TableHead>Tipo</TableHead>
@@ -251,6 +339,19 @@ export default function SkusProjetar() {
                 <TableBody>
                   {rows.map(p => (
                     <TableRow key={p.id}>
+                      <TableCell>
+                        <Checkbox
+                          checked={selectedIds.has(p.id)}
+                          onCheckedChange={checked => {
+                            setSelectedIds(prev => {
+                              const next = new Set(prev);
+                              if (checked) next.add(p.id);
+                              else next.delete(p.id);
+                              return next;
+                            });
+                          }}
+                        />
+                      </TableCell>
                       <TableCell className="font-mono text-sm">{p.codItem || p.codigo}</TableCell>
                       <TableCell className="max-w-xs truncate">{p.descricao || p.nome}</TableCell>
                       <TableCell>
@@ -269,19 +370,38 @@ export default function SkusProjetar() {
                       </TableCell>
                     </TableRow>
                   ))}
-                  {rows.length === 0 && (
-                    <TableRow>
-                      <TableCell colSpan={6} className="text-center text-muted-foreground">
-                        Nenhum SKU neste filtro
-                      </TableCell>
-                    </TableRow>
-                  )}
                 </TableBody>
               </Table>
             </div>
           )}
         </CardContent>
       </Card>
+
+      <AlertDialog open={bulkDialog !== null} onOpenChange={open => !open && setBulkDialog(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {bulkDialog === "on" ? "Ligar" : "Desligar"} projetar em massa
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Serão afetados{" "}
+              <strong>
+                {(selectedIds.size > 0 ? selectedIds.size : rows.length).toLocaleString("pt-BR")}
+              </strong>{" "}
+              SKU(s) {selectedIds.size > 0 ? "selecionados" : "dos filtros atuais"}.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={batchByIdsMutation.isPending}
+              onClick={() => applyBulk(bulkDialog === "on")}
+            >
+              Confirmar
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

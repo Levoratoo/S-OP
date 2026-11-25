@@ -1,4 +1,11 @@
 import { COOKIE_NAME } from "@shared/const";
+import { isCicloSomenteLeitura, isCicloStatus, type CicloStatus } from "@shared/ciclo-status";
+import { fecharCicloComHistorico, transicionarCiclo } from "./services/ciclo-transicao";
+import { compararCiclos, getLatestSnapshot } from "./services/ciclo-snapshot";
+import { diagnosticarDePara } from "./services/de-para-aggregate";
+import { precoManualSincronizado, refreshPrecosProdutosAutomatico, sincronizarPrecoInput } from "./services/produto-preco-backfill";
+import { cicloStatusHistorico } from "../drizzle/schema";
+import { eq } from "drizzle-orm";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
@@ -7,12 +14,13 @@ import { z } from "zod";
 import path from "node:path";
 import fs from "node:fs";
 import * as db from "./db";
-import { isCfopFaturamentoPermitido } from "@shared/cfop-faturamento";
 import {
   getFaturamentoYearsSyncStatus,
   startFaturamentoYearsSync,
   syncFaturamentoFromSql,
   syncFaturamentoRecent,
+  startRefreshRecentBackground,
+  getRefreshRecentStatus,
   testErpConnection,
 } from "./services/faturamento-sql-sync";
 import * as sharepoint from "./sharepoint";
@@ -23,32 +31,53 @@ import { seedDadosMestresOperacionais } from "./services/seed-mestres";
 import {
   acceptPendingClienteFromFaturamento,
   acceptPendingMarcasFromFaturamento,
+  acceptPendingMarcasWithGestores,
   acceptPendingSkuFromFaturamento,
+  acceptPendingSkusFromFaturamentoBatch,
   listPendingClientesFromFaturamento,
   listPendingMarcasFromFaturamento,
   listPendingSkusFromFaturamento,
   seedProdutosClientesFromFaturamento,
 } from "./services/seed-from-faturamento";
+import { applyGestorMarcaImportMerge } from "./services/gestor-marca-import-apply";
+import { getCarteiraPvPivotGrade } from "./services/carteira-pv-pivot";
+import {
+  invalidateDeParaEnrichedCache,
+  listDeParaCodigosComDescricoes,
+} from "./services/de-para-enriched";
+import {
+  acceptPendingSkusWithDePara,
+  suggestSkuReferencias,
+  suggestSkuReferenciasBatch,
+} from "./services/pending-sku-accept";
+import { assertCrmExcelHeaders, assertCrmImportRows } from "./services/crm-import-validate";
+import {
+  clearSazonalidadeFatores,
+  getSazonalidadeFatoresByProdutoId,
+  importSazonalidadeFatoresBatch,
+  listProdutoIdsComFatorValido,
+  parseImportFatorSpreadsheetRows,
+  setSazonalidadeFatores,
+} from "./services/produto-sazonalidade-fator";
+import { validateFatoresPercentuais } from "@shared/sku-fator-sazonalidade";
+import { legacyApiDisabled } from "./legacy-api-disabled";
+import { assertCicloStatusTransition } from "./services/ciclo-status-flow";
 import { seedCapacidadeBaseline } from "./services/seed-capacidade";
 import { invalidateDeParaCache } from "./services/de-para-map";
 import {
-  calcularSazonalidadeDoFaturamento,
   desagregarJobParaCicloComercial,
-  parseSazonalidadeWorkbook,
-  seedSazonalidadeUniformeSeVazia,
 } from "./services/desagregacao";
 import {
   getAaPrevReal,
   getBaseCicloFull,
   getConsolidadoArquivo,
   getMtoVariacao,
+  getPvMtoPivotGrade,
   getPvVsCrmDetalhado,
   getRealizadoAnualPorSku,
   getRelatorioRfs,
   getResumoProd,
   getResumoRs,
-  getSazonalidadeInvalidas,
-  importCarteiraBySku,
   importCrmParaCiclo,
   syncPvFromCarteira,
 } from "./services/ciclo-colab-extras";
@@ -96,73 +125,52 @@ export const appRouter = router({
 
   // ==================== FAMÍLIAS ====================
   familias: router({
-    list: protectedProcedure.query(() => db.listFamilias()),
-    
+    list: protectedProcedure.query(() => legacyApiDisabled("Cadastro de famílias")),
     getById: protectedProcedure
       .input(z.object({ id: z.number() }))
-      .query(({ input }) => db.getFamiliaById(input.id)),
-    
-    create: protectedProcedure
-      .input(z.object({
-        nome: z.string().min(1),
-        descricao: z.string().optional(),
-        tipo: z.enum(["MTS", "MTO"]).default("MTS"),
-        ativo: z.boolean().default(true),
-      }))
-      .mutation(({ input }) => db.createFamilia(input)),
-    
-    update: protectedProcedure
-      .input(z.object({
-        id: z.number(),
-        nome: z.string().min(1).optional(),
-        descricao: z.string().optional(),
-        tipo: z.enum(["MTS", "MTO"]).optional(),
-        ativo: z.boolean().optional(),
-      }))
-      .mutation(({ input }) => {
-        const { id, ...data } = input;
-        return db.updateFamilia(id, data);
-      }),
-    
-    delete: protectedProcedure
-      .input(z.object({ id: z.number() }))
-      .mutation(({ input }) => db.deleteFamilia(input.id)),
+      .query(() => legacyApiDisabled("Cadastro de famílias")),
   }),
 
   // ==================== SUBFAMÍLIAS ====================
   subfamilias: router({
     list: protectedProcedure
       .input(z.object({ familiaId: z.number().optional() }).optional())
-      .query(({ input }) => db.listSubfamilias(input?.familiaId)),
-    
+      .query(() => legacyApiDisabled("Subfamílias")),
     create: protectedProcedure
-      .input(z.object({
-        nome: z.string().min(1),
-        familiaId: z.number(),
-        ativo: z.boolean().default(true),
-      }))
-      .mutation(({ input }) => db.createSubfamilia(input)),
-    
+      .input(z.object({ nome: z.string().min(1), familiaId: z.number(), ativo: z.boolean().default(true) }))
+      .mutation(() => legacyApiDisabled("Subfamílias")),
     update: protectedProcedure
-      .input(z.object({
-        id: z.number(),
-        nome: z.string().min(1).optional(),
-        familiaId: z.number().optional(),
-        ativo: z.boolean().optional(),
-      }))
-      .mutation(({ input }) => {
-        const { id, ...data } = input;
-        return db.updateSubfamilia(id, data);
-      }),
-    
+      .input(
+        z.object({
+          id: z.number(),
+          nome: z.string().min(1).optional(),
+          familiaId: z.number().optional(),
+          ativo: z.boolean().optional(),
+        })
+      )
+      .mutation(() => legacyApiDisabled("Subfamílias")),
     delete: protectedProcedure
       .input(z.object({ id: z.number() }))
-      .mutation(({ input }) => db.deleteSubfamilia(input.id)),
+      .mutation(() => legacyApiDisabled("Subfamílias")),
   }),
 
   // ==================== PRODUTOS ====================
   produtos: router({
     list: protectedProcedure.query(() => db.listProdutos()),
+    backfillPrecos: protectedProcedure.mutation(() => refreshPrecosProdutosAutomatico()),
+    setPrecoManual: protectedProcedure
+      .input(z.object({ id: z.number(), precoUnitario: z.number().positive() }))
+      .mutation(async ({ input, ctx }) => {
+        const database = await db.getDb();
+        if (!database) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Sem banco" });
+        const { produtos } = await import("../drizzle/schema");
+        const { eq: eqOp } = await import("drizzle-orm");
+        await database
+          .update(produtos)
+          .set(precoManualSincronizado(input.precoUnitario))
+          .where(eqOp(produtos.id, input.id));
+        return { ok: true, usuario: ctx.user?.email ?? ctx.user?.name ?? "usuario" };
+      }),
     
     getById: protectedProcedure
       .input(z.object({ id: z.number() }))
@@ -199,7 +207,7 @@ export const appRouter = router({
         pista: z.number().optional(),
         projetarEstatistica: z.boolean().default(true),
       }))
-      .mutation(({ input }) => db.createProduto(input)),
+      .mutation(({ input }) => db.createProduto(sincronizarPrecoInput(input, "manual"))),
     
     update: protectedProcedure
       .input(z.object({
@@ -235,7 +243,7 @@ export const appRouter = router({
       }))
       .mutation(({ input }) => {
         const { id, ...data } = input;
-        return db.updateProduto(id, data);
+        return db.updateProduto(id, sincronizarPrecoInput(data, "manual"));
       }),
     
     delete: protectedProcedure
@@ -276,6 +284,51 @@ export const appRouter = router({
         })
       )
       .mutation(({ input }) => db.setProjetarEstatisticaBatch(input)),
+
+    setProjetarByIds: protectedProcedure
+      .input(
+        z.object({
+          productIds: z.array(z.number().int().positive()),
+          projetar: z.boolean(),
+        })
+      )
+      .mutation(({ input }) => db.setProjetarByProductIds(input)),
+
+    idsComFatorSazonal: protectedProcedure.query(async () =>
+      Array.from(await listProdutoIdsComFatorValido())
+    ),
+
+    getSazonalidadeFatores: protectedProcedure
+      .input(z.object({ produtoId: z.number().int().positive() }))
+      .query(({ input }) => getSazonalidadeFatoresByProdutoId(input.produtoId)),
+
+    setSazonalidadeFatores: protectedProcedure
+      .input(
+        z.object({
+          produtoId: z.number().int().positive(),
+          fatores: z.array(z.number()).length(12),
+        })
+      )
+      .mutation(({ input }) => setSazonalidadeFatores(input.produtoId, input.fatores)),
+
+    clearSazonalidadeFatores: protectedProcedure
+      .input(z.object({ produtoId: z.number().int().positive() }))
+      .mutation(({ input }) => clearSazonalidadeFatores(input.produtoId)),
+
+    importSazonalidadeFatores: protectedProcedure
+      .input(
+        z.array(
+          z.object({
+            sku: z.string().min(1),
+            fatores: z.array(z.number()).length(12),
+          })
+        )
+      )
+      .mutation(({ input }) => importSazonalidadeFatoresBatch(input)),
+
+    validateSazonalidadeFatores: protectedProcedure
+      .input(z.object({ fatores: z.array(z.number()).length(12) }))
+      .query(({ input }) => validateFatoresPercentuais(input.fatores)),
   }),
 
   // ==================== CLIENTES ====================
@@ -285,38 +338,6 @@ export const appRouter = router({
     getById: protectedProcedure
       .input(z.object({ id: z.number() }))
       .query(({ input }) => db.getClienteById(input.id)),
-    
-    create: protectedProcedure
-      .input(z.object({
-        razaoSocial: z.string().min(1),
-        nomeFantasia: z.string().optional(),
-        cnpjCpf: z.string().optional(),
-        clienteRelacionadoId: z.number().nullable().optional(),
-        cidade: z.string().optional(),
-        estado: z.string().max(2).optional(),
-        status: z.enum(["ATIVO", "INATIVO"]).default("ATIVO"),
-      }))
-      .mutation(({ input }) => db.createCliente(input)),
-    
-    update: protectedProcedure
-      .input(z.object({
-        id: z.number(),
-        razaoSocial: z.string().min(1).optional(),
-        nomeFantasia: z.string().optional(),
-        cnpjCpf: z.string().optional(),
-        clienteRelacionadoId: z.number().nullable().optional(),
-        cidade: z.string().optional(),
-        estado: z.string().max(2).optional(),
-        status: z.enum(["ATIVO", "INATIVO"]).optional(),
-      }))
-      .mutation(({ input }) => {
-        const { id, ...data } = input;
-        return db.updateCliente(id, data);
-      }),
-    
-    delete: protectedProcedure
-      .input(z.object({ id: z.number() }))
-      .mutation(({ input }) => db.deleteCliente(input.id)),
   }),
 
   // ==================== RECURSOS ====================
@@ -642,91 +663,61 @@ export const appRouter = router({
   // ==================== CARTEIRA DE PEDIDOS ====================
   carteiraPedidos: router({
     list: protectedProcedure
-      .input(z.object({ limit: z.number().default(100) }).optional())
-      .query(({ input }) => db.listCarteiraPedidos(input?.limit)),
+      .input(
+        z
+          .object({
+            limit: z.number().default(100),
+            /** PV MTO / Carteira ERP: só pedidos em aberto (não faturados). */
+            apenasPvAberto: z.boolean().default(true),
+          })
+          .optional()
+      )
+      .query(({ input }) =>
+        db.listCarteiraPedidos(input?.limit ?? 100, input?.apenasPvAberto ?? true)
+      ),
 
     create: protectedProcedure
-      .input(z.object({
-        codigo: z.string().min(1),
-        sequencia: z.number().default(1),
-        competencia: z.string(),
-        quantidade: z.string(),
-        receitaBruta: z.string(),
-        produtoId: z.number(),
-        clienteId: z.number().nullable().optional(),
-        faturado: z.boolean().default(false),
-      }))
-      .mutation(({ input }) => {
-        const { competencia, ...rest } = input;
-        return db.createCarteiraPedido({ ...rest, competencia: new Date(competencia) });
-      }),
+      .input(
+        z.object({
+          codigo: z.string().min(1),
+          sequencia: z.number().default(1),
+          competencia: z.string(),
+          quantidade: z.string(),
+          receitaBruta: z.string(),
+          produtoId: z.number(),
+          clienteId: z.number().nullable().optional(),
+          faturado: z.boolean().default(false),
+        })
+      )
+      .mutation(() => legacyApiDisabled("Carteira manual")),
 
     update: protectedProcedure
-      .input(z.object({
-        id: z.number(),
-        codigo: z.string().optional(),
-        sequencia: z.number().optional(),
-        competencia: z.string().optional(),
-        quantidade: z.string().optional(),
-        receitaBruta: z.string().optional(),
-        produtoId: z.number().optional(),
-        clienteId: z.number().nullable().optional(),
-        faturado: z.boolean().optional(),
-      }))
-      .mutation(({ input }) => {
-        const { id, competencia, ...rest } = input;
-        return db.updateCarteiraPedido(id, {
-          ...rest,
-          competencia: competencia ? new Date(competencia) : undefined,
-        });
-      }),
+      .input(
+        z.object({
+          id: z.number(),
+          codigo: z.string().optional(),
+          sequencia: z.number().optional(),
+          competencia: z.string().optional(),
+          quantidade: z.string().optional(),
+          receitaBruta: z.string().optional(),
+          produtoId: z.number().optional(),
+          clienteId: z.number().nullable().optional(),
+          faturado: z.boolean().optional(),
+        })
+      )
+      .mutation(() => legacyApiDisabled("Carteira manual")),
 
     delete: protectedProcedure
       .input(z.object({ id: z.number() }))
-      .mutation(({ input }) => db.deleteCarteiraPedido(input.id)),
-
-    importBatch: protectedProcedure
-      .input(z.array(z.object({
-        codigo: z.string().min(1),
-        sequencia: z.number().default(1),
-        competencia: z.string(),
-        quantidade: z.string(),
-        receitaBruta: z.string(),
-        produtoId: z.number(),
-        clienteId: z.number().nullable().optional(),
-        faturado: z.boolean().optional(),
-      })))
-      .mutation(({ input }) => {
-        const data = input.map(item => ({
-          ...item,
-          competencia: new Date(item.competencia),
-          faturado: item.faturado ?? false,
-        }));
-        return db.createCarteiraPedidosBatch(data);
-      }),
-
-    /** PV Aberto: Excel com coluna SKU (resolve produto via cadastro + De-Para). */
-    importBySku: protectedProcedure
-      .input(
-        z.array(
-          z.object({
-            codigo: z.string().min(1),
-            sequencia: z.number().optional(),
-            competencia: z.string(),
-            sku: z.string().min(1),
-            quantidade: z.union([z.string(), z.number()]),
-            receitaBruta: z.union([z.string(), z.number()]).optional(),
-            faturado: z.boolean().optional(),
-          })
-        )
-      )
-      .mutation(({ input }) => importCarteiraBySku(input)),
+      .mutation(() => legacyApiDisabled("Carteira manual")),
 
     /**
      * PV Aberto direto do ERP (MetricsPROD): Status Liberado + tipo PRG,
      * uma linha por pedido × SKU × mês de entrega.
      */
     syncFromErp: protectedProcedure.mutation(() => syncCarteiraFromErp()),
+
+    pivotGrade: protectedProcedure.query(() => getCarteiraPvPivotGrade()),
   }),
 
   // ==================== FORECAST ====================
@@ -964,68 +955,69 @@ export const appRouter = router({
           planoColab: z.enum(["MTS", "JITO", "PV_MTO", "CRM"]).optional(),
         })
       )
-      .mutation(({ input }) => {
+      .mutation(async ({ input, ctx }) => {
         const { id, ...rest } = input;
-        return db.updateCicloComercialItem(id, rest);
+        return db.updateCicloComercialItem(id, rest, {
+          isAdmin: ctx.user?.role === "admin",
+          usuario: ctx.user?.email || ctx.user?.name || null,
+        });
       }),
 
     updateStatus: protectedProcedure
       .input(
         z.object({
           id: z.number(),
-          status: z.enum(["ABERTO", "EM_COLABORACAO", "CONSOLIDADO", "FECHADO"]),
+          status: z.enum(["ABERTO", "EM_COLABORACAO", "CONSENSO", "APROVADO", "CONGELADO"]),
+          comentario: z.string().optional(),
         })
       )
-      .mutation(async ({ input }) => {
-        if (input.status === "CONSOLIDADO" || input.status === "FECHADO") {
-          const [pvCrm, resumoRs, itens] = await Promise.all([
-            getPvVsCrmDetalhado(input.id),
-            getResumoRs(input.id),
-            db.listCicloComercialItens(input.id),
-          ]);
-          if (itens.length === 0) {
-            throw new TRPCError({
-              code: "PRECONDITION_FAILED",
-              message: "O ciclo não possui itens para consolidar.",
-            });
-          }
-          if (pvCrm.sobrepostos > 0) {
-            throw new TRPCError({
-              code: "PRECONDITION_FAILED",
-              message: `Corrija ${pvCrm.sobrepostos} sobreposições PV x CRM antes de consolidar.`,
-            });
-          }
-          if (resumoRs.skusSemPreco.length > 0) {
-            throw new TRPCError({
-              code: "PRECONDITION_FAILED",
-              message:
-                "Existem SKUs sem preço de venda: " +
-                resumoRs.skusSemPreco.slice(0, 20).join(", "),
-            });
-          }
-          const crmIncompletos = itens.filter(
-            item =>
-              item.planoColab === "CRM" &&
-              (!item.crmTipo || !item.crmTemperatura)
-          );
-          if (crmIncompletos.length > 0) {
-            throw new TRPCError({
-              code: "PRECONDITION_FAILED",
-              message: `Reimporte ${crmIncompletos.length} itens CRM sem tipo/temperatura.`,
-            });
-          }
+      .mutation(async ({ input, ctx }) => {
+        if (!isCicloStatus(input.status)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Status inválido" });
         }
-        return db.updateCicloComercial(input.id, { status: input.status });
+        return transicionarCiclo({
+          cicloId: input.id,
+          next: input.status as CicloStatus,
+          usuario: ctx.user?.email || ctx.user?.name || null,
+          comentario: input.comentario,
+          isAdmin: ctx.user?.role === "admin",
+        });
+      }),
+
+    historicoStatus: protectedProcedure
+      .input(z.object({ cicloId: z.number() }))
+      .query(async ({ input }) => {
+        const database = await db.getDb();
+        if (!database) return [];
+        return database
+          .select()
+          .from(cicloStatusHistorico)
+          .where(eq(cicloStatusHistorico.cicloId, input.cicloId));
+      }),
+
+    snapshot: protectedProcedure
+      .input(z.object({ cicloId: z.number() }))
+      .query(({ input }) => getLatestSnapshot(input.cicloId)),
+
+    compararCiclos: protectedProcedure
+      .input(z.object({ cicloA: z.number(), cicloB: z.number() }))
+      .query(({ input }) => compararCiclos(input.cicloA, input.cicloB)),
+
+    acuracidadeSnapshot: protectedProcedure
+      .input(z.object({ cicloId: z.number() }))
+      .query(async ({ input }) => {
+        const { acuracidadeSnapshot } = await import("./services/ciclo-acuracidade");
+        return acuracidadeSnapshot(input.cicloId);
       }),
 
     delete: protectedProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ input }) => {
         const ciclo = await db.getCicloComercial(input.id);
-        if (ciclo?.status === "FECHADO") {
+        if (ciclo?.status && isCicloSomenteLeitura(ciclo.status)) {
           throw new TRPCError({
             code: "PRECONDITION_FAILED",
-            message: "Ciclo fechado faz parte do histórico e não pode ser excluído.",
+            message: "Ciclo aprovado ou congelado não pode ser excluído.",
           });
         }
         return db.deleteCicloComercial(input.id);
@@ -1041,7 +1033,6 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ input, ctx }) => {
-        await seedSazonalidadeUniformeSeVazia();
         return desagregarJobParaCicloComercial({
           jobId: input.jobId,
           nomeCiclo: input.nomeCiclo,
@@ -1053,12 +1044,19 @@ export const appRouter = router({
 
     syncPvFromCarteira: protectedProcedure
       .input(z.object({ cicloId: z.number() }))
-      .mutation(({ input }) => syncPvFromCarteira(input.cicloId)),
+      .mutation(({ input, ctx }) =>
+        syncPvFromCarteira(input.cicloId, { ajusteAdmin: ctx.user?.role === "admin" })
+      ),
+
+    pvMtoGrade: protectedProcedure
+      .input(z.object({ cicloId: z.number() }))
+      .query(({ input }) => getPvMtoPivotGrade(input.cicloId)),
 
     importCrm: protectedProcedure
       .input(
         z.object({
           cicloId: z.number(),
+          headers: z.array(z.string()).length(15),
           rows: z.array(
             z.object({
               sku: z.string(),
@@ -1073,7 +1071,10 @@ export const appRouter = router({
               dataFaturamento: z.string().optional(),
               qtdMes: z.number().optional(),
               valorVenda: z.number().optional(),
+              valorTotal: z.number().optional(),
+              qtdeTotal: z.number().optional(),
               modalidade: z.string().optional(),
+              tipoNegocio: z.string().optional(),
               m1: z.number().optional(),
               m2: z.number().optional(),
               m3: z.number().optional(),
@@ -1090,7 +1091,62 @@ export const appRouter = router({
           ),
         })
       )
-      .mutation(({ input }) => importCrmParaCiclo(input.cicloId, input.rows)),
+      .mutation(async ({ input, ctx }) => {
+        assertCrmExcelHeaders(input.headers);
+        assertCrmImportRows(input.rows);
+        const ciclo = await db.getCicloComercial(input.cicloId);
+        if (ciclo && isCicloSomenteLeitura(ciclo.status)) {
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Ciclo aprovado ou congelado não aceita importação CRM." });
+        }
+        if (ciclo?.status === "CONSENSO" && ctx.user?.role !== "admin") {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Em CONSENSO o CRM só pode ser ajustado por admin.",
+          });
+        }
+        return importCrmParaCiclo(input.cicloId, input.rows);
+      }),
+
+    fecharCiclo: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input, ctx }) => {
+        const ciclo = await db.getCicloComercial(input.id);
+        if (!ciclo) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Ciclo não encontrado." });
+        }
+        if (isCicloSomenteLeitura(ciclo.status)) {
+          return { status: ciclo.status as "APROVADO" | "CONGELADO" };
+        }
+        const [resumoRs, itens] = await Promise.all([
+          getResumoRs(input.id),
+          db.listCicloComercialItens(input.id),
+        ]);
+        if (itens.length === 0) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "O ciclo não possui itens para fechar.",
+          });
+        }
+        if (resumoRs.skusSemPreco.length > 0) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              "Existem SKUs sem preço de venda: " + resumoRs.skusSemPreco.slice(0, 20).join(", "),
+          });
+        }
+        const crmSemTipo = itens.filter(item => item.planoColab === "CRM" && !item.crmTipo);
+        if (crmSemTipo.length > 0) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `Reimporte ${crmSemTipo.length} itens CRM sem classificação (Colaboração/Aposta).`,
+          });
+        }
+        return fecharCicloComHistorico({
+          cicloId: input.id,
+          usuario: ctx.user?.email || ctx.user?.name || null,
+          isAdmin: ctx.user?.role === "admin",
+        });
+      }),
 
     pvVsCrm: protectedProcedure
       .input(z.object({ cicloId: z.number() }))
@@ -1126,57 +1182,7 @@ export const appRouter = router({
   }),
 
   sazonalidadeMarca: router({
-    list: protectedProcedure
-      .input(z.object({ marcaNome: z.string().optional() }).optional())
-      .query(({ input }) => db.listSazonalidadeMarca(input?.marcaNome)),
-
-    invalidas: protectedProcedure.query(() => getSazonalidadeInvalidas()),
-
-    seedUniforme: protectedProcedure.mutation(() => seedSazonalidadeUniformeSeVazia()),
-
-    calcularDoFaturamento: protectedProcedure
-      .input(z.object({ anosHistorico: z.number().min(1).max(10).default(3) }).optional())
-      .mutation(({ input }) =>
-        calcularSazonalidadeDoFaturamento(input?.anosHistorico ?? 3)
-      ),
-
-    upsertBatch: protectedProcedure
-      .input(
-        z.object({
-          rows: z.array(
-            z.object({
-              marcaNome: z.string().min(1),
-              mes: z.number().min(1).max(12),
-              percentual: z.string(),
-              marcaId: z.number().optional(),
-              observacoes: z.string().optional(),
-            })
-          ),
-        })
-      )
-      .mutation(({ input }) => db.upsertSazonalidadeMarcaBatch(input.rows)),
-
-    importExcel: protectedProcedure
-      .input(
-        z.object({
-          fileName: z.string().min(1),
-          contentBase64: z.string().min(1),
-        })
-      )
-      .mutation(async ({ input }) => {
-        const raw = input.contentBase64.includes(",")
-          ? input.contentBase64.split(",")[1]
-          : input.contentBase64;
-        const buffer = Buffer.from(raw, "base64");
-        const parsed = parseSazonalidadeWorkbook(buffer);
-        await db.upsertSazonalidadeMarcaBatch(parsed.rows);
-        return {
-          fileName: input.fileName,
-          sheetName: parsed.sheetName,
-          marcas: parsed.marcas,
-          rows: parsed.rows.length,
-        };
-      }),
+    list: protectedProcedure.query(() => legacyApiDisabled("Cadastro Sazonalidade Marca")),
   }),
 
   // ==================== CONSENSOS ====================
@@ -1301,39 +1307,10 @@ export const appRouter = router({
 
     /** Pré-check: mês fechado (anterior ao vigente) tem faturamento? */
     mesFechadoCheck: protectedProcedure.query(() => db.getFaturamentoMesFechadoCheck()),
-    
+
     importBatch: protectedProcedure
-      .input(z.array(z.object({
-        dataEmissao: z.string(),
-        nfNumero: z.string().optional(),
-        codCliente: z.string().optional(),
-        cnpj: z.string().optional(),
-        unidade: z.string().optional(),
-        cidade: z.string().optional(),
-        uf: z.string().optional(),
-        marca: z.string().optional(),
-        codMaterial: z.string().optional(),
-        descricaoItem: z.string().optional(),
-        tipoNegocio: z.string().optional(),
-        tipoEstoque: z.enum(["MTS", "MTO"]).optional(),
-        linhaProduto: z.string().optional(),
-        qtd: z.string(),
-        valorTotal: z.string(),
-        gestor: z.string().optional(),
-        cfop: z.string().optional(),
-        descCfop: z.string().optional(),
-        tipoFaturamento: z.enum(["DEVOLUCAO", "SAIDA"]).optional(),
-      })))
-      .mutation(async ({ input }) => {
-        const allowed = input.filter(item => isCfopFaturamentoPermitido(item.cfop));
-        const data = allowed.map(item => ({
-          ...item,
-          dataEmissao: new Date(item.dataEmissao),
-        }));
-        const result = await db.createFaturamentoBatch(data);
-        if (result.count > 0) await db.rebuildFaturamentoResumo();
-        return { ...result, skippedCfop: input.length - allowed.length };
-      }),
+      .input(z.array(z.object({ dataEmissao: z.string() })))
+      .mutation(() => legacyApiDisabled("Importação manual de faturamento")),
     
     clear: protectedProcedure.mutation(() => db.clearFaturamento()),
 
@@ -1361,7 +1338,9 @@ export const appRouter = router({
      */
     refreshRecent: protectedProcedure
       .input(z.object({ force: z.boolean().optional() }).optional())
-      .mutation(({ input }) => syncFaturamentoRecent({ force: input?.force === true })),
+      .mutation(({ input }) => startRefreshRecentBackground({ force: input?.force === true })),
+
+    refreshRecentStatus: protectedProcedure.query(() => getRefreshRecentStatus()),
     
     delete: protectedProcedure
       .input(z.object({ id: z.number() }))
@@ -1508,11 +1487,20 @@ export const appRouter = router({
         return db.updateGestorMarca(id, data);
       }),
     delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(({ input }) => db.deleteGestorMarca(input.id)),
+    importMerge: protectedProcedure
+      .input(z.array(z.object({ marca: z.string(), gestor: z.string().default("") })))
+      .mutation(({ input }) => applyGestorMarcaImportMerge(input)),
   }),
 
   // ==================== DE-PARA DE CÓDIGOS ====================
   deParaCodigos: router({
     list: protectedProcedure.query(() => db.listDeParaCodigos()),
+
+    listEnriched: protectedProcedure.query(() => listDeParaCodigosComDescricoes()),
+    diagnostico: protectedProcedure.query(async () => {
+      const rows = await db.listDeParaCodigos();
+      return diagnosticarDePara(rows);
+    }),
     create: protectedProcedure
       .input(z.object({ 
         skuAntigo: z.string().min(1), 
@@ -1521,6 +1509,7 @@ export const appRouter = router({
       .mutation(async ({ input }) => {
         const result = await db.createDeParaCodigo(input);
         invalidateDeParaCache();
+        invalidateDeParaEnrichedCache();
         return result;
       }),
     update: protectedProcedure
@@ -1533,11 +1522,13 @@ export const appRouter = router({
         const { id, ...rest } = input;
         const result = await db.updateDeParaCodigo(id, rest);
         invalidateDeParaCache();
+        invalidateDeParaEnrichedCache();
         return result;
       }),
     delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ input }) => {
       const result = await db.deleteDeParaCodigo(input.id);
       invalidateDeParaCache();
+      invalidateDeParaEnrichedCache();
       return result;
     }),
     importBatch: protectedProcedure
@@ -1548,6 +1539,7 @@ export const appRouter = router({
       .mutation(async ({ input }) => {
         const result = await db.createDeParaCodigosBatch(input);
         invalidateDeParaCache();
+        invalidateDeParaEnrichedCache();
         return result;
       }),
     getCodigoAtual: protectedProcedure
@@ -2191,6 +2183,40 @@ export const appRouter = router({
       .input(z.object({ codMaterial: z.string().min(1) }))
       .mutation(({ input }) => acceptPendingSkuFromFaturamento(input.codMaterial)),
 
+    acceptPendingSkusBatch: protectedProcedure
+      .input(
+        z.object({
+          codMaterials: z.array(z.string().min(1)).min(1).max(5000),
+        })
+      )
+      .mutation(({ input }) =>
+        acceptPendingSkusFromFaturamentoBatch(input.codMaterials, { skipIdentityDePara: true })
+      ),
+
+    acceptPendingSkusWithDePara: protectedProcedure
+      .input(
+        z.object({
+          items: z
+            .array(
+              z.object({
+                codMaterial: z.string().min(1),
+                skuAntigo: z.string().nullable().optional(),
+              })
+            )
+            .min(1)
+            .max(5000),
+        })
+      )
+      .mutation(({ input }) => acceptPendingSkusWithDePara(input.items)),
+
+    suggestSkuReferencias: protectedProcedure
+      .input(z.object({ codMaterial: z.string().min(1), limit: z.number().min(1).max(20).optional() }))
+      .query(({ input }) => suggestSkuReferencias(input.codMaterial, input.limit ?? 10)),
+
+    suggestSkuReferenciasBatch: protectedProcedure
+      .input(z.object({ codMaterials: z.array(z.string().min(1)).min(1).max(500) }))
+      .mutation(({ input }) => suggestSkuReferenciasBatch(input.codMaterials)),
+
     /** Clientes no faturamento ainda não cadastrados. */
     pendingClientesFromFaturamento: protectedProcedure.query(() =>
       listPendingClientesFromFaturamento()
@@ -2208,6 +2234,21 @@ export const appRouter = router({
     acceptPendingMarcas: protectedProcedure
       .input(z.object({ nomes: z.array(z.string().min(1)).optional() }).optional())
       .mutation(({ input }) => acceptPendingMarcasFromFaturamento(input?.nomes)),
+
+    acceptPendingMarcasWithGestores: protectedProcedure
+      .input(
+        z.object({
+          items: z
+            .array(
+              z.object({
+                nome: z.string().min(1),
+                gestorId: z.number().nullable().optional(),
+              })
+            )
+            .min(1),
+        })
+      )
+      .mutation(({ input }) => acceptPendingMarcasWithGestores(input.items)),
 
     /**
      * Baseline de capacidade: velocidade calibrada, config mensal (turno),

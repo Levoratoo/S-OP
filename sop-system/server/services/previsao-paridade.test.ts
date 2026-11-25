@@ -94,10 +94,9 @@ describe("integridade do De-Para", () => {
     ).toThrow(/conflitante/i);
   });
 
-  it("bloqueia autorreferência e ciclos", () => {
-    expect(() =>
-      buildValidatedDeParaMap([{ skuAntigo: "A", skuNovo: "a" }])
-    ).toThrow(/ele mesmo/i);
+  it("ignora autorreferência e bloqueia ciclos", () => {
+    const map = buildValidatedDeParaMap([{ skuAntigo: "A", skuNovo: "a" }]);
+    expect(map.size).toBe(0);
     expect(() =>
       buildValidatedDeParaMap([
         { skuAntigo: "A", skuNovo: "B" },

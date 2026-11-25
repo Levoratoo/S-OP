@@ -176,7 +176,11 @@ export const produtos = mysqlTable("produtos", {
   marcaId: int("marcaId"), // Referência para tabela marcas
   grupo: varchar("grupo", { length: 100 }),
   ramoAtuacao: varchar("ramoAtuacao", { length: 100 }),
-  valorVenda: decimal("valorVenda", { precision: 15, scale: 2 }),
+  valorVenda: decimal("valorVenda", { precision: 15, scale: 4 }),
+  /** Preço unitário canônico (4 casas) usado em dashboard, PV e snapshot. */
+  precoUnitario: decimal("precoUnitario", { precision: 15, scale: 4 }),
+  precoOrigem: varchar("precoOrigem", { length: 40 }),
+  precoAtualizadoEm: timestamp("precoAtualizadoEm"),
   valorCusto: decimal("valorCusto", { precision: 15, scale: 2 }),
   qtdePallet: int("qtdePallet"),
   loteEconomicoViavel: int("loteEconomicoViavel"),
@@ -192,12 +196,35 @@ export const produtos = mysqlTable("produtos", {
   unidade: varchar("unidade", { length: 20 }).default("UN"),
   /** Se false, SKU não entra na estatística (usa projeção comercial/cliente). */
   projetarEstatistica: boolean("projetarEstatistica").default(true).notNull(),
+  /** Ex.: CRM_AUTO — produto criado na importação CRM. */
+  cadastroOrigem: varchar("cadastroOrigem", { length: 40 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 
 export type Produto = typeof produtos.$inferSelect;
 export type InsertProduto = typeof produtos.$inferInsert;
+
+/** Fatores % sazonais cadastrados por SKU (jan-dez, soma ~100%). */
+export const produtoSazonalidadeFatores = mysqlTable("produto_sazonalidade_fatores", {
+  produtoId: int("produtoId").primaryKey(),
+  fatorJan: decimal("fatorJan", { precision: 8, scale: 4 }).notNull(),
+  fatorFev: decimal("fatorFev", { precision: 8, scale: 4 }).notNull(),
+  fatorMar: decimal("fatorMar", { precision: 8, scale: 4 }).notNull(),
+  fatorAbr: decimal("fatorAbr", { precision: 8, scale: 4 }).notNull(),
+  fatorMai: decimal("fatorMai", { precision: 8, scale: 4 }).notNull(),
+  fatorJun: decimal("fatorJun", { precision: 8, scale: 4 }).notNull(),
+  fatorJul: decimal("fatorJul", { precision: 8, scale: 4 }).notNull(),
+  fatorAgo: decimal("fatorAgo", { precision: 8, scale: 4 }).notNull(),
+  fatorSet: decimal("fatorSet", { precision: 8, scale: 4 }).notNull(),
+  fatorOut: decimal("fatorOut", { precision: 8, scale: 4 }).notNull(),
+  fatorNov: decimal("fatorNov", { precision: 8, scale: 4 }).notNull(),
+  fatorDez: decimal("fatorDez", { precision: 8, scale: 4 }).notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type ProdutoSazonalidadeFatores = typeof produtoSazonalidadeFatores.$inferSelect;
+export type InsertProdutoSazonalidadeFatores = typeof produtoSazonalidadeFatores.$inferInsert;
 
 // ==================== CLIENTES ====================
 export const clientes = mysqlTable("clientes", {
@@ -382,7 +409,9 @@ export const faturamento = mysqlTable("faturamento", {
   codMaterial: varchar("codMaterial", { length: 50 }),
   descricaoItem: varchar("descricaoItem", { length: 300 }),
   // Classificação
-  tipoNegocio: varchar("tipoNegocio", { length: 50 }), // JIT, PRG, VAR
+  tipoNegocio: varchar("tipoNegocio", { length: 50 }), // JIT, ATD, PRG, VAR (usr_acabado)
+  /** usr_grupo do ERP — família/tipo de produto (Sacola, Envelope…). */
+  grupoProduto: varchar("grupoProduto", { length: 100 }),
   tipoEstoque: mysqlEnum("tipoEstoque", ["MTS", "MTO"]),
   linhaProduto: varchar("linhaProduto", { length: 100 }), // Automática, Classic, Elegance
   // Valores
@@ -439,6 +468,40 @@ export const carteiraPedidos = mysqlTable("carteira_pedidos", {
 
 export type CarteiraPedido = typeof carteiraPedidos.$inferSelect;
 export type InsertCarteiraPedido = typeof carteiraPedidos.$inferInsert;
+
+/** Entregas mensais do PV aberto (ERP), por pedido × SKU × preço. */
+export const carteiraPvEntregas = mysqlTable("carteira_pv_entregas", {
+  id: int("id").autoincrement().primaryKey(),
+  codigo: varchar("codigo", { length: 50 }).notNull(),
+  sku: varchar("sku", { length: 50 }).notNull(),
+  precoUnitario: decimal("precoUnitario", { precision: 15, scale: 4 }).notNull(),
+  anoEnt: int("anoEnt").notNull(),
+  mesEnt: int("mesEnt").notNull(),
+  quantidade: decimal("quantidade", { precision: 15, scale: 4 }).notNull(),
+  receitaBruta: decimal("receitaBruta", { precision: 15, scale: 2 }).notNull(),
+  erpDescricao: varchar("erpDescricao", { length: 300 }),
+  erpMarca: varchar("erpMarca", { length: 100 }),
+  erpTipo: varchar("erpTipo", { length: 50 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type CarteiraPvEntrega = typeof carteiraPvEntregas.$inferSelect;
+export type InsertCarteiraPvEntrega = typeof carteiraPvEntregas.$inferInsert;
+
+/** Catálogo agregado de SKUs no faturamento (materializado no pós-sync). */
+export const fatSkuCatalog = mysqlTable("fat_sku_catalog", {
+  codMaterial: varchar("codMaterial", { length: 50 }).primaryKey(),
+  descricaoItem: varchar("descricaoItem", { length: 300 }),
+  marca: varchar("marca", { length: 100 }),
+  linhaProduto: varchar("linhaProduto", { length: 100 }),
+  tipoNegocio: varchar("tipoNegocio", { length: 50 }),
+  tipoEstoque: mysqlEnum("tipoEstoque", ["MTS", "MTO"]),
+  grupoProduto: varchar("grupoProduto", { length: 100 }),
+  notas: int("notas").default(0).notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type FatSkuCatalog = typeof fatSkuCatalog.$inferSelect;
 
 // ==================== FORECAST ====================
 export const forecasts = mysqlTable("forecasts", {
@@ -560,6 +623,18 @@ export const gestorMarca = mysqlTable("gestor_marca", {
 
 export type GestorMarca = typeof gestorMarca.$inferSelect;
 export type InsertGestorMarca = typeof gestorMarca.$inferInsert;
+
+/** Gestor sugerido por import CSV para marcas ainda não cadastradas (aplicado ao aceitar marca). */
+export const gestorMarcaImportMap = mysqlTable("gestor_marca_import_map", {
+  id: int("id").autoincrement().primaryKey(),
+  marcaKey: varchar("marcaKey", { length: 200 }).notNull().unique(),
+  marcaNome: varchar("marcaNome", { length: 100 }).notNull(),
+  gestorNome: varchar("gestorNome", { length: 200 }).notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type GestorMarcaImportMap = typeof gestorMarcaImportMap.$inferSelect;
+export type InsertGestorMarcaImportMap = typeof gestorMarcaImportMap.$inferInsert;
 
 // ==================== DE-PARA DE CÓDIGOS DE ITEM ====================
 export const deParaCodigos = mysqlTable("de_para_codigos", {
@@ -706,7 +781,7 @@ export const ciclosComerciais = mysqlTable("ciclos_comerciais", {
   mesInicio: int("mesInicio").notNull(), // 1-12
   horizonteMeses: int("horizonteMeses").default(12).notNull(),
   jobId: int("jobId"), // job Python origem (Visao_Executiva)
-  status: mysqlEnum("status", ["ABERTO", "EM_COLABORACAO", "CONSOLIDADO", "FECHADO"])
+  status: mysqlEnum("status", ["ABERTO", "EM_COLABORACAO", "CONSENSO", "APROVADO", "CONGELADO"])
     .default("ABERTO")
     .notNull(),
   observacoes: text("observacoes"),
@@ -717,6 +792,34 @@ export const ciclosComerciais = mysqlTable("ciclos_comerciais", {
 
 export type CicloComercial = typeof ciclosComerciais.$inferSelect;
 export type InsertCicloComercial = typeof ciclosComerciais.$inferInsert;
+
+export const cicloStatusHistorico = mysqlTable("ciclo_status_historico", {
+  id: int("id").autoincrement().primaryKey(),
+  cicloId: int("cicloId").notNull(),
+  statusDe: varchar("statusDe", { length: 40 }),
+  statusPara: varchar("statusPara", { length: 40 }).notNull(),
+  usuario: varchar("usuario", { length: 320 }),
+  comentario: text("comentario"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export const cicloSnapshot = mysqlTable("ciclo_snapshot", {
+  id: int("id").autoincrement().primaryKey(),
+  cicloId: int("cicloId").notNull(),
+  versao: int("versao").notNull(),
+  hash: varchar("hash", { length: 64 }).notNull(),
+  retroativo: boolean("retroativo").default(false).notNull(),
+  createdBy: varchar("createdBy", { length: 320 }),
+  comentario: text("comentario"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export const cicloSnapshotLinhas = mysqlTable("ciclo_snapshot_linhas", {
+  id: int("id").autoincrement().primaryKey(),
+  snapshotId: int("snapshotId").notNull(),
+  tipo: varchar("tipo", { length: 40 }).notNull(),
+  payloadJson: text("payloadJson").notNull(),
+});
 
 /** Linhas do ciclo: desagregação estatística + edição comercial (MTS/JITO/PV/CRM). */
 export const cicloComercialItens = mysqlTable("ciclo_comercial_itens", {
@@ -734,6 +837,8 @@ export const cicloComercialItens = mysqlTable("ciclo_comercial_itens", {
   rateio6m: decimal("rateio6m", { precision: 10, scale: 6 }),
   rateioConsiderar: decimal("rateioConsiderar", { precision: 10, scale: 6 }),
   qtdeTotalEstatistica: decimal("qtdeTotalEstatistica", { precision: 15, scale: 2 }),
+  /** Estatística mensal redistribuída com fatores % cadastrados do SKU. */
+  estatUsouFatorSku: boolean("estatUsouFatorSku").default(false).notNull(),
   /** Previsão estatística mensal (snapshot na desagregação). */
   e1: decimal("e1", { precision: 15, scale: 2 }),
   e2: decimal("e2", { precision: 15, scale: 2 }),
@@ -761,12 +866,16 @@ export const cicloComercialItens = mysqlTable("ciclo_comercial_itens", {
   m11: decimal("m11", { precision: 15, scale: 2 }),
   m12: decimal("m12", { precision: 15, scale: 2 }),
   qtdeColaborada: decimal("qtdeColaborada", { precision: 15, scale: 2 }),
-  valorVendaSnapshot: decimal("valorVendaSnapshot", { precision: 15, scale: 2 }),
+  valorVendaSnapshot: decimal("valorVendaSnapshot", { precision: 15, scale: 4 }),
   familiaSnapshot: varchar("familiaSnapshot", { length: 120 }),
   gestorSnapshot: varchar("gestorSnapshot", { length: 160 }),
   crmCard: varchar("crmCard", { length: 120 }),
   crmTipo: varchar("crmTipo", { length: 40 }),
   crmTemperatura: varchar("crmTemperatura", { length: 20 }),
+  /** Modalidade do Excel CRM (Repetição, Recompra…). */
+  crmModalidade: varchar("crmModalidade", { length: 200 }),
+  /** Tipo do Excel CRM (PRG, JIT (MTO)…). */
+  crmTipoNegocio: varchar("crmTipoNegocio", { length: 40 }),
   crmCliente: varchar("crmCliente", { length: 160 }),
   crmOrcamento: decimal("crmOrcamento", { precision: 15, scale: 2 }),
   origem: mysqlEnum("origem", ["ESTATISTICA", "MANUAL", "CRM", "PV"]).default("ESTATISTICA").notNull(),

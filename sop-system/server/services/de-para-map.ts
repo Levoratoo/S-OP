@@ -39,7 +39,7 @@ export function buildValidatedDeParaMapDetailed(
     const novo = (row.skuNovo || "").trim();
     if (!antigo || !novo) continue;
     if (antigo === novo.toUpperCase()) {
-      throw new Error(`De-Para inválido: ${antigo} aponta para ele mesmo.`);
+      continue;
     }
     const existing = map.get(antigo);
     if (existing && existing.toUpperCase() !== novo.toUpperCase()) {
@@ -132,6 +132,11 @@ export function resolveCodigoAtual(codigoOriginal: string, map: Map<string, stri
     seen.add(lookup);
     atual = map.get(lookup)!;
     lookup = atual.toUpperCase();
+  }
+  if (map.has(lookup) && seen.has(lookup)) {
+    console.warn(
+      `[de-para] Ciclo ao resolver "${codigoOriginal}" (parou em ${atual}). Revise o cadastro De-Para.`
+    );
   }
   return atual;
 }

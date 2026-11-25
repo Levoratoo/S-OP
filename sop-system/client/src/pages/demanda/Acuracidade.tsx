@@ -14,6 +14,7 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { trpc } from "@/lib/trpc";
 import { Loader2, Target, TrendingUp, Gauge, BarChart3, Factory } from "lucide-react";
+import { isCicloSomenteLeitura } from "@shared/ciclo-status";
 
 const MESES = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
 
@@ -36,6 +37,22 @@ function formatPercentLegacy(value: number | null | undefined) {
 }
 
 export default function Acuracidade() {
+  const [fonte, setFonte] = useState<"snapshot" | "legado">("legado");
+  const [cicloId, setCicloId] = useState<number | null>(null);
+  const { data: ciclos } = trpc.cicloComercial.list.useQuery();
+  const cicloEscolhido = cicloId ?? ciclos?.[0]?.id ?? 0;
+  const cicloAtual = (ciclos ?? []).find(c => c.id === cicloEscolhido);
+  const statusComFoto = Boolean(cicloAtual && isCicloSomenteLeitura(cicloAtual.status));
+  const { data: foto } = trpc.cicloComercial.snapshot.useQuery(
+    { cicloId: cicloEscolhido },
+    { enabled: cicloEscolhido > 0 && statusComFoto }
+  );
+  const temFoto = Boolean(foto);
+  const { data: acurSnap, isLoading: loadingSnap } = trpc.cicloComercial.acuracidadeSnapshot.useQuery(
+    { cicloId: cicloEscolhido },
+    { enabled: fonte === "snapshot" && temFoto, retry: false }
+  );
+
   const [anoInput, setAnoInput] = useState(String(new Date().getFullYear()));
   const [jobIdOverride, setJobIdOverride] = useState<number | null>(null);
   const ano = useMemo(() => Number(anoInput) || new Date().getFullYear(), [anoInput]);
@@ -166,14 +183,84 @@ export default function Acuracidade() {
 
   const cards = !useLegacy && analytics ? pythonCards : legacyCards;
 
+  if (fonte === "snapshot") {
+    return (
+      <div className="space-y-4">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight">Acuracidade da Demanda</h1>
+            <p className="text-muted-foreground">Previsão do snapshot aprovado contra o faturamento real (WMAPE e bias).</p>
+          </div>
+          <Button variant="outline" onClick={() => setFonte("legado")}>Aba legado</Button>
+        </div>
+        <div className="max-w-sm">
+          <Label>Ciclo</Label>
+          <Select value={cicloEscolhido ? String(cicloEscolhido) : undefined} onValueChange={v => setCicloId(Number(v))}>
+            <SelectTrigger><SelectValue placeholder="Ciclo" /></SelectTrigger>
+            <SelectContent>
+              {(ciclos ?? []).map(c => (
+                <SelectItem key={c.id} value={String(c.id)}>{c.nome} · {c.status}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        {loadingSnap ? <Loader2 className="h-5 w-5 animate-spin" /> : null}
+        {!temFoto ? (
+          <p className="text-sm text-muted-foreground">
+            Este ciclo ainda não tem foto aprovada. A acuracidade do snapshot fica disponível depois de aprovar o ciclo.
+          </p>
+        ) : null}
+        {acurSnap && !acurSnap.temSnapshot ? (
+          <p className="text-sm text-muted-foreground">Sem snapshot aprovado para este ciclo.</p>
+        ) : null}
+        {acurSnap?.temSnapshot ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>WMAPE {acurSnap.wmape == null ? "—" : `${(acurSnap.wmape * 100).toFixed(1)}%`}</CardTitle>
+              <CardDescription>
+                Bias {acurSnap.bias == null ? "—" : `${(acurSnap.bias * 100).toFixed(1)}%`}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>SKU</TableHead>
+                    <TableHead>Marca</TableHead>
+                    <TableHead>Mês</TableHead>
+                    <TableHead>Previsto</TableHead>
+                    <TableHead>Real</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {acurSnap.linhas.slice(0, 40).map(row => (
+                    <TableRow key={`${row.sku}-${row.ano}-${row.mes}`}>
+                      <TableCell className="font-mono text-xs">{row.sku}</TableCell>
+                      <TableCell>{row.marca || "—"}</TableCell>
+                      <TableCell>{row.mes}/{row.ano}</TableCell>
+                      <TableCell>{row.previsto}</TableCell>
+                      <TableCell>{row.real}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        ) : null}
+        {acurSnap?.aviso ? <p className="text-sm text-amber-700">{acurSnap.aviso}</p> : null}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Acuracidade da Demanda</h1>
-          <p className="text-muted-foreground">
+            <p className="text-muted-foreground">
             Preferência: analytics do job Python SUCCESS · fallback: previsões CRUD do ano
           </p>
+          <Button variant="outline" size="sm" onClick={() => setFonte("snapshot")}>Aba ciclo aprovado</Button>
         </div>
         <div className="flex flex-wrap items-end gap-2">
           <div className="space-y-1">
@@ -218,14 +305,14 @@ export default function Acuracidade() {
         </div>
       </div>
 
-      <div className="flex items-center gap-2 text-sm">
+      <div className="flex flex-wrap items-center gap-2 text-sm">
         {!useLegacy && analytics ? (
           <Badge>Fonte: job Python #{selectedJobId}</Badge>
         ) : (
           <Badge variant="secondary">Fonte: previsões CRUD / dashboard ({ano})</Badge>
         )}
         {selectedJob && (
-          <span className="text-muted-foreground">
+          <span className="min-w-0 max-w-full break-all text-muted-foreground" title={selectedJob.outputFileName || selectedJob.scriptVersion}>
             {selectedJob.scriptVersion}
             {selectedJob.outputFileName ? ` · ${selectedJob.outputFileName}` : ""}
           </span>
@@ -379,7 +466,6 @@ export default function Acuracidade() {
                     <TableRow>
                       <TableHead>Ano/Mês</TableHead>
                       <TableHead>Produto</TableHead>
-                      <TableHead>Família</TableHead>
                       <TableHead className="text-right">Valor Previsto</TableHead>
                       <TableHead className="text-right">MAPE</TableHead>
                       <TableHead className="text-right">WMAPE</TableHead>
@@ -388,7 +474,7 @@ export default function Acuracidade() {
                   <TableBody>
                     {!previsoes || previsoes.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
+                        <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">
                           Nenhuma previsão encontrada para este ano. Rode um job Python SUCCESS para
                           ver analytics unificados.
                         </TableCell>
@@ -400,7 +486,6 @@ export default function Acuracidade() {
                             {item.ano}/{MESES[(item.mes || 1) - 1]}
                           </TableCell>
                           <TableCell>{item.produtoId ?? "-"}</TableCell>
-                          <TableCell>{item.familiaId ?? "-"}</TableCell>
                           <TableCell className="text-right">{formatMoney(item.valorPrevisto)}</TableCell>
                           <TableCell className="text-right">
                             {formatPercentLegacy(item.mape ? Number(item.mape) : null)}

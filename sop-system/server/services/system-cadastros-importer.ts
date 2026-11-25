@@ -741,7 +741,16 @@ async function importDeParaCodigos(
     if (!existingRow) {
       stats.inserted += 1;
       if (!context.dryRun) {
-        await db.createDeParaCodigo({ skuAntigo, skuNovo });
+        try {
+          await db.createDeParaCodigo({ skuAntigo, skuNovo });
+        } catch (err) {
+          stats.errors += 1;
+          pushWarning(
+            stats,
+            `Linha ${index + 2}: ${err instanceof Error ? err.message : String(err)}`
+          );
+          continue;
+        }
       }
       existingMap.set(skuAntigo, {
         id: -1,
@@ -760,7 +769,16 @@ async function importDeParaCodigos(
 
     stats.updated += 1;
     if (!context.dryRun && existingRow.id > 0) {
-      await db.updateDeParaCodigo(existingRow.id, { skuNovo });
+      try {
+        await db.updateDeParaCodigo(existingRow.id, { skuNovo });
+      } catch (err) {
+        stats.errors += 1;
+        pushWarning(
+          stats,
+          `Linha ${index + 2}: ${err instanceof Error ? err.message : String(err)}`
+        );
+        continue;
+      }
     }
   }
 
