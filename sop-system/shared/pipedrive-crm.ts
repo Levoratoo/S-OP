@@ -204,7 +204,7 @@ export type ContextoTratamentoCrm = {
   anoInicio: number;
   mesInicio: number;
   gestores: string[];
-  produtos: Array<{ codigo: string; descricao: string | null }>;
+  produtos: Array<{ codigo: string; descricao: string | null; marca?: string | null }>;
   dePara: Array<{ skuAntigo: string; skuNovo: string }>;
 };
 
@@ -239,9 +239,15 @@ export type MarcaPreviaCrm = {
 };
 
 export type CargaCrmResumo = {
+  sku?: string | null;
   marca: string | null;
   valorVenda: number;
   meses: number[];
+};
+
+export type MarcaCadastroCrm = {
+  codigo: string;
+  marca?: string | null;
 };
 
 export type PreviaCrm = {
@@ -281,6 +287,11 @@ export function normalizarTexto(value: string): string {
     .toLowerCase()
     .replace(/\s+/g, " ")
     .trim();
+}
+
+/** Chave única da marca na prévia: caixa, acento e espaços não separam a mesma marca. */
+export function chaveMarcaCrm(nome: string | null | undefined): string {
+  return normalizarTexto(nome ?? "") || "sem marca";
 }
 
 export function colapsarEspacos(value: string): string {
@@ -1011,11 +1022,42 @@ function unidadesPreco4(valor: number): number {
   return Math.round((Number(valor) || 0) * 10000);
 }
 
+function mapaMarcaCadastro(lista: MarcaCadastroCrm[] | undefined) {
+  const map = new Map<string, string>();
+  for (const item of lista ?? []) {
+    const codigo = item.codigo.trim().toUpperCase();
+    const marca = colapsarEspacos(item.marca ?? "");
+    if (!codigo || !marca || map.has(codigo)) continue;
+    map.set(codigo, marca);
+  }
+  return map;
+}
+
+/**
+ * Marca da prévia: a do cadastro do SKU atual (depois do De-Para). Sem cadastro,
+ * usa o texto informado, na mesma chave normalizada dos dois lados.
+ */
+export function resolverMarcaPrevia(
+  sku: string | null | undefined,
+  informada: string | null | undefined,
+  catalogo: Map<string, string>,
+  dePara: Map<string, string>
+): { chave: string; rotulo: string; cadastro: boolean } {
+  const bruto = (sku ?? "").trim();
+  const atual = bruto ? resolverSkuDePara(bruto, dePara).trim().toUpperCase() : "";
+  const doCadastro = (atual && catalogo.get(atual)) || (bruto && catalogo.get(bruto.toUpperCase())) || "";
+  if (doCadastro) return { chave: chaveMarcaCrm(doCadastro), rotulo: doCadastro, cadastro: true };
+  const texto = colapsarEspacos(informada ?? "");
+  return { chave: chaveMarcaCrm(texto), rotulo: texto || "Sem marca", cadastro: false };
+}
+
 export function montarPreviaCrm(input: {
   anoInicio: number;
   mesInicio: number;
   tratamento: ResultadoTratamento;
   cargaAtual: CargaCrmResumo[];
+  marcasCadastro?: MarcaCadastroCrm[];
+  dePara?: Array<{ skuAntigo: string; skuNovo: string }>;
 }): PreviaCrm {
   const meses: MesPreviaCrm[] = Array.from({ length: 12 }, (_, indice) => {
     const cal = cicloHorizonCalendar(input.anoInicio, input.mesInicio, indice);
@@ -1031,23 +1073,54 @@ export function montarPreviaCrm(input: {
       depoisValor: 0,
     };
   });
-  const antesMarca = new Map<string, { qtd: number; cents: number }>();
-  const depoisMarca = new Map<string, { qtd: number; cents: number }>();
-  const somarMarca = (mapa: Map<string, { qtd: number; cents: number }>, marca: string, qtd: number, valorCents: number) => {
-    const atual = mapa.get(marca) ?? { qtd: 0, cents: 0 };
-    atual.qtd += qtd;
-    atual.cents += valorCents;
-    mapa.set(marca, atual);
+  const catalogoMarca = mapaMarcaCadastro(input.marcasCadastro);
+  const dePara = mapaDePara(input.dePara ?? []);
+  type AccMarca = {
+    rotulo: string;
+    cadastro: boolean;
+    antesQtd: number;
+    depoisQtd: number;
+    antesCents: number;
+    depoisCents: number;
+  };
+  const marcasMap = new Map<string, AccMarca>();
+  const somarMarca = (
+    sku: string | null | undefined,
+    informada: string | null | undefined,
+    qtd: number,
+    valorCents: number,
+    lado: "antes" | "depois"
+  ) => {
+    const resolvida = resolverMarcaPrevia(sku, informada, catalogoMarca, dePara);
+    const atual = marcasMap.get(resolvida.chave) ?? {
+      rotulo: resolvida.rotulo,
+      cadastro: resolvida.cadastro,
+      antesQtd: 0,
+      depoisQtd: 0,
+      antesCents: 0,
+      depoisCents: 0,
+    };
+    if (resolvida.cadastro && !atual.cadastro) {
+      atual.rotulo = resolvida.rotulo;
+      atual.cadastro = true;
+    }
+    if (lado === "antes") {
+      atual.antesQtd += qtd;
+      atual.antesCents += valorCents;
+    } else {
+      atual.depoisQtd += qtd;
+      atual.depoisCents += valorCents;
+    }
+    marcasMap.set(resolvida.chave, atual);
   };
 
   for (const item of input.cargaAtual) {
-    const marca = item.marca?.trim() || "Sem marca";
     for (let i = 0; i < 12; i++) {
       const qtd = Number(item.meses[i] ?? 0) || 0;
       const valorCents = unidadesPreco4(qtd * item.valorVenda);
       meses[i]!.antesQtd += qtd;
       meses[i]!.antesValor += valorCents;
-      somarMarca(antesMarca, marca, qtd, valorCents);
+      somarMarca(item.sku, item.marca, qtd, valorCents, "antes");
     }
   }
 
@@ -1063,13 +1136,12 @@ export function montarPreviaCrm(input: {
       Number(data[2])
     );
     if (indice == null) continue;
-    const marca = linha.marca.trim() || "Sem marca";
     const preco = Number(precoUnitario4(linha.valorVenda > 0 ? linha.valorVenda : 0));
     const linhaCents = unidadesPreco4(linha.qtdMes * preco);
     meses[indice]!.linhas += 1;
     meses[indice]!.depoisQtd += linha.qtdMes;
     meses[indice]!.depoisValor += linhaCents;
-    somarMarca(depoisMarca, marca, linha.qtdMes, linhaCents);
+    somarMarca(linha.sku, linha.marca, linha.qtdMes, linhaCents, "depois");
     quantidade += linha.qtdMes;
     valorCents += linhaCents;
   }
@@ -1079,18 +1151,13 @@ export function montarPreviaCrm(input: {
     mes.depoisValor = mes.depoisValor / 10000;
   }
 
-  const marcasNomes = new Set([...antesMarca.keys(), ...depoisMarca.keys()]);
-  const marcas = Array.from(marcasNomes).map(marca => {
-    const antes = antesMarca.get(marca) ?? { qtd: 0, cents: 0 };
-    const depois = depoisMarca.get(marca) ?? { qtd: 0, cents: 0 };
-    return {
-      marca,
-      antesQtd: antes.qtd,
-      depoisQtd: depois.qtd,
-      antesValor: antes.cents / 10000,
-      depoisValor: depois.cents / 10000,
-    };
-  });
+  const marcas = Array.from(marcasMap.values()).map(marca => ({
+    marca: marca.rotulo,
+    antesQtd: marca.antesQtd,
+    depoisQtd: marca.depoisQtd,
+    antesValor: marca.antesCents / 10000,
+    depoisValor: marca.depoisCents / 10000,
+  }));
   marcas.sort((a, b) => b.depoisValor - a.depoisValor || b.antesValor - a.antesValor || a.marca.localeCompare(b.marca));
 
   const contagens = Object.fromEntries(ORDEM_ALERTAS.map(tipo => [tipo, 0])) as Record<TipoAlertaPipedrive, number>;

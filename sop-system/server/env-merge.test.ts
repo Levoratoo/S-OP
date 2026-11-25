@@ -4,10 +4,38 @@ import { describe, expect, it } from "vitest";
 
 const script = path.resolve("docker/env_merge.py");
 
+const CANDIDATOS = [
+  { cmd: "python3", args: [] as string[] },
+  { cmd: "python", args: [] as string[] },
+  { cmd: "py", args: ["-3"] },
+];
+
+function interpretadorPython(): { cmd: string; args: string[] } | null {
+  for (const candidato of CANDIDATOS) {
+    try {
+      const saida = execFileSync(candidato.cmd, [...candidato.args, "-c", "import sys; print(sys.version)"], {
+        encoding: "utf8",
+        timeout: 8000,
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      if (/^\d+\.\d+/.test(saida.trim())) return candidato;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+const python = interpretadorPython();
+
 function merge(remote: string, managed: Record<string, string>, fill: Record<string, string> = {}) {
-  const raw = execFileSync("python3", [script], {
+  if (!python) throw new Error("sem interpretador");
+  const raw = execFileSync(python.cmd, [...python.args, script], {
     input: JSON.stringify({ remote, managed, fill_if_absent: fill }),
     encoding: "utf8",
+    timeout: 8000,
+    windowsHide: true,
   });
   return JSON.parse(raw) as {
     merged: string;
@@ -19,7 +47,10 @@ function merge(remote: string, managed: Record<string, string>, fill: Record<str
 }
 
 describe("deploy env merge", () => {
-  it("preserva PIPEDRIVE e chaves desconhecidas e só atualiza as gerenciadas", () => {
+  it("preserva PIPEDRIVE e chaves desconhecidas e só atualiza as gerenciadas", ctx => {
+    if (!python) {
+      ctx.skip("Nenhum interpretador Python executável (python3, python ou py -3). O alias da Microsoft Store não conta.");
+    }
     const token = "token-de-teste-nao-logar";
     const erp = "senha-erp-de-teste";
     const result = merge(

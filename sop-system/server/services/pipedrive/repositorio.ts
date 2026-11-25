@@ -79,14 +79,16 @@ export function criarRepositorioPipedrive(): RepositorioPipedrive {
           codigo: produtos.codigo,
           descricao: produtos.descricao,
           nome: produtos.nome,
+          marca: produtos.marca,
         })
         .from(produtos);
-      const saida: Array<{ codigo: string; descricao: string | null }> = [];
+      const saida: Array<{ codigo: string; descricao: string | null; marca: string | null }> = [];
       for (const row of rows) {
         const descricao = row.descricao || row.nome || null;
-        if (row.codItem?.trim()) saida.push({ codigo: row.codItem.trim(), descricao });
+        const marca = row.marca?.trim() || null;
+        if (row.codItem?.trim()) saida.push({ codigo: row.codItem.trim(), descricao, marca });
         if (row.codigo?.trim() && row.codigo.trim() !== row.codItem?.trim()) {
-          saida.push({ codigo: row.codigo.trim(), descricao });
+          saida.push({ codigo: row.codigo.trim(), descricao, marca });
         }
       }
       return saida;
@@ -108,6 +110,7 @@ export function criarRepositorioPipedrive(): RepositorioPipedrive {
           )
         );
       return rows.map(row => ({
+        sku: row.sku,
         marca: row.marca,
         valorVenda: numero(row.valorVendaSnapshot),
         meses: MES.map(mes => numero(row[mes])),

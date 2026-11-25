@@ -96,7 +96,7 @@ export type TransacaoPipedrive = {
 export type RepositorioPipedrive = {
   obterCiclo: (cicloId: number) => Promise<CicloPipedrive | null>;
   listarGestores: () => Promise<string[]>;
-  listarProdutos: () => Promise<Array<{ codigo: string; descricao: string | null }>>;
+  listarProdutos: () => Promise<Array<{ codigo: string; descricao: string | null; marca?: string | null }>>;
   listarDePara: () => Promise<Array<{ skuAntigo: string; skuNovo: string }>>;
   listarCargaCrm: (cicloId: number) => Promise<CargaCrmResumo[]>;
   materializar: (cicloId: number, linhas: LinhaCrmTratada[]) => Promise<MaterializacaoCrm>;
@@ -193,6 +193,8 @@ export async function previaPipedrive(input: {
     mesInicio: ciclo.mesInicio,
     tratamento: avaliado.tratamento,
     cargaAtual: ctx.carga,
+    marcasCadastro: ctx.produtos,
+    dePara: ctx.dePara,
   });
   return { ...previa, previewHash: avaliado.hash };
 }
@@ -251,6 +253,8 @@ export async function syncPipedrive(input: {
     mesInicio: ciclo.mesInicio,
     tratamento: avaliado.tratamento,
     cargaAtual: ctx.carga,
+    marcasCadastro: ctx.produtos,
+    dePara: ctx.dePara,
   });
   const itens = materializado.itens.map(item => prepararItemCrm(item as Record<string, unknown>, ciclo.id));
   await input.repo.transacao(async tx => {

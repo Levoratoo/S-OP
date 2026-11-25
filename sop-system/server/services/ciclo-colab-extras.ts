@@ -747,7 +747,7 @@ export async function importCrmParaCiclo(
       planoColab: "CRM",
       sku: agg.sku,
       descricao: agg.descricao || prod.descricao || prod.nome || null,
-      marca: agg.marca || prod.marca,
+      marca: (prod.marca || "").trim() || (agg.marca || "").trim() || null,
       linha: prod.linha,
       tipoEstoque: (prod.tipoEstoque || "MTS") as "MTS" | "MTO",
       tipoMarcaLinha: `${prod.tipoEstoque || "MTS"}-${prod.marca || "SEM-MARCA"}-${prod.linha || "SEM-LINHA"}`,

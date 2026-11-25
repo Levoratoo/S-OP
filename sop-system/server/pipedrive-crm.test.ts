@@ -328,6 +328,75 @@ describe("pacote fictício da API v2", () => {
     expect(previa.contagens.generico_sem_calculo).toBeGreaterThan(0);
   });
 
+  it("ANTES e DEPOIS da marca usam o cadastro do SKU, inclusive com outro texto no negócio", () => {
+    const linha = (sku: string, marca: string, qtd: number): LinhaCrmTratada => ({
+      sku,
+      descricao: "Sacola",
+      marca,
+      gestor: "Ana",
+      temperatura: "",
+      tipo: "Aposta",
+      orcamento: 0,
+      dataFaturamento: "2026-12-01",
+      qtdMes: qtd,
+      valorVenda: 1,
+      valorTotalMes: qtd,
+      modalidade: "",
+      tipoNegocio: "PRG",
+      dealId: 1,
+    });
+    const meses = (qtd: number) => [qtd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    const previa = montarPreviaCrm({
+      anoInicio: 2026,
+      mesInicio: 11,
+      tratamento: {
+        linhas: [
+          linha("80.01.000001", "Lojas Renner", 1_666_660),
+          linha("80.01.000002", "RENNER S.A.", 9_999_990),
+          linha("80.09.000009", "Outra marca", 5),
+          linha("80.02.000003", "Renner", 100),
+          linha("80.04.000004", "ACUCAR", 50),
+          linha("80.05.000005", "riachuelo", 8),
+        ],
+        alertas: [],
+        negocios: 6,
+        negociosSemProduto: 0,
+        linhasProduto: 6,
+        produtosDesabilitados: 0,
+        parcelasFora: 0,
+      },
+      cargaAtual: [
+        { sku: "80.01.000001", marca: "RENNER", valorVenda: 1, meses: meses(1_666_660) },
+        { sku: "80.01.000002", marca: "Lojas Renner", valorVenda: 1, meses: meses(9_999_990) },
+        { sku: "80.09.000009", marca: "XXX", valorVenda: 1, meses: meses(5) },
+        { sku: "80.02.000003", marca: "CEA", valorVenda: 1, meses: meses(100) },
+        { sku: "80.04.000004", marca: "Acucar", valorVenda: 1, meses: meses(50) },
+        { sku: "80.05.000005", marca: "Riachuelo", valorVenda: 1, meses: meses(8) },
+      ],
+      marcasCadastro: [
+        { codigo: "80.01.000001", marca: "Renner" },
+        { codigo: "80.01.000002", marca: "RENNER" },
+        { codigo: "80.01.000010", marca: "Renner" },
+        { codigo: "80.02.000003", marca: "C&A" },
+        { codigo: "80.04.000004", marca: "Açúcar" },
+      ],
+      dePara: [{ skuAntigo: "80.09.000009", skuNovo: "80.01.000010" }],
+    });
+
+    const porNome = (nome: string) => previa.marcas.find(marca => marca.marca === nome);
+    const renner = porNome("Renner");
+    expect(renner?.antesQtd).toBe(11_666_655);
+    expect(renner?.depoisQtd).toBe(11_666_655);
+    expect(previa.marcas.filter(marca => marca.marca.toLowerCase().includes("renner"))).toHaveLength(1);
+    expect(porNome("C&A")).toMatchObject({ antesQtd: 100, depoisQtd: 100 });
+    expect(porNome("Açúcar")).toMatchObject({ antesQtd: 50, depoisQtd: 50 });
+    expect(porNome("Riachuelo")).toMatchObject({ antesQtd: 8, depoisQtd: 8 });
+    for (const marca of previa.marcas) {
+      expect(marca.antesQtd).toBe(marca.depoisQtd);
+      expect(marca.antesValor).toBe(marca.depoisValor);
+    }
+  });
+
   it("o mapeador gera as mesmas linhas que o Excel A–Q e que o parser das 15 colunas", () => {
     const extraido = extrairLinhasExportacao(pacoteFicticio(), config);
     const comparaveis = extraido.linhas.filter(linha => linha.dealId !== 910004);

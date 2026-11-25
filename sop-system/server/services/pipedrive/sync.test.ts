@@ -115,6 +115,7 @@ function criarMemoria() {
     },
     async listarCargaCrm() {
       return cargaCrm().map(item => ({
+        sku: item.sku,
         marca: "Aurora",
         valorVenda: 2,
         meses: [Number(item.m1 ?? 0), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
