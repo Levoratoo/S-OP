@@ -475,11 +475,29 @@ export const carteiraPvEntregas = mysqlTable("carteira_pv_entregas", {
   mesEnt: int("mesEnt").notNull(),
   quantidade: decimal("quantidade", { precision: 15, scale: 4 }).notNull(),
   receitaBruta: decimal("receitaBruta", { precision: 15, scale: 2 }).notNull(),
+  erpDescricao: varchar("erpDescricao", { length: 300 }),
+  erpMarca: varchar("erpMarca", { length: 100 }),
+  erpTipo: varchar("erpTipo", { length: 50 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 
 export type CarteiraPvEntrega = typeof carteiraPvEntregas.$inferSelect;
 export type InsertCarteiraPvEntrega = typeof carteiraPvEntregas.$inferInsert;
+
+/** Catálogo agregado de SKUs no faturamento (materializado no pós-sync). */
+export const fatSkuCatalog = mysqlTable("fat_sku_catalog", {
+  codMaterial: varchar("codMaterial", { length: 50 }).primaryKey(),
+  descricaoItem: varchar("descricaoItem", { length: 300 }),
+  marca: varchar("marca", { length: 100 }),
+  linhaProduto: varchar("linhaProduto", { length: 100 }),
+  tipoNegocio: varchar("tipoNegocio", { length: 50 }),
+  tipoEstoque: mysqlEnum("tipoEstoque", ["MTS", "MTO"]),
+  grupoProduto: varchar("grupoProduto", { length: 100 }),
+  notas: int("notas").default(0).notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type FatSkuCatalog = typeof fatSkuCatalog.$inferSelect;
 
 // ==================== FORECAST ====================
 export const forecasts = mysqlTable("forecasts", {

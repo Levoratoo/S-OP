@@ -33,6 +33,9 @@ export function buildCarteiraPvEntregasInserts(
       mesEnt: number;
       quantidade: number;
       receitaBruta: number;
+      erpDescricao: string | null;
+      erpMarca: string | null;
+      erpTipo: string | null;
     }
   >();
 
@@ -48,6 +51,9 @@ export function buildCarteiraPvEntregasInserts(
     const mesEnt = Number(row.mesEnt);
     const key = entregaAggKey(codigo, sku, preco, anoEnt, mesEnt);
     const rec = toNum(row.receitaBruta);
+    const erpDescricao = row.erpDescricao ? String(row.erpDescricao).trim() : null;
+    const erpMarca = row.erpMarca ? String(row.erpMarca).trim() : null;
+    const erpTipo = row.erpTipo ? String(row.erpTipo).trim() : null;
     const existing = agg.get(key);
     if (!existing) {
       agg.set(key, {
@@ -58,10 +64,16 @@ export function buildCarteiraPvEntregasInserts(
         mesEnt,
         quantidade: qtd,
         receitaBruta: rec,
+        erpDescricao,
+        erpMarca,
+        erpTipo,
       });
     } else {
       existing.quantidade += qtd;
       existing.receitaBruta += rec;
+      existing.erpDescricao = existing.erpDescricao || erpDescricao;
+      existing.erpMarca = existing.erpMarca || erpMarca;
+      existing.erpTipo = existing.erpTipo || erpTipo;
     }
   }
 
@@ -73,7 +85,27 @@ export function buildCarteiraPvEntregasInserts(
     mesEnt: r.mesEnt,
     quantidade: String(Math.round(r.quantidade * 10000) / 10000),
     receitaBruta: String(Math.round(r.receitaBruta * 100) / 100),
+    erpDescricao: r.erpDescricao,
+    erpMarca: r.erpMarca,
+    erpTipo: r.erpTipo,
   }));
+}
+
+export function buildCarteiraErpSkuMetaMap(
+  rows: Array<{ sku: string; erpDescricao?: string | null; erpMarca?: string | null; erpTipo?: string | null }>
+): Map<string, { descricao: string | null; marca: string | null; tipo: string | null }> {
+  const out = new Map<string, { descricao: string | null; marca: string | null; tipo: string | null }>();
+  for (const row of rows) {
+    const k = String(row.sku || "").trim().toUpperCase();
+    if (!k) continue;
+    const prev = out.get(k);
+    out.set(k, {
+      descricao: prev?.descricao || row.erpDescricao?.trim() || null,
+      marca: prev?.marca || row.erpMarca?.trim() || null,
+      tipo: prev?.tipo || row.erpTipo?.trim() || null,
+    });
+  }
+  return out;
 }
 
 export async function replaceCarteiraPvEntregas(rows: CarteiraEntregaPersistRow[], tx?: DbConn) {

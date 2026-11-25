@@ -1,4 +1,5 @@
 import { cicloHorizonCalendar, cicloHorizonIndexFromCalendar } from "@shared/ciclo-horizon";
+import { roundPrecoPv4 } from "@shared/pv-preco-round";
 
 export type PvMtoEntregaInput = {
   codigo: string;
@@ -36,8 +37,8 @@ const MESES_CURTO = [
 ];
 
 export function pvMtoPivotLineKey(codigo: string, sku: string, precoUnitario: number): string {
-  const preco = Math.round((Number(precoUnitario) || 0) * 100) / 100;
-  return `${String(codigo).trim().toUpperCase()}||${String(sku).trim().toUpperCase()}||${preco.toFixed(2)}`;
+  const preco = roundPrecoPv4(precoUnitario);
+  return `${String(codigo).trim().toUpperCase()}||${String(sku).trim().toUpperCase()}||${preco.toFixed(4)}`;
 }
 
 export type PvPivotMonthColumn = { year: number; month: number; label: string; abs: number };
@@ -106,7 +107,7 @@ export function buildPvPivotLinesFromEntregas(
         lineKey: key,
         numPedido: codigo,
         sku,
-        precoUnitario: Math.round(preco * 100) / 100,
+        precoUnitario: roundPrecoPv4(preco),
         meses: Array(colCount).fill(0),
         quantidadeTotal: 0,
         receitaTotal: 0,

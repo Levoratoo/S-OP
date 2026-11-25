@@ -4,7 +4,7 @@ import {
   type PvMtoEntregaInput,
 } from "@shared/pv-mto-pivot";
 import { loadProdutoMaps } from "./ciclo-colab-extras";
-import { listCarteiraPvEntregas } from "./carteira-pv-entregas";
+import { buildCarteiraErpSkuMetaMap, listCarteiraPvEntregas } from "./carteira-pv-entregas";
 import { carteiraPedidos } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { carteiraPvAbertoWhere } from "./carteira-pv-aberto";
@@ -16,6 +16,7 @@ import {
   type PrecoOrigemPv,
 } from "@shared/pv-preco-fallback";
 import { loadPrecoEGestorFaturamento } from "./ciclo-colab-extras";
+import { receitaPivotComPrecoResolvido, resolveSkuDisplayMeta } from "@shared/carteira-sku-display";
 
 function toNum(v: unknown) {
   const n = Number(String(v ?? "0").replace(",", "."));
@@ -33,6 +34,8 @@ export type CarteiraPivotRow = {
   meses: number[];
   quantidadeTotal: number;
   receitaTotal: number;
+  receitaErp?: number;
+  receitaEstimada?: number;
   cliente: string | null;
   faturado: boolean;
   semCadastro?: boolean;
@@ -42,7 +45,9 @@ export async function getCarteiraPvPivotGrade() {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  let entregasRaw = await listCarteiraPvEntregas();
+  const entregasRaw = await listCarteiraPvEntregas();
+  const erpSkuMeta = buildCarteiraErpSkuMetaMap(entregasRaw);
+
   const entregas: PvMtoEntregaInput[] = entregasRaw.map(e => ({
     codigo: e.codigo,
     sku: e.sku,
@@ -101,7 +106,9 @@ export async function getCarteiraPvPivotGrade() {
     .map(line => {
       const skuKey = line.sku.trim().toUpperCase();
       const prod = byCode.get(skuKey);
-      const meta = !prod ? faturamentoMeta.get(skuKey) : undefined;
+      const erp = erpSkuMeta.get(skuKey);
+      const fat = faturamentoMeta.get(skuKey);
+      const display = resolveSkuDisplayMeta(prod, erp, fat);
       const semCadastro = !prod;
       const precoRes = resolvePvPrecoUnitarioComOrigem({
         erpPreco: line.precoUnitario,
@@ -112,17 +119,26 @@ export async function getCarteiraPvPivotGrade() {
         carteiraPrecoPorSku,
         faturamento12mPorSku: fatLookup.precoBySku,
       });
+      const usouFallback = precoRes.origem !== "erp" && precoRes.origem !== "receita_linha";
+      const receita = receitaPivotComPrecoResolvido(
+        line.quantidadeTotal,
+        line.receitaTotal,
+        precoRes.preco,
+        usouFallback
+      );
       return {
-        marca: prod?.marca ?? meta?.marca ?? null,
+        marca: display.marca,
         codItem: line.sku,
-        descricao: prod?.descricao ?? prod?.nome ?? meta?.descricao ?? null,
-        tipo: prod?.tipoNegocio ?? meta?.tipoNegocio ?? null,
+        descricao: display.descricao,
+        tipo: display.tipo,
         precoUnitario: precoRes.preco,
         precoOrigem: precoRes.origem,
         numPedido: line.numPedido,
         meses: line.meses,
         quantidadeTotal: line.quantidadeTotal,
-        receitaTotal: line.receitaTotal,
+        receitaTotal: receita.receitaTotal,
+        receitaErp: receita.receitaErp,
+        receitaEstimada: receita.receitaEstimada,
         cliente: null,
         faturado: false,
         semCadastro,
@@ -139,12 +155,16 @@ export async function getCarteiraPvPivotGrade() {
   const monthTotals = Array(columns.length).fill(0);
   let grandQty = 0;
   let grandRs = 0;
+  let grandRsErp = 0;
+  let grandRsEstimada = 0;
   let semCadastroQty = 0;
   let semCadastroRs = 0;
   const semCadastroSkus = new Set<string>();
   for (const row of rows) {
     grandQty += row.quantidadeTotal;
     grandRs += row.receitaTotal;
+    grandRsErp += row.receitaErp ?? 0;
+    grandRsEstimada += row.receitaEstimada ?? 0;
     if (row.semCadastro) {
       semCadastroSkus.add(row.codItem.toUpperCase());
       semCadastroQty += row.quantidadeTotal;
@@ -175,13 +195,15 @@ export async function getCarteiraPvPivotGrade() {
     conferencia: {
       carteiraQuantidade,
       carteiraReceita,
+      receitaErpPivot: Math.round(grandRsErp * 100) / 100,
+      receitaEstimadaPivot: Math.round(grandRsEstimada * 100) / 100,
       semCadastroSkuCount: semCadastroSkus.size,
       semCadastroQuantidade: Math.round(semCadastroQty * 100) / 100,
       semCadastroReceita: Math.round(semCadastroRs * 100) / 100,
       explicacaoDiferencaLista:
-        "A pivot soma entregas por mês (carteira_pv_entregas) e inclui SKUs sem cadastro na grade. " +
-        "A lista carteira_pedidos só contém linhas com produto cadastrado — a diferença de unidades/receita " +
-        "costuma ser SKUs ainda não aceitos em Produtos (badge «sem cadastro»).",
+        "A pivot soma entregas por mês (carteira_pv_entregas) e inclui SKUs sem cadastro. " +
+        "Receita «ERP» vem do ERP; «estimada» usa quantidade × preço resolvido (fallback). " +
+        "A lista carteira_pedidos só traz linhas com produto cadastrado.",
     },
     numPedidoNota:
       "Nº Pedido exibe só o código ERP (NumPedido); o sufixo /sequencia na lista antiga era a linha do item no pedido.",

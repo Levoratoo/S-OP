@@ -287,6 +287,9 @@ export type CarteiraAbertoRawLine = {
   mesEnt: number;
   quantidade: number;
   receitaBruta: number;
+  erpDescricao?: string | null;
+  erpMarca?: string | null;
+  erpTipo?: string | null;
 };
 
 export type CarteiraEntregaPersistRow = CarteiraAbertoRawLine;
@@ -375,7 +378,10 @@ WITH abertos AS (
     MONTH(DataEntrega) AS mesEnt,
     CAST(ISNULL(Qtde, 0) AS float) AS qtde,
     CAST(ISNULL(PrecoUnitario, 0) AS float) AS precoUnitario,
-    CAST(ISNULL(Qtde, 0) AS float) * CAST(ISNULL(PrecoUnitario, 0) AS float) AS receitaLinha
+    CAST(ISNULL(Qtde, 0) AS float) * CAST(ISNULL(PrecoUnitario, 0) AS float) AS receitaLinha,
+    LTRIM(RTRIM(CAST(ISNULL(Descricao, N'') AS nvarchar(300)))) AS erpDescricao,
+    LTRIM(RTRIM(CAST(ISNULL(usr_marca, N'') AS nvarchar(100)))) AS erpMarca,
+    LTRIM(RTRIM(CAST(ISNULL(usr_acabado, N'') AS nvarchar(50)))) AS erpTipo
   FROM ${source}
   WHERE StatusPedido = N'Liberado'
     AND UPPER(LTRIM(RTRIM(ISNULL(usr_acabado, N'')))) = N'PRG'
@@ -390,7 +396,10 @@ SELECT
   mesEnt,
   precoUnitario,
   SUM(qtde) AS quantidade,
-  SUM(receitaLinha) AS receitaBruta
+  SUM(receitaLinha) AS receitaBruta,
+  MAX(NULLIF(erpDescricao, N'')) AS erpDescricao,
+  MAX(NULLIF(erpMarca, N'')) AS erpMarca,
+  MAX(NULLIF(erpTipo, N'')) AS erpTipo
 FROM abertos
 WHERE codigo <> N'' AND sku <> N''
 GROUP BY codigo, sku, anoEnt, mesEnt, precoUnitario
@@ -420,6 +429,9 @@ export async function queryErpCarteiraPedidosAbertos(): Promise<{
     mesEnt: number;
     quantidade: number;
     receitaBruta: number;
+    erpDescricao?: string;
+    erpMarca?: string;
+    erpTipo?: string;
   }>;
 
   const entregas = raw.map(r => ({
@@ -430,6 +442,9 @@ export async function queryErpCarteiraPedidosAbertos(): Promise<{
     mesEnt: Number(r.mesEnt),
     quantidade: Number(r.quantidade) || 0,
     receitaBruta: Number(r.receitaBruta) || 0,
+    erpDescricao: r.erpDescricao ? String(r.erpDescricao).trim() : null,
+    erpMarca: r.erpMarca ? String(r.erpMarca).trim() : null,
+    erpTipo: r.erpTipo ? String(r.erpTipo).trim() : null,
   }));
 
   const rows = aggregateCarteiraPedidosPorPedidoSku(

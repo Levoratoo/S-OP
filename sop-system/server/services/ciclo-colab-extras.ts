@@ -50,8 +50,9 @@ import {
   type PrecoOrigemPv,
 } from "@shared/pv-preco-fallback";
 import { buildPvMtoPivotLinesFromEntregas, pvMtoHorizonMonthLabel } from "@shared/pv-mto-pivot";
-import { listCarteiraPvEntregas } from "./carteira-pv-entregas";
+import { buildCarteiraErpSkuMetaMap, listCarteiraPvEntregas } from "./carteira-pv-entregas";
 import { loadFaturamentoSkuMeta } from "./seed-from-faturamento";
+import { resolveSkuDisplayMeta } from "@shared/carteira-sku-display";
 
 const MES_KEYS = ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12"] as const;
 
@@ -158,6 +159,7 @@ export async function syncPvFromCarteira(cicloId: number) {
     .from(carteiraPedidos)
     .where(carteiraPvAbertoWhere());
   const entregasDb = await listCarteiraPvEntregas();
+  const erpSkuMeta = buildCarteiraErpSkuMetaMap(entregasDb);
   const fatLookup = await loadPrecoEGestorFaturamento();
   const carteiraPrecoPorSku = buildCarteiraPrecoPorSkuFromEntregas(
     entregasDb.map(e => ({
@@ -225,7 +227,9 @@ export async function syncPvFromCarteira(cicloId: number) {
       const skuKey = pivot.sku.trim().toUpperCase();
       const prod = byCode.get(skuKey);
       if (!prod) skusSemCadastro.add(pivot.sku);
-      const meta = !prod ? faturamentoMeta.get(skuKey) : undefined;
+      const fat = !prod ? faturamentoMeta.get(skuKey) : undefined;
+      const erp = erpSkuMeta.get(skuKey);
+      const display = resolveSkuDisplayMeta(prod, erp, fat ? { descricao: fat.descricao, marca: fat.marca, tipo: fat.tipoNegocio } : undefined);
       const precoRes = resolvePvPrecoUnitarioComOrigem({
         erpPreco: pivot.precoUnitario,
         receitaBruta: pivot.receitaTotal,
@@ -246,13 +250,16 @@ export async function syncPvFromCarteira(cicloId: number) {
       lines.push({
         pedidoCodigo: pivot.numPedido,
         sku: pivot.sku,
-        descricao: prod?.descricao || prod?.nome || meta?.descricao || null,
-        marca: prod?.marca ?? meta?.marca ?? null,
+        descricao: display.descricao,
+        marca: display.marca,
         linha: prod?.linha ?? null,
         tipoEstoque: prod?.tipoEstoque === "MTO" ? "MTO" : "MTS",
         precoUnitario: precoRes.preco,
         precoOrigem: precoRes.origem,
-        receitaBruta: pivot.receitaTotal,
+        receitaBruta:
+          precoRes.origem === "erp" || precoRes.origem === "receita_linha"
+            ? pivot.receitaTotal
+            : Math.round(pivot.quantidadeTotal * precoRes.preco * 100) / 100,
         quantidade: pivot.quantidadeTotal,
         familia: prod ? dimensionsByProductId.get(prod.id)?.familia ?? null : null,
         gestor: prod ? dimensionsByProductId.get(prod.id)?.gestor ?? null : null,
@@ -369,6 +376,7 @@ export async function getPvMtoPivotGrade(cicloId: number) {
   if (!ciclo) throw new Error("Ciclo não encontrado");
   const itens = await listCicloComercialItens(cicloId, "PV_MTO");
   const { byCode } = await loadProdutoMaps();
+  const erpSkuMeta = buildCarteiraErpSkuMetaMap(await listCarteiraPvEntregas());
 
   const horizonLabels = Array.from({ length: 12 }, (_, i) =>
     pvMtoHorizonMonthLabel(ciclo.anoInicio, ciclo.mesInicio, i)
@@ -384,11 +392,13 @@ export async function getPvMtoPivotGrade(cicloId: number) {
       const precoOrigem = precoOrigemRaw.startsWith("preco:")
         ? (precoOrigemRaw.slice(6) as PrecoOrigemPv)
         : null;
+      const erp = erpSkuMeta.get((item.sku || "").trim().toUpperCase());
+      const display = resolveSkuDisplayMeta(prod, erp, null);
       return {
-        marca: item.marca ?? null,
+        marca: item.marca ?? display.marca ?? null,
         codItem: item.sku,
-        descricao: item.descricao ?? prod?.descricao ?? prod?.nome ?? null,
-        tipo: prod?.tipoNegocio ?? null,
+        descricao: item.descricao ?? display.descricao ?? null,
+        tipo: display.tipo ?? prod?.tipoNegocio ?? null,
         precoUnitario: preco,
         precoOrigem,
         numPedido: String(item.crmCard || "").trim(),

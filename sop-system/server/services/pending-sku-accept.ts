@@ -7,6 +7,8 @@ import {
   type SkuSimilarityCandidate,
 } from "@shared/sku-descricao-similarity";
 import { invalidateDeParaCache } from "./de-para-map";
+import { invalidateDeParaEnrichedCache } from "./de-para-enriched";
+import { invalidatePendingSkusCache } from "./seed-from-faturamento";
 import { assertDeParaAcyclic, validateDeParaEdge, inheritProjetarFromAntigo } from "./de-para-validate";
 import {
   acceptPendingSkusFromFaturamentoBatch,
@@ -213,6 +215,8 @@ export async function acceptPendingSkusWithDePara(
       }
     });
     invalidateDeParaCache();
+    invalidateDeParaEnrichedCache();
+    invalidatePendingSkusCache();
     invalidateSkuSimilarityCandidateCache();
   }
 

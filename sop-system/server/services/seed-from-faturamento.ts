@@ -11,6 +11,7 @@ import type { InsertCliente, InsertProduto } from "../../drizzle/schema";
 import { isSkuAcabado } from "@shared/sku-acabado";
 import { invalidateDeParaCache } from "./de-para-map";
 import { normalizeTipoNegocioComercial } from "@shared/tipo-negocio";
+import { ensureFatSkuCatalog, invalidateFatSkuCatalogReady, listFatSkuCatalog } from "./fat-sku-catalog";
 
 export type SeedFromFaturamentoResult = {
   dryRun: boolean;
@@ -313,7 +314,7 @@ export type PendingSkuFromFaturamento = FatProdutoRow & { alreadyInDePara: boole
 export type PendingClienteFromFaturamento = FatClienteRow;
 
 let pendingSkusCache: { at: number; data: PendingSkuFromFaturamento[] } | null = null;
-const PENDING_SKUS_TTL_MS = 60_000;
+const PENDING_SKUS_TTL_MS = 120_000;
 
 export async function listPendingSkusFromFaturamento(options?: {
   forceRefresh?: boolean;
@@ -326,31 +327,13 @@ export async function listPendingSkusFromFaturamento(options?: {
   const conn = await getDb();
   if (!conn) return [];
 
-  const [fatResult, existingResult, deParaRows] = await Promise.all([
-    conn.execute(sql`
-      SELECT
-        TRIM(f.codMaterial) AS codMaterial,
-        MAX(f.descricaoItem) AS descricaoItem,
-        MAX(f.marca) AS marca,
-        MAX(f.linhaProduto) AS linhaProduto,
-        MAX(f.tipoNegocio) AS tipoNegocio,
-        MAX(f.tipoEstoque) AS tipoEstoque,
-        MAX(f.grupoProduto) AS grupoProduto
-      FROM faturamento f
-      WHERE f.codMaterial IS NOT NULL AND TRIM(f.codMaterial) <> ''
-        AND NOT EXISTS (
-          SELECT 1 FROM produtos p
-          WHERE UPPER(TRIM(p.codItem)) = UPPER(TRIM(f.codMaterial))
-             OR UPPER(TRIM(p.codigo)) = UPPER(TRIM(f.codMaterial))
-        )
-      GROUP BY TRIM(f.codMaterial)
-      ORDER BY TRIM(f.codMaterial)
-    `),
+  await ensureFatSkuCatalog();
+  const [catalog, existingResult, deParaRows] = await Promise.all([
+    listFatSkuCatalog(),
     conn.select({ codItem: produtos.codItem, codigo: produtos.codigo }).from(produtos),
     conn.select({ skuAntigo: deParaCodigos.skuAntigo, skuNovo: deParaCodigos.skuNovo }).from(deParaCodigos),
   ]);
 
-  const fatProdutos = ((fatResult[0] as unknown) as FatProdutoRow[]) ?? [];
   const existingCodes = new Set<string>();
   for (const p of existingResult) {
     if (p.codItem) existingCodes.add(p.codItem.trim().toUpperCase());
@@ -363,18 +346,28 @@ export async function listPendingSkusFromFaturamento(options?: {
       .filter(Boolean)
   );
 
-  const data = fatProdutos
+  const data: PendingSkuFromFaturamento[] = catalog
     .filter(r => {
       const cod = clean(r.codMaterial);
       return Boolean(cod && isSkuAcabado(cod) && !existingCodes.has(cod.toUpperCase()));
     })
     .map(r => ({
-      ...r,
+      codMaterial: r.codMaterial,
+      descricaoItem: r.descricaoItem,
+      marca: r.marca,
+      linhaProduto: r.linhaProduto,
+      tipoNegocio: r.tipoNegocio,
+      tipoEstoque: r.tipoEstoque,
+      grupoProduto: r.grupoProduto,
       alreadyInDePara: deParaCodes.has((clean(r.codMaterial) || "").toUpperCase()),
     }));
 
   pendingSkusCache = { at: now, data };
   return data;
+}
+
+export function invalidatePendingSkusCache() {
+  pendingSkusCache = null;
 }
 
 export async function loadFaturamentoSkuMeta(
@@ -390,13 +383,13 @@ export async function loadFaturamentoSkuMeta(
     const placeholders = sql.join(chunk.map(c => sql`${c}`), sql`, `);
     const result = await conn.execute(sql`
       SELECT
-        UPPER(TRIM(codMaterial)) AS cod,
+        codMaterial AS cod,
         MAX(descricaoItem) AS descricaoItem,
         MAX(marca) AS marca,
         MAX(tipoNegocio) AS tipoNegocio
       FROM faturamento
-      WHERE UPPER(TRIM(codMaterial)) IN (${placeholders})
-      GROUP BY UPPER(TRIM(codMaterial))
+      WHERE codMaterial IN (${placeholders})
+      GROUP BY codMaterial
     `);
     for (const row of (result[0] as unknown as Array<Record<string, unknown>>) ?? []) {
       const cod = String(row.cod ?? "").trim().toUpperCase();
@@ -555,6 +548,9 @@ export async function acceptPendingSkusFromFaturamentoBatch(
   if (criados > 0) {
     invalidateDeParaCache();
     pendingSkusCache = null;
+    invalidatePendingMarcasCache();
+    const { invalidateDeParaEnrichedCache } = await import("./de-para-enriched");
+    invalidateDeParaEnrichedCache();
     const { invalidateSkuSimilarityCandidateCache } = await import("./pending-sku-accept");
     invalidateSkuSimilarityCandidateCache();
   }
@@ -610,25 +606,34 @@ export async function acceptPendingClienteFromFaturamento(chave: string) {
 
 export type PendingMarcaFromFaturamento = { nome: string; notas: number; gestorSugerido?: string | null };
 
+let pendingMarcasCache: { at: number; data: PendingMarcaFromFaturamento[] } | null = null;
+const PENDING_MARCAS_TTL_MS = 120_000;
+
+export function invalidatePendingMarcasCache() {
+  pendingMarcasCache = null;
+}
+
 /** Marcas que aparecem no faturamento e ainda não estão no cadastro de Marcas. */
 export async function listPendingMarcasFromFaturamento(): Promise<PendingMarcaFromFaturamento[]> {
-  const conn = await db.getDb();
-  if (!conn) return [];
-  const result = await conn.execute(sql`
-    SELECT TRIM(f.marca) AS nome, COUNT(*) AS notas
-    FROM faturamento f
-    WHERE f.marca IS NOT NULL AND TRIM(f.marca) <> ''
-      AND NOT EXISTS (
-        SELECT 1 FROM marcas m
-        WHERE LOWER(TRIM(m.nome)) = LOWER(TRIM(f.marca))
-      )
-    GROUP BY TRIM(f.marca)
-    ORDER BY notas DESC
-  `);
-  const rows = (result[0] as unknown as PendingMarcaFromFaturamento[]) ?? [];
-  const pending = rows
-    .map(row => ({ nome: String(row.nome || "").trim(), notas: Number(row.notas) || 0 }))
-    .filter(row => row.nome.length > 0);
+  const now = Date.now();
+  if (pendingMarcasCache && now - pendingMarcasCache.at < PENDING_MARCAS_TTL_MS) {
+    return pendingMarcasCache.data;
+  }
+
+  await ensureFatSkuCatalog();
+  const [catalog, marcasCad] = await Promise.all([listFatSkuCatalog(), db.listMarcas()]);
+  const cadastradas = new Set(marcasCad.map(m => (m.nome || "").trim().toLowerCase()).filter(Boolean));
+
+  const acc = new Map<string, number>();
+  for (const row of catalog) {
+    const nome = (row.marca || "").trim();
+    if (!nome || cadastradas.has(nome.toLowerCase())) continue;
+    acc.set(nome, (acc.get(nome) ?? 0) + (row.notas || 0));
+  }
+
+  const pending = [...acc.entries()]
+    .map(([nome, notas]) => ({ nome, notas }))
+  .sort((a, b) => b.notas - a.notas);
 
   const { getGestorNomeFromImportMap } = await import("./gestor-marca-import-apply");
   const enriched: PendingMarcaFromFaturamento[] = [];
@@ -636,6 +641,7 @@ export async function listPendingMarcasFromFaturamento(): Promise<PendingMarcaFr
     const gestorSugerido = await getGestorNomeFromImportMap(row.nome);
     enriched.push({ ...row, gestorSugerido });
   }
+  pendingMarcasCache = { at: now, data: enriched };
   return enriched;
 }
 

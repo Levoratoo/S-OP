@@ -32,7 +32,10 @@ import {
 } from "./services/seed-from-faturamento";
 import { applyGestorMarcaImportMerge } from "./services/gestor-marca-import-apply";
 import { getCarteiraPvPivotGrade } from "./services/carteira-pv-pivot";
-import { listDeParaCodigosComDescricoes } from "./services/de-para-enriched";
+import {
+  invalidateDeParaEnrichedCache,
+  listDeParaCodigosComDescricoes,
+} from "./services/de-para-enriched";
 import {
   acceptPendingSkusWithDePara,
   suggestSkuReferencias,
@@ -1433,6 +1436,7 @@ export const appRouter = router({
       .mutation(async ({ input }) => {
         const result = await db.createDeParaCodigo(input);
         invalidateDeParaCache();
+        invalidateDeParaEnrichedCache();
         return result;
       }),
     update: protectedProcedure
@@ -1445,11 +1449,13 @@ export const appRouter = router({
         const { id, ...rest } = input;
         const result = await db.updateDeParaCodigo(id, rest);
         invalidateDeParaCache();
+        invalidateDeParaEnrichedCache();
         return result;
       }),
     delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ input }) => {
       const result = await db.deleteDeParaCodigo(input.id);
       invalidateDeParaCache();
+      invalidateDeParaEnrichedCache();
       return result;
     }),
     importBatch: protectedProcedure
@@ -1460,6 +1466,7 @@ export const appRouter = router({
       .mutation(async ({ input }) => {
         const result = await db.createDeParaCodigosBatch(input);
         invalidateDeParaCache();
+        invalidateDeParaEnrichedCache();
         return result;
       }),
     getCodigoAtual: protectedProcedure

@@ -6,6 +6,7 @@ import { exportToCsv } from "@/lib/exportCsv";
 import { Badge } from "@/components/ui/badge";
 import { Download, Info } from "lucide-react";
 import { precoOrigemPvLabel, type PrecoOrigemPv } from "@shared/pv-preco-fallback";
+import { roundPrecoPv4 } from "@shared/pv-preco-round";
 
 export type PvPivotRow = {
   marca: string | null;
@@ -40,7 +41,9 @@ function formatQty(value: number) {
 
 function formatPreco(value: number) {
   if (!value) return "—";
-  return value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  const n = roundPrecoPv4(value);
+  const decimals = n % 0.01 === 0 ? 2 : 4;
+  return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL", minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 
 function formatRs(value: number) {

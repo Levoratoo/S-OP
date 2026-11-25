@@ -97,11 +97,21 @@ export default function CarteiraPedidos() {
                   {listTotals.q.toLocaleString("pt-BR")} un · R${" "}
                   {listTotals.rs.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
                 </span>
+                <span className="block">
+                  Receita pivot: R$ ERP{" "}
+                  {(data.conferencia.receitaErpPivot ?? 0).toLocaleString("pt-BR", {
+                    minimumFractionDigits: 2,
+                  })}{" "}
+                  + estimada (fallback preço) R${" "}
+                  {(data.conferencia.receitaEstimadaPivot ?? 0).toLocaleString("pt-BR", {
+                    minimumFractionDigits: 2,
+                  })}
+                </span>
                 {data.conferencia.semCadastroSkuCount ? (
                   <span className="block">
-                    Diferença esperada: {data.conferencia.semCadastroSkuCount} SKU(s) sem cadastro na pivot (
+                    {data.conferencia.semCadastroSkuCount} SKU(s) sem cadastro na pivot (
                     {data.conferencia.semCadastroQuantidade.toLocaleString("pt-BR")} un · R${" "}
-                    {data.conferencia.semCadastroReceita.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}).
+                    {data.conferencia.semCadastroReceita.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}).{" "}
                     {data.conferencia.explicacaoDiferencaLista}
                   </span>
                 ) : null}
