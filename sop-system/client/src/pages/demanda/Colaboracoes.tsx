@@ -21,7 +21,8 @@ import { Loader2, Plus, RefreshCw, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { ColaboracaoArquivo } from "./ColaboracaoArquivo";
 import { ColaboracaoResumos } from "./ColaboracaoResumos";
-import { cicloHorizonCalendar, cicloHorizonIndexFromCalendar } from "@shared/ciclo-horizon";
+import { PvMtoPivotGrade } from "./PvMtoPivotGrade";
+import { cicloHorizonCalendar } from "@shared/ciclo-horizon";
 import { CrmExcelLayoutError, parseCrmExcel } from "./parse-crm-excel";
 
 type PlanoColab = "MTS" | "PV_MTO" | "CRM";
@@ -55,30 +56,6 @@ function formatNum(value: string | number | null | undefined) {
   const n = Number(value ?? 0);
   if (!Number.isFinite(n)) return "0";
   return n.toLocaleString("pt-BR", { maximumFractionDigits: 0 });
-}
-
-function competenciaNoHorizontoCiclo(
-  value: Date | string | null | undefined,
-  anoInicio: number,
-  mesInicio: number
-) {
-  if (!value) return false;
-  const d = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(d.getTime())) return false;
-  return (
-    cicloHorizonIndexFromCalendar(
-      anoInicio,
-      mesInicio,
-      d.getFullYear(),
-      d.getMonth() + 1
-    ) !== null
-  );
-}
-
-function formatDataBr(value: Date | string | null | undefined) {
-  if (!value) return "-";
-  const d = value instanceof Date ? value : new Date(value);
-  return Number.isNaN(d.getTime()) ? "-" : d.toLocaleDateString("pt-BR");
 }
 
 /** Mês corrente = mês do ciclo; previsão m1…m12 começa no mês seguinte. */
@@ -124,13 +101,6 @@ export default function Colaboracoes() {
     { enabled: Boolean(selectedCicloId) && abaGrade === "MTS" }
   );
 
-  const { data: carteiraPedidos, isLoading: loadingCarteira } = trpc.carteiraPedidos.list.useQuery(
-    { limit: 5000, apenasPvAberto: true },
-    { enabled: Boolean(selectedCicloId) && abaGrade === "PV_MTO" }
-  );
-  const { data: produtosCarteira } = trpc.produtos.list.useQuery(undefined, {
-    enabled: abaGrade === "PV_MTO",
-  });
   const { data: produtosCadastro } = trpc.produtos.list.useQuery();
   const descricaoPorSku = useMemo(() => {
     const map = new Map<string, string>();
@@ -147,10 +117,6 @@ export default function Colaboracoes() {
     if (fromItem) return fromItem;
     return descricaoPorSku.get((item.sku || "").trim().toUpperCase()) || "—";
   };
-  const { data: clientesCarteira } = trpc.clientes.list.useQuery(undefined, {
-    enabled: abaGrade === "PV_MTO",
-  });
-
   const { data: jobs } = trpc.previsaoPython.list.useQuery({ limit: 20 });
 
   const fecharCicloMutation = trpc.cicloComercial.fecharCiclo.useMutation({
@@ -186,6 +152,7 @@ export default function Colaboracoes() {
     onSuccess: result => {
       utils.cicloComercial.itens.invalidate();
       utils.cicloComercial.consolidado.invalidate();
+      utils.cicloComercial.pvMtoGrade.invalidate();
       if (manualPvSync.current) {
         manualPvSync.current = false;
         toast.success(
@@ -274,47 +241,6 @@ export default function Colaboracoes() {
         .some(v => String(v).toLowerCase().includes(term))
     );
   }, [itens, search, podeVerTodasMarcas, marcasPermitidasNomes]);
-
-  const carteiraNoCiclo = useMemo(() => {
-    if (!carteiraPedidos || !ciclo) return [];
-    const prodById = new Map((produtosCarteira ?? []).map(p => [p.id, p]));
-    let rows = carteiraPedidos.filter(p =>
-      competenciaNoHorizontoCiclo(p.competencia, ciclo.anoInicio, ciclo.mesInicio)
-    );
-    if (!podeVerTodasMarcas) {
-      rows = rows.filter(p => {
-        const prod = prodById.get(p.produtoId);
-        return marcasPermitidasNomes.includes(normalizeMarcaNome(prod?.marca));
-      });
-    }
-    const term = search.trim().toLowerCase();
-    if (!term) return rows;
-    return rows.filter(p => {
-      const prod = prodById.get(p.produtoId);
-      const sku = prod?.codItem || prod?.codigo || "";
-      return [p.codigo, sku, prod?.nome, prod?.marca, prod?.descricao]
-        .filter(Boolean)
-        .some(v => String(v).toLowerCase().includes(term));
-    });
-  }, [
-    carteiraPedidos,
-    ciclo,
-    produtosCarteira,
-    search,
-    podeVerTodasMarcas,
-    marcasPermitidasNomes,
-  ]);
-
-  const produtoLabel = (produtoId: number) => {
-    const p = produtosCarteira?.find(x => x.id === produtoId);
-    const desc = (p?.descricao || p?.nome || "").trim();
-    return desc || p?.codItem || p?.codigo || `Produto ${produtoId}`;
-  };
-
-  const clienteLabel = (clienteId: number | null) =>
-    clienteId
-      ? clientesCarteira?.find(c => c.id === clienteId)?.razaoSocial || "-"
-      : "-";
 
   const marcasConsolidado = useMemo(() => {
     const entries = Object.entries(consolidado?.byMarca ?? {});
@@ -585,7 +511,7 @@ export default function Colaboracoes() {
                       {abaGrade === "CONSOLIDADO"
                         ? "Arquivo consolidado do ciclo: uma linha por SKU e mês, no modelo padrão."
                         : abaGrade === "PV_MTO"
-                          ? "Mesma grade da Carteira / PV: uma linha por pedido × SKU (Liberado + PRG)"
+                          ? "Pivot PV MTO: uma linha por pedido × SKU × preço, com quantidades por mês de entrega (Liberado + PRG)"
                           : abaGrade === "CRM"
                             ? "Cards do comercial. Importe o Excel para preencher a grade deste ciclo."
                             : "MTS: total 12M do script redistribuído por fator % do SKU (badge “Fator %”); sem fator, sazonalidade histórica. Colab do vendedor sobrepõe a estatística (e*)."}
@@ -658,7 +584,7 @@ export default function Colaboracoes() {
                   {PLANOS.map(p => (
                     <TabsContent key={p} value={p} className="mt-4">
                       {(
-                        p === "PV_MTO" ? loadingCarteira : loadingItens
+                        p === "PV_MTO" ? false : loadingItens
                       ) ? (
                         <div className="flex justify-center py-8">
                           <Loader2 className="h-5 w-5 animate-spin" />
@@ -779,67 +705,15 @@ export default function Colaboracoes() {
                           </Table>
                         </div>
                       ) : p === "PV_MTO" ? (
-                        loadingCarteira ? (
-                          <div className="flex justify-center py-8">
-                            <Loader2 className="h-5 w-5 animate-spin" />
-                          </div>
-                        ) : (
-                          <div className="overflow-auto rounded-md border">
-                            <Table>
-                              <TableHeader>
-                                <TableRow>
-                                  <TableHead>Código</TableHead>
-                                  <TableHead>Competência</TableHead>
-                                  <TableHead className="min-w-[200px]">Descrição</TableHead>
-                                  <TableHead>Cliente</TableHead>
-                                  <TableHead className="text-right">Quantidade</TableHead>
-                                  <TableHead className="text-right">Receita</TableHead>
-                                  <TableHead className="text-center">Faturado</TableHead>
-                                </TableRow>
-                              </TableHeader>
-                              <TableBody>
-                                {carteiraNoCiclo.length === 0 ? (
-                                  <TableRow>
-                                    <TableCell
-                                      colSpan={7}
-                                      className="py-8 text-center text-muted-foreground"
-                                    >
-                                      Nenhum pedido Liberado+PRG no horizonte — atualize em Carteira / PV
-                                    </TableCell>
-                                  </TableRow>
-                                ) : (
-                                  carteiraNoCiclo.map(item => (
-                                    <TableRow key={item.id}>
-                                      <TableCell className="font-mono text-sm">
-                                        {item.codigo}/{item.sequencia}
-                                      </TableCell>
-                                      <TableCell>{formatDataBr(item.competencia)}</TableCell>
-                                      <TableCell
-                                        className="max-w-[240px] truncate"
-                                        title={produtoLabel(item.produtoId)}
-                                      >
-                                        {produtoLabel(item.produtoId)}
-                                      </TableCell>
-                                      <TableCell>{clienteLabel(item.clienteId)}</TableCell>
-                                      <TableCell className="text-right tabular-nums">
-                                        {Number(item.quantidade || 0).toLocaleString("pt-BR")}
-                                      </TableCell>
-                                      <TableCell className="text-right tabular-nums">
-                                        R${" "}
-                                        {Number(item.receitaBruta || 0).toLocaleString("pt-BR", {
-                                          minimumFractionDigits: 2,
-                                        })}
-                                      </TableCell>
-                                      <TableCell className="text-center">
-                                        {item.faturado ? "Sim" : "Não"}
-                                      </TableCell>
-                                    </TableRow>
-                                  ))
-                                )}
-                              </TableBody>
-                            </Table>
-                          </div>
-                        )
+                        selectedCicloId ? (
+                          <PvMtoPivotGrade
+                            cicloId={selectedCicloId}
+                            searchGlobal={search}
+                            marcasPermitidas={
+                              podeVerTodasMarcas ? null : marcasPermitidasNomes
+                            }
+                          />
+                        ) : null
                       ) : (
                         <div className="overflow-auto rounded-md border">
                           <Table>
