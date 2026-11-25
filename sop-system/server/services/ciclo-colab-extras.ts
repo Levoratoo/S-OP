@@ -43,6 +43,8 @@ import {
 import { resolveProdutoFamilia } from "@shared/produto-familia";
 import { resolveGestorPorMarca } from "@shared/gestor-marca-resolve";
 import { resolveValorVendaUnitario } from "@shared/preco-unitario";
+import { buildPvMtoPivotLinesFromEntregas, pvMtoHorizonMonthLabel } from "@shared/pv-mto-pivot";
+import { listCarteiraPvEntregas } from "./carteira-pv-entregas";
 
 const MES_KEYS = ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12"] as const;
 
@@ -143,11 +145,12 @@ export async function syncPvFromCarteira(cicloId: number) {
     throw new Error("Ciclo fechado não recebe atualização da carteira.");
   }
 
-  const { byId, dimensionsByProductId } = await loadProdutoMaps();
+  const { byId, byCode, dimensionsByProductId } = await loadProdutoMaps();
   const pedidos = await db
     .select()
     .from(carteiraPedidos)
     .where(carteiraPvAbertoWhere());
+  const entregasDb = await listCarteiraPvEntregas();
 
   // A aba PV MTO é a carteira de PV em aberto (pedidos Liberado + PRG), não a previsão estatística.
   await db
@@ -158,13 +161,12 @@ export async function syncPvFromCarteira(cicloId: number) {
 
   type PvLine = {
     pedidoCodigo: string;
-    sequencia: number;
     sku: string;
     descricao: string | null;
     marca: string | null;
     linha: string | null;
     tipoEstoque: "MTS" | "MTO";
-    valorVenda: string | null;
+    precoUnitario: number;
     receitaBruta: number;
     quantidade: number;
     familia: string | null;
@@ -175,37 +177,78 @@ export async function syncPvFromCarteira(cicloId: number) {
 
   let pedidosForaDoCiclo = 0;
   let pedidosNoCiclo = 0;
-  for (const ped of pedidos) {
-    const prod = byId.get(ped.produtoId);
-    if (!prod) continue;
-    const sku = (prod.codItem || prod.codigo || "").trim();
-    if (!sku) continue;
-    const ym = competenciaYearMonth(ped.competencia);
-    if (!ym) continue;
-    const idx = cicloHorizonIndexFromCalendar(ciclo.anoInicio, ciclo.mesInicio, ym.year, ym.month);
-    if (idx == null) {
-      pedidosForaDoCiclo += 1;
-      continue;
-    }
-    pedidosNoCiclo += 1;
 
-    const meses = Array(12).fill(0);
-    meses[idx] = toNum(ped.quantidade);
-    lines.push({
-      pedidoCodigo: String(ped.codigo || "").trim() || sku,
-      sequencia: Number(ped.sequencia) > 0 ? Number(ped.sequencia) : 1,
-      sku,
-      descricao: prod.descricao || prod.nome || null,
-      marca: prod.marca,
-      linha: prod.linha,
-      tipoEstoque: prod.tipoEstoque === "MTO" ? "MTO" : "MTS",
-      valorVenda: prod.valorVenda,
-      receitaBruta: toNum(ped.receitaBruta),
-      quantidade: toNum(ped.quantidade),
-      familia: dimensionsByProductId.get(prod.id)?.familia ?? null,
-      gestor: dimensionsByProductId.get(prod.id)?.gestor ?? null,
-      meses,
-    });
+  const pivotFromEntregas =
+    entregasDb.length > 0
+      ? buildPvMtoPivotLinesFromEntregas(
+          entregasDb.map(e => ({
+            codigo: e.codigo,
+            sku: e.sku,
+            precoUnitario: toNum(e.precoUnitario),
+            anoEnt: e.anoEnt,
+            mesEnt: e.mesEnt,
+            quantidade: toNum(e.quantidade),
+            receitaBruta: toNum(e.receitaBruta),
+          })),
+          ciclo.anoInicio,
+          ciclo.mesInicio
+        )
+      : [];
+
+  if (pivotFromEntregas.length > 0) {
+    for (const pivot of pivotFromEntregas) {
+      const prod =
+        byCode.get(pivot.sku.toUpperCase()) ?? byCode.get(pivot.sku.trim().toUpperCase());
+      if (!prod) continue;
+      pedidosNoCiclo += 1;
+      lines.push({
+        pedidoCodigo: pivot.numPedido,
+        sku: pivot.sku,
+        descricao: prod.descricao || prod.nome || null,
+        marca: prod.marca,
+        linha: prod.linha,
+        tipoEstoque: prod.tipoEstoque === "MTO" ? "MTO" : "MTS",
+        precoUnitario: pivot.precoUnitario,
+        receitaBruta: pivot.receitaTotal,
+        quantidade: pivot.quantidadeTotal,
+        familia: dimensionsByProductId.get(prod.id)?.familia ?? null,
+        gestor: dimensionsByProductId.get(prod.id)?.gestor ?? null,
+        meses: pivot.meses,
+      });
+    }
+  } else {
+    for (const ped of pedidos) {
+      const prod = byId.get(ped.produtoId);
+      if (!prod) continue;
+      const sku = (prod.codItem || prod.codigo || "").trim();
+      if (!sku) continue;
+      const ym = competenciaYearMonth(ped.competencia);
+      if (!ym) continue;
+      const idx = cicloHorizonIndexFromCalendar(ciclo.anoInicio, ciclo.mesInicio, ym.year, ym.month);
+      if (idx == null) {
+        pedidosForaDoCiclo += 1;
+        continue;
+      }
+      pedidosNoCiclo += 1;
+
+      const meses = Array(12).fill(0);
+      meses[idx] = toNum(ped.quantidade);
+      const qtd = toNum(ped.quantidade);
+      lines.push({
+        pedidoCodigo: String(ped.codigo || "").trim() || sku,
+        sku,
+        descricao: prod.descricao || prod.nome || null,
+        marca: prod.marca,
+        linha: prod.linha,
+        tipoEstoque: prod.tipoEstoque === "MTO" ? "MTO" : "MTS",
+        precoUnitario: resolveValorVendaUnitario(prod.valorVenda, toNum(ped.receitaBruta), qtd),
+        receitaBruta: toNum(ped.receitaBruta),
+        quantidade: qtd,
+        familia: dimensionsByProductId.get(prod.id)?.familia ?? null,
+        gestor: dimensionsByProductId.get(prod.id)?.gestor ?? null,
+        meses,
+      });
+    }
   }
 
   const itens: InsertCicloComercialItem[] = [];
@@ -230,7 +273,9 @@ export async function syncPvFromCarteira(cicloId: number) {
       projetar: false,
       qtdeTotalEstatistica: "0",
       valorVendaSnapshot: String(
-        resolveValorVendaUnitario(line.valorVenda, line.receitaBruta, line.quantidade)
+        line.precoUnitario > 0
+          ? line.precoUnitario
+          : resolveValorVendaUnitario(null, line.receitaBruta, line.quantidade)
       ),
       familiaSnapshot: line.familia,
       gestorSnapshot: line.gestor,
@@ -254,6 +299,74 @@ export async function syncPvFromCarteira(cicloId: number) {
 }
 
 /** Recarrega PV MTO em todo ciclo que ainda aceita edição. */
+export type PvMtoGradeRow = {
+  marca: string | null;
+  codItem: string;
+  descricao: string | null;
+  tipo: string | null;
+  precoUnitario: number;
+  numPedido: string;
+  meses: number[];
+  quantidadeTotal: number;
+  receitaTotal: number;
+};
+
+/** Grade pivot PV MTO (pedido × SKU × preço) a partir dos itens persistidos no ciclo. */
+export async function getPvMtoPivotGrade(cicloId: number) {
+  const ciclo = await getCicloComercial(cicloId);
+  if (!ciclo) throw new Error("Ciclo não encontrado");
+  const itens = await listCicloComercialItens(cicloId, "PV_MTO");
+  const { byCode } = await loadProdutoMaps();
+
+  const horizonLabels = Array.from({ length: 12 }, (_, i) =>
+    pvMtoHorizonMonthLabel(ciclo.anoInicio, ciclo.mesInicio, i)
+  );
+
+  const rows: PvMtoGradeRow[] = itens
+    .map(item => {
+      const meses = MES_KEYS.map(k => toNum(item[k]));
+      const preco = toNum(item.valorVendaSnapshot);
+      const qty = meses.reduce((s, v) => s + v, 0);
+      const prod = byCode.get((item.sku || "").trim().toUpperCase());
+      return {
+        marca: item.marca ?? null,
+        codItem: item.sku,
+        descricao: item.descricao ?? prod?.descricao ?? prod?.nome ?? null,
+        tipo: prod?.tipoNegocio ?? null,
+        precoUnitario: preco,
+        numPedido: String(item.crmCard || "").trim(),
+        meses,
+        quantidadeTotal: Math.round(qty * 100) / 100,
+        receitaTotal: Math.round(qty * preco * 100) / 100,
+      };
+    })
+    .filter(r => r.quantidadeTotal > 0)
+    .sort((a, b) => {
+      const ma = (a.marca || "").localeCompare(b.marca || "", "pt-BR");
+      if (ma) return ma;
+      const sk = a.codItem.localeCompare(b.codItem, "pt-BR");
+      if (sk) return sk;
+      return a.numPedido.localeCompare(b.numPedido, "pt-BR");
+    });
+
+  const monthTotals = Array(12).fill(0);
+  let grandQty = 0;
+  let grandRs = 0;
+  for (const row of rows) {
+    grandQty += row.quantidadeTotal;
+    grandRs += row.receitaTotal;
+    for (let i = 0; i < 12; i++) monthTotals[i] += row.meses[i];
+  }
+
+  return {
+    horizonLabels,
+    rows,
+    monthTotals: monthTotals.map(v => Math.round(v * 100) / 100),
+    grandQuantidade: Math.round(grandQty * 100) / 100,
+    grandReceita: Math.round(grandRs * 100) / 100,
+  };
+}
+
 export async function syncPvFromCarteiraEmCiclosAbertos() {
   const db = await getDb();
   if (!db) return [];

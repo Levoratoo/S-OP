@@ -52,6 +52,7 @@ import {
   getBaseCicloFull,
   getConsolidadoArquivo,
   getMtoVariacao,
+  getPvMtoPivotGrade,
   getPvVsCrmDetalhado,
   getRealizadoAnualPorSku,
   getRelatorioRfs,
@@ -979,6 +980,10 @@ export const appRouter = router({
     syncPvFromCarteira: protectedProcedure
       .input(z.object({ cicloId: z.number() }))
       .mutation(({ input }) => syncPvFromCarteira(input.cicloId)),
+
+    pvMtoGrade: protectedProcedure
+      .input(z.object({ cicloId: z.number() }))
+      .query(({ input }) => getPvMtoPivotGrade(input.cicloId)),
 
     importCrm: protectedProcedure
       .input(
