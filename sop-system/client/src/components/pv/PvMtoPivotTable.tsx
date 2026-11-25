@@ -6,7 +6,7 @@ import { exportToCsv } from "@/lib/exportCsv";
 import { Badge } from "@/components/ui/badge";
 import { Download, Info } from "lucide-react";
 import { precoOrigemPvLabel, type PrecoOrigemPv } from "@shared/pv-preco-fallback";
-import { roundPrecoPv4 } from "@shared/pv-preco-round";
+import { formatPreco4Moeda } from "@shared/pv-preco-round";
 
 export type PvPivotRow = {
   marca: string | null;
@@ -40,10 +40,7 @@ function formatQty(value: number) {
 }
 
 function formatPreco(value: number) {
-  if (!value) return "—";
-  const n = roundPrecoPv4(value);
-  const decimals = n % 0.01 === 0 ? 2 : 4;
-  return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL", minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+  return formatPreco4Moeda(value);
 }
 
 function formatRs(value: number) {
@@ -146,15 +143,15 @@ export function PvMtoPivotTable({
   };
 
   return (
-    <div className="space-y-2">
+    <div className="w-full min-w-0 max-w-full space-y-2">
       <div className="flex justify-end">
         <Button type="button" size="sm" variant="outline" onClick={exportExcel} disabled={!rows.length}>
           <Download className="mr-2 h-4 w-4" />
           Exportar
         </Button>
       </div>
-      <div className="overflow-auto rounded-md border max-h-[70vh]">
-        <Table className="min-w-[1200px] text-sm">
+      <div className="w-full min-w-0 max-w-full overflow-auto rounded-md border max-h-[70vh]">
+        <Table className="min-w-[1100px] text-sm">
           <TableHeader>
             <TableRow className="bg-sky-800 hover:bg-sky-800">
               <TableHead colSpan={fixedCols} className="sticky left-0 z-20 bg-sky-800 text-white font-semibold" />
@@ -167,8 +164,8 @@ export function PvMtoPivotTable({
               <TableHead colSpan={2} className="text-white font-semibold border-l border-sky-600" />
             </TableRow>
             <TableRow className="bg-sky-700 hover:bg-sky-700">
-              <TableHead className="sticky left-0 z-20 min-w-[120px] bg-sky-700 text-white">Marca</TableHead>
-              <TableHead className="sticky left-[120px] z-20 min-w-[110px] bg-sky-700 text-white">
+              <TableHead className="sticky left-0 z-30 min-w-[88px] max-w-[88px] bg-sky-700 text-white">Marca</TableHead>
+              <TableHead className="sticky left-[88px] z-30 min-w-[104px] bg-sky-700 text-white">
                 Cod Item
               </TableHead>
               <TableHead className="min-w-[200px] bg-sky-700 text-white">Descrição</TableHead>
@@ -192,10 +189,10 @@ export function PvMtoPivotTable({
               <TableHead className="text-white text-right">R$ Total</TableHead>
             </TableRow>
             <TableRow className="bg-sky-100/80 dark:bg-sky-950/40">
-              <TableHead className="sticky left-0 z-20 bg-inherit p-1">
+              <TableHead className="sticky left-0 z-30 bg-sky-100 p-1 dark:bg-sky-950">
                 <Input className="h-7 text-xs" placeholder="Filtrar" value={fMarca} onChange={e => setFMarca(e.target.value)} />
               </TableHead>
-              <TableHead className="sticky left-[120px] z-20 bg-inherit p-1">
+              <TableHead className="sticky left-[88px] z-30 bg-sky-100 p-1 dark:bg-sky-950">
                 <Input className="h-7 text-xs" placeholder="Filtrar" value={fCod} onChange={e => setFCod(e.target.value)} />
               </TableHead>
               <TableHead className="p-1">
@@ -234,7 +231,7 @@ export function PvMtoPivotTable({
               rows.map((row, idx) => (
                 <TableRow key={`${row.numPedido}-${row.codItem}-${row.precoUnitario}-${idx}`}>
                   <TableCell className="sticky left-0 z-10 bg-background font-medium">{row.marca || "—"}</TableCell>
-                  <TableCell className="sticky left-[120px] z-10 bg-background font-mono text-xs">
+                  <TableCell className="sticky left-[88px] z-10 bg-background font-mono text-xs">
                     <div className="flex flex-wrap items-center gap-1">
                       <span>{row.codItem}</span>
                       {row.semCadastro ? (
@@ -276,17 +273,17 @@ export function PvMtoPivotTable({
               ))
             )}
             {rows.length > 0 && (
-              <TableRow className="bg-muted/60 font-semibold">
-                <TableCell colSpan={fixedCols} className="sticky left-0 z-10 bg-muted/60 border-r">
+              <TableRow className="sticky bottom-0 z-20 bg-muted font-semibold shadow-[0_-1px_0_0_hsl(var(--border))]">
+                <TableCell colSpan={fixedCols} className="sticky bottom-0 left-0 z-30 border-r bg-muted">
                   Total geral
                 </TableCell>
                 {filteredTotals.monthTotals.map((v, i) => (
-                  <TableCell key={i} className="text-right tabular-nums">
+                  <TableCell key={i} className="sticky bottom-0 z-20 bg-muted text-right tabular-nums">
                     {formatQty(v)}
                   </TableCell>
                 ))}
-                <TableCell className="text-right tabular-nums">{formatQty(filteredTotals.grandQty)}</TableCell>
-                <TableCell className="text-right tabular-nums">{formatRs(filteredTotals.grandRs)}</TableCell>
+                <TableCell className="sticky bottom-0 z-20 bg-muted text-right tabular-nums">{formatQty(filteredTotals.grandQty)}</TableCell>
+                <TableCell className="sticky bottom-0 z-20 bg-muted text-right tabular-nums">{formatRs(filteredTotals.grandRs)}</TableCell>
               </TableRow>
             )}
           </TableBody>

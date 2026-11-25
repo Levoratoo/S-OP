@@ -14,6 +14,7 @@ import { textMatchesSearch } from "@shared/text-search";
 import { trpc } from "@/lib/trpc";
 import { Plus, Pencil, Trash2, Loader2, Download, Upload } from "lucide-react";
 import { toast } from "sonner";
+import { formatPreco4, rotuloOrigemPrecoCadastro } from "@shared/pv-preco-round";
 import { exportToCsv } from "@/lib/exportCsv";
 import { ProdutoFatoresSazonaisSection } from "@/components/ProdutoFatoresSazonaisSection";
 import { PendingSkuDeParaAcceptDialog } from "@/components/cadastros/PendingSkuDeParaAcceptDialog";
@@ -345,7 +346,9 @@ export default function Produtos() {
       marcaId: produto.marcaId?.toString() || "",
       grupo: produto.grupo || "",
       ramoAtuacao: produto.ramoAtuacao || "",
-      valorVenda: produto.valorVenda || "",
+      valorVenda: produto.precoUnitario
+        ? formatPreco4(Number(produto.precoUnitario)).replace(/\./g, "").replace(",", ".")
+        : produto.valorVenda || "",
       valorCusto: produto.valorCusto || "",
       qtdePallet: produto.qtdePallet?.toString() || "",
       loteEconomicoViavel: produto.loteEconomicoViavel?.toString() || "",
@@ -378,7 +381,7 @@ export default function Produtos() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 max-w-full space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Produtos</h1>
@@ -539,7 +542,7 @@ export default function Produtos() {
 
       <div className="space-y-4">
           {/* Barra de filtros */}
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center gap-3">
             <div className="flex-1">
               <Input
                 placeholder="Buscar por código, descrição ou marca..."
@@ -813,7 +816,7 @@ export default function Produtos() {
                       <Input
                         id="valorVenda"
                         type="number"
-                        step="0.01"
+                        step="0.0001"
                         value={formData.valorVenda}
                         onChange={(e) => setFormData({ ...formData, valorVenda: e.target.value })}
                       />
@@ -903,7 +906,8 @@ export default function Produtos() {
           </div>
 
           <Card>
-            <CardContent className="p-0">
+            <CardContent className="min-w-0 p-0">
+              <div className="w-full min-w-0 max-w-full overflow-x-auto">
               {isLoading ? (
                 <div className="flex items-center justify-center py-8">
                   <Loader2 className="h-6 w-6 animate-spin" />
@@ -914,6 +918,7 @@ export default function Produtos() {
                     <TableRow>
                       <TableHead>Código</TableHead>
                       <TableHead>Preço unitário</TableHead>
+                      <TableHead>Origem preço</TableHead>
                       <TableHead>Descrição</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Tipo Negócio</TableHead>
@@ -929,7 +934,7 @@ export default function Produtos() {
                   <TableBody>
                     {filteredProdutos?.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={11} className="text-center text-muted-foreground py-8">
+                        <TableCell colSpan={12} className="text-center text-muted-foreground py-8">
                           {searchTerm || filterFluxo !== "all" ? "Nenhum produto encontrado com os filtros aplicados" : "Nenhum produto cadastrado"}
                         </TableCell>
                       </TableRow>
@@ -937,13 +942,17 @@ export default function Produtos() {
                       filteredProdutos?.map((produto) => (
                         <TableRow key={produto.id}>
                           <TableCell className="font-mono">{produto.codItem || "-"}</TableCell>
-                          <TableCell title={produto.precoOrigem || ""}>
-                            {Number(produto.precoUnitario || 0) > 0
-                              ? Number(produto.precoUnitario).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 4 })
-                              : "—"}
-                            {produto.precoOrigem ? (
-                              <span className="ml-1 text-[10px] text-muted-foreground">{produto.precoOrigem}</span>
-                            ) : null}
+                          <TableCell className="tabular-nums">
+                            {Number(produto.precoUnitario || 0) > 0 ? formatPreco4(Number(produto.precoUnitario)) : "—"}
+                          </TableCell>
+                          <TableCell
+                            title={
+                              produto.precoAtualizadoEm
+                                ? `Atualizado em ${new Date(produto.precoAtualizadoEm).toLocaleString("pt-BR")}`
+                                : undefined
+                            }
+                          >
+                            {rotuloOrigemPrecoCadastro(produto.precoOrigem)}
                           </TableCell>
                           <TableCell>{produto.descricao || produto.nome || "-"}</TableCell>
                           <TableCell>
@@ -998,6 +1007,7 @@ export default function Produtos() {
                   </TableBody>
                 </Table>
               )}
+              </div>
             </CardContent>
           </Card>
       </div>

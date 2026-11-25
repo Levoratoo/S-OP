@@ -305,14 +305,14 @@ export default function Acuracidade() {
         </div>
       </div>
 
-      <div className="flex items-center gap-2 text-sm">
+      <div className="flex flex-wrap items-center gap-2 text-sm">
         {!useLegacy && analytics ? (
           <Badge>Fonte: job Python #{selectedJobId}</Badge>
         ) : (
           <Badge variant="secondary">Fonte: previsões CRUD / dashboard ({ano})</Badge>
         )}
         {selectedJob && (
-          <span className="text-muted-foreground">
+          <span className="min-w-0 max-w-full break-all text-muted-foreground" title={selectedJob.outputFileName || selectedJob.scriptVersion}>
             {selectedJob.scriptVersion}
             {selectedJob.outputFileName ? ` · ${selectedJob.outputFileName}` : ""}
           </span>

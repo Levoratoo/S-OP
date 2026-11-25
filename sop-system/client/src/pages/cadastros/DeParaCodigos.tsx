@@ -21,7 +21,7 @@ export default function DeParaCodigos() {
   const [activeTab, setActiveTab] = useState("lista");
   
   return (
-    <div className="p-6 space-y-6">
+    <div className="min-w-0 max-w-full space-y-6 p-4 sm:p-6">
       <div>
         <h1 className="text-3xl font-bold">De-Para de Códigos</h1>
         <p className="text-muted-foreground">
@@ -30,7 +30,7 @@ export default function DeParaCodigos() {
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList>
+        <TabsList className="flex h-auto flex-wrap">
           <TabsTrigger value="lista">Lista De-Para</TabsTrigger>
           <TabsTrigger value="novos">Skus Novos</TabsTrigger>
         </TabsList>
@@ -189,7 +189,7 @@ function ListaTab() {
 
   return (
     <Card>
-      <CardHeader className="flex flex-row items-center justify-between">
+      <CardHeader className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
         <div>
           <CardTitle>Mapeamento De-Para</CardTitle>
           <CardDescription>
@@ -203,7 +203,7 @@ function ListaTab() {
             ) : null}
           </CardDescription>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={handleExport}>
             <Download className="h-4 w-4 mr-2" /> Exportar CSV
           </Button>
@@ -273,7 +273,35 @@ function ListaTab() {
         ) : isLoading ? (
           <div className="flex justify-center py-8"><Loader2 className="h-8 w-8 animate-spin" /></div>
         ) : (
-          <div className="overflow-x-auto rounded-md border">
+          <>
+          <div className="space-y-3 md:hidden">
+            {gruposDePara.length === 0 ? (
+              <p className="py-6 text-center text-sm text-muted-foreground">
+                {searchTerm ? "Nenhum resultado encontrado" : "Nenhum mapeamento cadastrado"}
+              </p>
+            ) : null}
+            {gruposDePara.map(([skuNovo, antigos]) => (
+              <article key={skuNovo} className="rounded-md border p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-mono text-sm">{skuNovo}</span>
+                  <Badge variant="outline">{antigos.length > 1 ? "N:1" : "1:1"}</Badge>
+                </div>
+                <p className="mt-1 text-sm text-muted-foreground">{antigos[0]?.descricaoNovo || "—"}</p>
+                <ul className="mt-2 space-y-1">
+                  {antigos.map(a => (
+                    <li key={a.id} className="text-xs">
+                      <span className="font-mono">{a.skuAntigo}</span>
+                      <span className="ml-1 text-muted-foreground">{a.descricaoAntigo || "—"}</span>
+                    </li>
+                  ))}
+                </ul>
+                <Button className="mt-2" size="sm" variant="outline" onClick={() => handleEdit(antigos[0]!)}>
+                  Editar
+                </Button>
+              </article>
+            ))}
+          </div>
+          <div className="hidden w-full min-w-0 max-w-full overflow-x-auto rounded-md border md:block">
           <Table>
             <TableHeader>
               <TableRow>
@@ -332,6 +360,7 @@ function ListaTab() {
             </TableBody>
           </Table>
           </div>
+          </>
         )}
       </CardContent>
     </Card>
