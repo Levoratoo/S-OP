@@ -1,5 +1,55 @@
+import { precoUnitario4 } from "@shared/preco-unitario";
+
 /** Código acabado no layout SNOP (80.xx.xxxxxx). */
 export const CRM_SKU_PATTERN = /^\d{2}\.\d{2}\.\d{6}$/;
+
+/** Preço de 4 casas usado para não misturar deals do mesmo SKU. */
+export function precoChaveCrm(valorVenda: number): string {
+  const n = Number(valorVenda);
+  return precoUnitario4(Number.isFinite(n) && n > 0 ? n : 0);
+}
+
+/** Agrupa a carga por SKU + tipo + preço. Preços diferentes não compartilham valorVendaSnapshot. */
+export function chaveAgregacaoCrm(sku: string, crmTipo: string, valorVenda: number): string {
+  return `${sku.trim().toUpperCase()}||${crmTipo}||${precoChaveCrm(valorVenda)}`;
+}
+
+export type ParcelaValorCrm = {
+  sku: string;
+  tipo: string;
+  preco: number;
+  mes: number;
+  qtd: number;
+};
+
+/**
+ * Valor que o resumo do ciclo grava: cada grupo (SKU + tipo + preço) contribui
+ * quantidade do mês × preço. É o mesmo número da prévia do Pipedrive.
+ */
+export function valorGravadoCrm(parcelas: ParcelaValorCrm[]): {
+  total: number;
+  porMes: number[];
+  grupos: number;
+} {
+  const grupos = new Map<string, { preco: number; meses: number[] }>();
+  for (const parcela of parcelas) {
+    const preco = Number(precoChaveCrm(parcela.preco));
+    const key = chaveAgregacaoCrm(parcela.sku, parcela.tipo, preco);
+    const grupo = grupos.get(key) ?? { preco, meses: Array(12).fill(0) };
+    if (parcela.mes >= 0 && parcela.mes < 12) grupo.meses[parcela.mes] += parcela.qtd;
+    grupos.set(key, grupo);
+  }
+  const porMes = Array(12).fill(0);
+  let total = 0;
+  for (const grupo of grupos.values()) {
+    for (let i = 0; i < 12; i++) {
+      const valor = grupo.meses[i] * grupo.preco;
+      porMes[i] += valor;
+      total += valor;
+    }
+  }
+  return { total, porMes, grupos: grupos.size };
+}
 
 export function isCrmSkuCodigoValido(sku: string | null | undefined): boolean {
   return CRM_SKU_PATTERN.test(String(sku ?? "").trim());

@@ -1064,7 +1064,8 @@ export function montarPreviaCrm(input: {
     );
     if (indice == null) continue;
     const marca = linha.marca.trim() || "Sem marca";
-    const linhaCents = unidadesPreco4(linha.valorTotalMes);
+    const preco = Number(precoUnitario4(linha.valorVenda > 0 ? linha.valorVenda : 0));
+    const linhaCents = unidadesPreco4(linha.qtdMes * preco);
     meses[indice]!.linhas += 1;
     meses[indice]!.depoisQtd += linha.qtdMes;
     meses[indice]!.depoisValor += linhaCents;

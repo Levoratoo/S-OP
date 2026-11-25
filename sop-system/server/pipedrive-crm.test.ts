@@ -315,7 +315,11 @@ describe("pacote fictício da API v2", () => {
     });
     expect(previa.totais.parcelas).toBe(tratamento.linhas.length);
     expect(previa.totais.quantidade).toBe(soma(tratamento.linhas, "qtdMes"));
-    expect(previa.totais.valor).toBe(soma(tratamento.linhas, "valorTotalMes"));
+    const valorPorPreco = tratamento.linhas.reduce(
+      (total, linha) => total + linha.qtdMes * Number(precoUnitario4(linha.valorVenda)),
+      0
+    );
+    expect(previa.totais.valor).toBeCloseTo(valorPorPreco, 4);
     expect(previa.meses[0]?.rotulo).toBe("dez/2026");
     expect(previa.meses[0]?.antesQtd).toBe(10);
     expect(previa.meses[0]?.antesValor).toBe(20);

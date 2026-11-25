@@ -127,24 +127,27 @@ export function PendingSkuDeParaAcceptDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] w-[95vw] max-w-6xl overflow-y-auto sm:max-w-6xl">
-        <DialogHeader className="pr-8">
-          <DialogTitle>Substituição De-Para (SKU antigo → novo)</DialogTitle>
-          <DialogDescription>
+      <DialogContent className="flex max-h-[90vh] w-[95vw] max-w-6xl flex-col gap-0 overflow-hidden p-0 sm:max-w-6xl">
+        <DialogHeader className="shrink-0 px-4 pr-10 pt-4 text-left sm:px-6 sm:pt-6">
+          <DialogTitle className="text-left leading-snug break-words">
+            Substituição De-Para (SKU antigo → novo)
+          </DialogTitle>
+          <DialogDescription className="text-left break-words">
             Escolha o SKU de referência para cada código novo ou marque &quot;Sem referência&quot; para cadastrar
             sem De-Para.
           </DialogDescription>
         </DialogHeader>
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3 sm:px-6">
         <div className="space-y-3 md:hidden">
           {rows.map(row => {
             const score = scoreFor(row);
             const warn = score != null && score < SKU_SIMILARITY_REVIEW_WARN;
             const busca = manualBusca[row.codMaterial] ?? "";
             return (
-              <article key={row.codMaterial} className="space-y-2 rounded-md border p-3">
-                <p className="font-mono text-xs">{row.codMaterial}</p>
-                <p className="text-sm">{row.descricao}</p>
-                <p className="text-xs text-muted-foreground">{row.marca || "—"}</p>
+              <article key={row.codMaterial} className="flex min-w-0 flex-col gap-2 rounded-md border p-3">
+                <p className="break-all font-mono text-xs">{row.codMaterial}</p>
+                <p className="break-words text-sm leading-snug">{row.descricao}</p>
+                <p className="break-words text-xs text-muted-foreground">{row.marca || "—"}</p>
                 {row.loading ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
@@ -163,7 +166,7 @@ export function PendingSkuDeParaAcceptDialog({
                             : "Sem referência"
                         }
                         className={cn(
-                          "h-auto min-h-9 w-full whitespace-normal py-1.5 [&_[data-slot=select-value]]:line-clamp-2 [&_[data-slot=select-value]]:whitespace-normal",
+                          "h-auto min-h-9 w-full max-w-full overflow-hidden whitespace-normal py-1.5 data-[size=default]:h-auto [&_[data-slot=select-value]]:block [&_[data-slot=select-value]]:line-clamp-2 [&_[data-slot=select-value]]:whitespace-normal [&_[data-slot=select-value]]:break-words",
                           warn && row.skuAntigo ? "border-amber-400 bg-amber-50/80" : undefined
                         )}
                       >
@@ -174,7 +177,7 @@ export function PendingSkuDeParaAcceptDialog({
                         {row.sugestoes.map(s => {
                           const label = `${s.codigo} — ${s.descricao} (${Math.round(s.score * 100)}%)`;
                           return (
-                            <SelectItem key={s.codigo} value={s.codigo} title={label} className="whitespace-normal">
+                            <SelectItem key={s.codigo} value={s.codigo} title={label} className="h-auto whitespace-normal break-words [&>span]:block [&>span]:whitespace-normal [&>span]:break-words">
                               {label}
                             </SelectItem>
                           );
@@ -259,7 +262,7 @@ export function PendingSkuDeParaAcceptDialog({
                               {row.sugestoes.map(s => {
                                 const label = `${s.codigo} — ${s.descricao} (${Math.round(s.score * 100)}%)`;
                                 return (
-                                  <SelectItem key={s.codigo} value={s.codigo} title={label} className="whitespace-normal">
+                                  <SelectItem key={s.codigo} value={s.codigo} title={label} className="h-auto whitespace-normal break-words [&>span]:block [&>span]:whitespace-normal [&>span]:break-words">
                                     {label}
                                   </SelectItem>
                                 );
@@ -308,7 +311,8 @@ export function PendingSkuDeParaAcceptDialog({
             </TableBody>
           </Table>
         </div>
-        <DialogFooter className="flex flex-wrap gap-2">
+        </div>
+        <DialogFooter className="shrink-0 flex-wrap gap-2 border-t bg-background px-4 py-3 sm:px-6">
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             Cancelar
           </Button>

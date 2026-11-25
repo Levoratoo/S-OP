@@ -230,17 +230,18 @@ export function PipedriveCrmSync({
       ) : null}
 
       <Dialog open={aberto} onOpenChange={setAberto}>
-        <DialogContent className="max-h-[90vh] w-[95vw] max-w-6xl overflow-y-auto sm:max-w-6xl">
-          <DialogHeader>
-            <DialogTitle>Prévia do Pipedrive</DialogTitle>
-            <DialogDescription>
+        <DialogContent className="flex max-h-[90vh] w-[95vw] max-w-6xl flex-col gap-0 overflow-hidden p-0 sm:max-w-6xl">
+          <DialogHeader className="shrink-0 px-4 pr-10 pt-4 text-left sm:px-6 sm:pt-6">
+            <DialogTitle className="text-left leading-snug break-words">Prévia do Pipedrive</DialogTitle>
+            <DialogDescription className="text-left break-words">
               Confirmar apaga toda a carga CRM deste ciclo (origem CRM) e grava de novo a partir do
               Pipedrive. MTS, JITO e PV MTO não são alterados. Linhas sem código e parcelas fora do
-              horizonte não entram.
+              horizonte não entram. Preços diferentes do mesmo SKU ficam em linhas separadas, para o
+              R$ do ciclo bater com esta prévia.
             </DialogDescription>
           </DialogHeader>
           {previa ? (
-            <div className="space-y-4">
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4 sm:px-6">
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                 <CardResumo titulo="Negócios" valor={formatQtd(previa.totais.negocios)} />
                 <CardResumo titulo="Linhas de produto" valor={formatQtd(previa.totais.linhasProduto)} />
@@ -265,7 +266,7 @@ export function PipedriveCrmSync({
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Mês</TableHead>
+                      <TableHead className="sticky left-0 z-20 bg-background">Mês</TableHead>
                       <TableHead className="text-right">Antes qtd</TableHead>
                       <TableHead className="text-right">Depois qtd</TableHead>
                       <TableHead className="text-right">Antes R$</TableHead>
@@ -275,7 +276,7 @@ export function PipedriveCrmSync({
                   <TableBody>
                     {previa.meses.map(mes => (
                       <TableRow key={mes.indice}>
-                        <TableCell className="whitespace-nowrap">{mes.rotulo}</TableCell>
+                        <TableCell className="sticky left-0 z-10 whitespace-nowrap bg-background">{mes.rotulo}</TableCell>
                         <TableCell className="text-right tabular-nums">{formatQtd(mes.antesQtd)}</TableCell>
                         <TableCell className="text-right tabular-nums">{formatQtd(mes.depoisQtd)}</TableCell>
                         <TableCell className="text-right tabular-nums">{formatRs(mes.antesValor)}</TableCell>
@@ -286,15 +287,15 @@ export function PipedriveCrmSync({
                 </Table>
               </div>
               <p className="text-xs text-muted-foreground">
-                Antes: quantidade e valor (qtd × preço) já gravados na carga CRM. Depois: parcelas do
-                Pipedrive que entram no horizonte, somadas por mês e, abaixo, por marca.
+                Antes e depois usam quantidade × preço de cada linha. No celular, role a tabela para ver
+                as colunas Depois; a primeira coluna permanece fixa.
               </p>
               {previa.marcas.length ? (
                 <div className="max-h-48 max-w-full overflow-auto rounded-md border">
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Marca</TableHead>
+                        <TableHead className="sticky left-0 z-20 bg-background">Marca</TableHead>
                         <TableHead className="text-right">Antes qtd</TableHead>
                         <TableHead className="text-right">Depois qtd</TableHead>
                         <TableHead className="text-right">Antes R$</TableHead>
@@ -304,7 +305,7 @@ export function PipedriveCrmSync({
                     <TableBody>
                       {previa.marcas.map(marca => (
                         <TableRow key={marca.marca}>
-                          <TableCell>{marca.marca}</TableCell>
+                          <TableCell className="sticky left-0 z-10 max-w-[8rem] truncate bg-background">{marca.marca}</TableCell>
                           <TableCell className="text-right tabular-nums">{formatQtd(marca.antesQtd)}</TableCell>
                           <TableCell className="text-right tabular-nums">{formatQtd(marca.depoisQtd)}</TableCell>
                           <TableCell className="text-right tabular-nums">{formatRs(marca.antesValor)}</TableCell>
@@ -370,8 +371,10 @@ export function PipedriveCrmSync({
                 })}
               </Tabs>
             </div>
-          ) : null}
-          <DialogFooter className="flex-col-reverse gap-2 sm:flex-row">
+          ) : (
+            <div className="min-h-0 flex-1" />
+          )}
+          <DialogFooter className="shrink-0 border-t bg-background px-4 py-3 sm:flex-row sm:px-6">
             <Button type="button" variant="outline" className="w-full sm:w-auto" onClick={() => setAberto(false)}>
               Cancelar
             </Button>

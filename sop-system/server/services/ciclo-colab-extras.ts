@@ -26,7 +26,9 @@ import {
 import { loadDeParaMap, resolveCodigoAtual } from "./de-para-map";
 import {
   apostaGenericaSemOrcamentoDeveBloquear,
+  chaveAgregacaoCrm,
   isCrmSkuCodigoValido,
+  precoChaveCrm,
   textoPareceSkuGenerico,
 } from "@shared/crm-import-helpers";
 import { ensureProdutoFromCrmImport } from "./crm-produto-auto";
@@ -627,7 +629,8 @@ export async function importCrmParaCiclo(
       continue;
     }
 
-    const key = `${sku.toUpperCase()}||${crmTipo}`;
+    const precoInformado = toNum(row.valorVenda);
+    const key = chaveAgregacaoCrm(sku, crmTipo, precoInformado);
     if (!byKey.has(key)) {
       byKey.set(key, {
         sku,
@@ -642,13 +645,12 @@ export async function importCrmParaCiclo(
         crmModalidade: (row.modalidade || "").trim(),
         crmTipoNegocio: (row.tipoNegocio || "").trim(),
         orcamento: 0,
-        valorVenda: 0,
+        valorVenda: Number(precoChaveCrm(precoInformado)),
         meses: Array(12).fill(0),
       });
     }
     const agg = byKey.get(key)!;
     agg.orcamento += toNum(row.orcamento);
-    if (toNum(row.valorVenda) > 0) agg.valorVenda = toNum(row.valorVenda);
     if (row.marca) agg.marca = row.marca;
     if (row.gestor) agg.gestor = row.gestor;
     if (row.descricao) agg.descricao = row.descricao;
