@@ -282,11 +282,14 @@ export type ErpCarteiraAbertoRow = {
 export type CarteiraAbertoRawLine = {
   codigo: string;
   sku: string;
+  precoUnitario: number;
   anoEnt: number;
   mesEnt: number;
   quantidade: number;
   receitaBruta: number;
 };
+
+export type CarteiraEntregaPersistRow = CarteiraAbertoRawLine;
 
 /** Uma linha por pedido × SKU (soma entregas de todos os meses). */
 export function aggregateCarteiraPedidosPorPedidoSku(
@@ -371,6 +374,7 @@ WITH abertos AS (
     YEAR(DataEntrega) AS anoEnt,
     MONTH(DataEntrega) AS mesEnt,
     CAST(ISNULL(Qtde, 0) AS float) AS qtde,
+    CAST(ISNULL(PrecoUnitario, 0) AS float) AS precoUnitario,
     CAST(ISNULL(Qtde, 0) AS float) * CAST(ISNULL(PrecoUnitario, 0) AS float) AS receitaLinha
   FROM ${source}
   WHERE StatusPedido = N'Liberado'
@@ -382,8 +386,9 @@ WITH abertos AS (
 SELECT
   codigo,
   sku,
-  YEAR(DataEntrega) AS anoEnt,
-  MONTH(DataEntrega) AS mesEnt,
+  anoEnt,
+  mesEnt,
+  precoUnitario,
   qtde AS quantidade,
   receitaLinha AS receitaBruta
 FROM abertos
@@ -398,6 +403,7 @@ ORDER BY codigo, sku, anoEnt, mesEnt
  */
 export async function queryErpCarteiraPedidosAbertos(): Promise<{
   rows: ErpCarteiraAbertoRow[];
+  entregas: CarteiraEntregaPersistRow[];
   source: string;
   fetched: number;
 }> {
@@ -408,25 +414,38 @@ export async function queryErpCarteiraPedidosAbertos(): Promise<{
   const raw = (result.recordset || []) as Array<{
     codigo: string;
     sku: string;
+    precoUnitario: number;
     anoEnt: number;
     mesEnt: number;
     quantidade: number;
     receitaBruta: number;
   }>;
 
+  const entregas = raw.map(r => ({
+    codigo: String(r.codigo || "").trim(),
+    sku: String(r.sku || "").trim(),
+    precoUnitario: Number(r.precoUnitario) || 0,
+    anoEnt: Number(r.anoEnt),
+    mesEnt: Number(r.mesEnt),
+    quantidade: Number(r.quantidade) || 0,
+    receitaBruta: Number(r.receitaBruta) || 0,
+  }));
+
   const rows = aggregateCarteiraPedidosPorPedidoSku(
-    raw.map(r => ({
-      codigo: String(r.codigo || "").trim(),
-      sku: String(r.sku || "").trim(),
-      anoEnt: Number(r.anoEnt),
-      mesEnt: Number(r.mesEnt),
-      quantidade: Number(r.quantidade) || 0,
-      receitaBruta: Number(r.receitaBruta) || 0,
+    entregas.map(r => ({
+      codigo: r.codigo,
+      sku: r.sku,
+      precoUnitario: r.precoUnitario,
+      anoEnt: r.anoEnt,
+      mesEnt: r.mesEnt,
+      quantidade: r.quantidade,
+      receitaBruta: r.receitaBruta,
     }))
   );
 
   return {
     rows,
+    entregas,
     source: CARTEIRA_ERP_SOURCE,
     fetched: rows.length,
   };

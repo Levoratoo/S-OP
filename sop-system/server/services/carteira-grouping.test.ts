@@ -7,6 +7,7 @@ describe("aggregateCarteiraPedidosPorPedidoSku", () => {
       {
         codigo: "PV-100",
         sku: "80.01.000001",
+        precoUnitario: 10,
         anoEnt: 2026,
         mesEnt: 3,
         quantidade: 100,
@@ -15,6 +16,7 @@ describe("aggregateCarteiraPedidosPorPedidoSku", () => {
       {
         codigo: "PV-100",
         sku: "80.01.000001",
+        precoUnitario: 10,
         anoEnt: 2026,
         mesEnt: 4,
         quantidade: 50,
@@ -23,6 +25,7 @@ describe("aggregateCarteiraPedidosPorPedidoSku", () => {
       {
         codigo: "PV-100",
         sku: "80.01.000002",
+        precoUnitario: 10,
         anoEnt: 2026,
         mesEnt: 3,
         quantidade: 10,

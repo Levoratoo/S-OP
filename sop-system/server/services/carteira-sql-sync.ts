@@ -7,6 +7,7 @@ import { carteiraPedidos } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { queryErpCarteiraPedidosAbertos } from "./erp-mssql";
 import { importCarteiraBySku, syncPvFromCarteiraEmCiclosAbertos } from "./ciclo-colab-extras";
+import { replaceCarteiraPvEntregas } from "./carteira-pv-entregas";
 
 export type CarteiraSqlSyncResult = {
   fetched: number;
@@ -23,7 +24,7 @@ export async function syncCarteiraFromErp(): Promise<CarteiraSqlSyncResult> {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
 
-  const { rows, source, fetched } = await queryErpCarteiraPedidosAbertos();
+  const { rows, entregas, source, fetched } = await queryErpCarteiraPedidosAbertos();
 
   // Substitui apenas pedidos em aberto (não faturados) — fonte da verdade = ERP.
   const abertosAntes = await db
@@ -36,6 +37,7 @@ export async function syncCarteiraFromErp(): Promise<CarteiraSqlSyncResult> {
   }
 
   if (!rows.length) {
+    await replaceCarteiraPvEntregas([]);
     const pvCiclos = await syncPvFromCarteiraEmCiclosAbertos();
     return {
       fetched: 0,
@@ -48,6 +50,8 @@ export async function syncCarteiraFromErp(): Promise<CarteiraSqlSyncResult> {
       pvItens: pvCiclos.reduce((sum, item) => sum + item.itensCriados, 0),
     };
   }
+
+  await replaceCarteiraPvEntregas(entregas);
 
   const importResult = await importCarteiraBySku(
     rows.map(r => ({

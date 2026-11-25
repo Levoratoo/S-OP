@@ -465,6 +465,22 @@ export const carteiraPedidos = mysqlTable("carteira_pedidos", {
 export type CarteiraPedido = typeof carteiraPedidos.$inferSelect;
 export type InsertCarteiraPedido = typeof carteiraPedidos.$inferInsert;
 
+/** Entregas mensais do PV aberto (ERP), por pedido × SKU × preço. */
+export const carteiraPvEntregas = mysqlTable("carteira_pv_entregas", {
+  id: int("id").autoincrement().primaryKey(),
+  codigo: varchar("codigo", { length: 50 }).notNull(),
+  sku: varchar("sku", { length: 50 }).notNull(),
+  precoUnitario: decimal("precoUnitario", { precision: 15, scale: 4 }).notNull(),
+  anoEnt: int("anoEnt").notNull(),
+  mesEnt: int("mesEnt").notNull(),
+  quantidade: decimal("quantidade", { precision: 15, scale: 4 }).notNull(),
+  receitaBruta: decimal("receitaBruta", { precision: 15, scale: 2 }).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type CarteiraPvEntrega = typeof carteiraPvEntregas.$inferSelect;
+export type InsertCarteiraPvEntrega = typeof carteiraPvEntregas.$inferInsert;
+
 // ==================== FORECAST ====================
 export const forecasts = mysqlTable("forecasts", {
   id: int("id").autoincrement().primaryKey(),
