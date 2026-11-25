@@ -2,7 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import { getDb } from "../db";
 import { cicloStatusHistorico, ciclosComerciais } from "../../drizzle/schema";
-import { assertCicloStatusTransition } from "./ciclo-status-flow";
+import { assertCicloStatusTransition, passosFecharCiclo } from "./ciclo-status-flow";
 import { captureCicloSnapshot } from "./ciclo-snapshot";
 import type { CicloStatus } from "@shared/ciclo-status";
 import { isCicloStatus } from "@shared/ciclo-status";
@@ -46,4 +46,35 @@ export async function transicionarCiclo(input: {
   });
   await db.update(ciclosComerciais).set({ status: input.next }).where(eq(ciclosComerciais.id, input.cicloId));
   return { status: input.next };
+}
+
+/** Fechar: se ainda está em colaboração, grava CONSENSO e em seguida APROVADO. */
+export async function fecharCicloComHistorico(input: {
+  cicloId: number;
+  usuario?: string | null;
+  isAdmin: boolean;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const [ciclo] = await db.select().from(ciclosComerciais).where(eq(ciclosComerciais.id, input.cicloId)).limit(1);
+  if (!ciclo) throw new TRPCError({ code: "NOT_FOUND", message: "Ciclo não encontrado." });
+  if (!isCicloStatus(ciclo.status)) {
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Status atual inválido: ${ciclo.status}` });
+  }
+  const passos = passosFecharCiclo(ciclo.status);
+  let last: CicloStatus = ciclo.status;
+  for (const next of passos) {
+    const result = await transicionarCiclo({
+      cicloId: input.cicloId,
+      next,
+      usuario: input.usuario,
+      comentario:
+        next === "CONSENSO"
+          ? "Fechar ciclo: passagem automática por CONSENSO"
+          : "Fechar ciclo → aprovado (foto imutável)",
+      isAdmin: input.isAdmin,
+    });
+    last = result.status;
+  }
+  return { status: last };
 }

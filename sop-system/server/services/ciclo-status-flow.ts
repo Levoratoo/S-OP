@@ -26,10 +26,6 @@ export function assertCicloStatusTransition(
 
   if (next === forward) return;
 
-  if (opts.viaFechar && next === "APROVADO" && (current === "EM_COLABORACAO" || current === "CONSENSO")) {
-    return;
-  }
-
   if (next === back) {
     if (!opts.isAdmin) {
       throw new TRPCError({
@@ -49,6 +45,15 @@ export function assertCicloStatusTransition(
   throw new TRPCError({
     code: "PRECONDITION_FAILED",
     message: `Transição ${current} → ${next} não é permitida. Avance um passo ou reabra um passo (admin).`,
+  });
+}
+
+export function passosFecharCiclo(status: CicloStatus): CicloStatus[] {
+  if (status === "EM_COLABORACAO") return ["CONSENSO", "APROVADO"];
+  if (status === "CONSENSO") return ["APROVADO"];
+  throw new TRPCError({
+    code: "PRECONDITION_FAILED",
+    message: "Fechar ciclo exige CONSENSO (ou EM_COLABORACAO, que passa por CONSENSO e fica no histórico).",
   });
 }
 

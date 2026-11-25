@@ -36,6 +36,15 @@ function formatPercentLegacy(value: number | null | undefined) {
 }
 
 export default function Acuracidade() {
+  const [fonte, setFonte] = useState<"snapshot" | "legado">("snapshot");
+  const [cicloId, setCicloId] = useState<number | null>(null);
+  const { data: ciclos } = trpc.cicloComercial.list.useQuery();
+  const cicloEscolhido = cicloId ?? ciclos?.[0]?.id ?? 0;
+  const { data: acurSnap, isLoading: loadingSnap } = trpc.cicloComercial.acuracidadeSnapshot.useQuery(
+    { cicloId: cicloEscolhido },
+    { enabled: fonte === "snapshot" && cicloEscolhido > 0, retry: false }
+  );
+
   const [anoInput, setAnoInput] = useState(String(new Date().getFullYear()));
   const [jobIdOverride, setJobIdOverride] = useState<number | null>(null);
   const ano = useMemo(() => Number(anoInput) || new Date().getFullYear(), [anoInput]);
@@ -166,14 +175,78 @@ export default function Acuracidade() {
 
   const cards = !useLegacy && analytics ? pythonCards : legacyCards;
 
+  if (fonte === "snapshot") {
+    return (
+      <div className="space-y-4">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight">Acuracidade da Demanda</h1>
+            <p className="text-muted-foreground">Previsão do snapshot aprovado contra o faturamento real (WMAPE e bias).</p>
+          </div>
+          <Button variant="outline" onClick={() => setFonte("legado")}>Aba legado</Button>
+        </div>
+        <div className="max-w-sm">
+          <Label>Ciclo</Label>
+          <Select value={cicloEscolhido ? String(cicloEscolhido) : undefined} onValueChange={v => setCicloId(Number(v))}>
+            <SelectTrigger><SelectValue placeholder="Ciclo" /></SelectTrigger>
+            <SelectContent>
+              {(ciclos ?? []).map(c => (
+                <SelectItem key={c.id} value={String(c.id)}>{c.nome} · {c.status}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        {loadingSnap ? <Loader2 className="h-5 w-5 animate-spin" /> : null}
+        {acurSnap?.aviso ? <p className="text-sm text-amber-700">{acurSnap.aviso}</p> : null}
+        {acurSnap ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>WMAPE {acurSnap.wmape == null ? "—" : `${(acurSnap.wmape * 100).toFixed(1)}%`}</CardTitle>
+              <CardDescription>
+                Bias {acurSnap.bias == null ? "—" : `${(acurSnap.bias * 100).toFixed(1)}%`}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>SKU</TableHead>
+                    <TableHead>Marca</TableHead>
+                    <TableHead>Mês</TableHead>
+                    <TableHead>Previsto</TableHead>
+                    <TableHead>Real</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {acurSnap.linhas.slice(0, 40).map(row => (
+                    <TableRow key={`${row.sku}-${row.ano}-${row.mes}`}>
+                      <TableCell className="font-mono text-xs">{row.sku}</TableCell>
+                      <TableCell>{row.marca || "—"}</TableCell>
+                      <TableCell>{row.mes}/{row.ano}</TableCell>
+                      <TableCell>{row.previsto}</TableCell>
+                      <TableCell>{row.real}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        ) : !loadingSnap ? (
+          <p className="text-sm text-muted-foreground">Sem snapshot aprovado para este ciclo.</p>
+        ) : null}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Acuracidade da Demanda</h1>
-          <p className="text-muted-foreground">
+            <p className="text-muted-foreground">
             Preferência: analytics do job Python SUCCESS · fallback: previsões CRUD do ano
           </p>
+          <Button variant="outline" size="sm" onClick={() => setFonte("snapshot")}>Aba ciclo aprovado</Button>
         </div>
         <div className="flex flex-wrap items-end gap-2">
           <div className="space-y-1">

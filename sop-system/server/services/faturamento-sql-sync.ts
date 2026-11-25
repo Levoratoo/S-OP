@@ -396,6 +396,58 @@ const FORCE_REUSE_MS = 20_000;
 let recentSyncInflight: Promise<FaturamentoRecentSyncResult> | null = null;
 let lastRecentSync: { at: number; result: FaturamentoRecentSyncResult } | null = null;
 
+export type RefreshRecentJob = {
+  status: "idle" | "running" | "done" | "error";
+  startedAt: string | null;
+  finishedAt: string | null;
+  error: string | null;
+  result: FaturamentoRecentSyncResult | null;
+};
+
+let refreshRecentJob: RefreshRecentJob = {
+  status: "idle",
+  startedAt: null,
+  finishedAt: null,
+  error: null,
+  result: null,
+};
+
+export function getRefreshRecentStatus(): RefreshRecentJob {
+  return refreshRecentJob;
+}
+
+/** Responde na hora. A carga segue em background. */
+export function startRefreshRecentBackground(options?: { force?: boolean }): RefreshRecentJob {
+  if (refreshRecentJob.status === "running") return refreshRecentJob;
+  refreshRecentJob = {
+    status: "running",
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    error: null,
+    result: null,
+  };
+  syncFaturamentoRecent(options)
+    .then(result => {
+      refreshRecentJob = {
+        status: "done",
+        startedAt: refreshRecentJob.startedAt,
+        finishedAt: new Date().toISOString(),
+        error: null,
+        result,
+      };
+    })
+    .catch(err => {
+      refreshRecentJob = {
+        status: "error",
+        startedAt: refreshRecentJob.startedAt,
+        finishedAt: new Date().toISOString(),
+        error: err instanceof Error ? err.message : String(err),
+        result: null,
+      };
+    });
+  return refreshRecentJob;
+}
+
 /**
  * Tira da base o CFOP fora da lista e puxa do ERP o que ainda não está gravado,
  * inclusive as notas de ontem e de hoje.
@@ -474,7 +526,7 @@ async function runSyncFaturamentoRecent(): Promise<FaturamentoRecentSyncResult> 
   await db.rebuildFaturamentoResumo();
   let postSync: FaturamentoPostSyncResult | undefined;
   try {
-    postSync = await runAfterFaturamentoSync();
+    postSync = await runAfterFaturamentoSync({ desde: inicio, ate: fim });
   } catch (err) {
     console.warn("[faturamento] pós-sync recent:", err);
     postSync = { clientesError: err instanceof Error ? err.message : String(err) };

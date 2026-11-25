@@ -2613,7 +2613,8 @@ export async function listCicloComercialItens(
 
 export async function updateCicloComercialItem(
   id: number,
-  data: Partial<InsertCicloComercialItem>
+  data: Partial<InsertCicloComercialItem>,
+  actor?: { isAdmin?: boolean; usuario?: string | null }
 ) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
@@ -2630,6 +2631,27 @@ export async function updateCicloComercialItem(
     .limit(1);
   if (isCicloSomenteLeitura(ciclo?.status || "")) {
     throw new Error("Ciclo aprovado ou congelado não pode ser alterado.");
+  }
+  if (ciclo?.status === "CONSENSO") {
+    const plano = (data.planoColab ?? current.planoColab) as string;
+    const bloqueado = plano === "MTS" || plano === "JITO" || plano === "CRM" || plano === "PV_MTO";
+    if (bloqueado && !actor?.isAdmin) {
+      throw new Error(
+        "Em CONSENSO a edição de MTS, CRM e PV fica só com admin (com auditoria). Vendedor pode voltar para EM_COLABORACAO com motivo."
+      );
+    }
+    if (actor?.isAdmin) {
+      await db.execute(sql`
+        INSERT INTO ciclo_status_historico (cicloId, statusDe, statusPara, usuario, comentario)
+        VALUES (
+          ${current.cicloId},
+          'CONSENSO',
+          'CONSENSO',
+          ${actor.usuario ?? "admin"},
+          ${`ajuste admin item ${id}`}
+        )
+      `);
+    }
   }
   const merged = { ...current, ...data };
   await db

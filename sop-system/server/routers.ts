@@ -1,9 +1,9 @@
 import { COOKIE_NAME } from "@shared/const";
 import { isCicloSomenteLeitura, isCicloStatus, type CicloStatus } from "@shared/ciclo-status";
-import { transicionarCiclo } from "./services/ciclo-transicao";
-import { compararCiclos, getLatestSnapshot, materializarSnapshotsRetroativos } from "./services/ciclo-snapshot";
+import { fecharCicloComHistorico, transicionarCiclo } from "./services/ciclo-transicao";
+import { compararCiclos, getLatestSnapshot } from "./services/ciclo-snapshot";
 import { diagnosticarDePara } from "./services/de-para-aggregate";
-import { refreshPrecosProdutosAutomatico } from "./services/produto-preco-backfill";
+import { precoManualSincronizado, refreshPrecosProdutosAutomatico, sincronizarPrecoInput } from "./services/produto-preco-backfill";
 import { cicloStatusHistorico } from "../drizzle/schema";
 import { eq } from "drizzle-orm";
 import { getSessionCookieOptions } from "./_core/cookies";
@@ -19,6 +19,8 @@ import {
   startFaturamentoYearsSync,
   syncFaturamentoFromSql,
   syncFaturamentoRecent,
+  startRefreshRecentBackground,
+  getRefreshRecentStatus,
   testErpConnection,
 } from "./services/faturamento-sql-sync";
 import * as sharepoint from "./sharepoint";
@@ -204,12 +206,7 @@ export const appRouter = router({
         const { eq: eqOp } = await import("drizzle-orm");
         await database
           .update(produtos)
-          .set({
-            precoUnitario: String(input.precoUnitario),
-            valorVenda: String(Math.round(input.precoUnitario * 100) / 100),
-            precoOrigem: "manual",
-            precoAtualizadoEm: new Date(),
-          })
+          .set(precoManualSincronizado(input.precoUnitario))
           .where(eqOp(produtos.id, input.id));
         return { ok: true, usuario: ctx.user?.email ?? ctx.user?.name ?? "usuario" };
       }),
@@ -249,7 +246,7 @@ export const appRouter = router({
         pista: z.number().optional(),
         projetarEstatistica: z.boolean().default(true),
       }))
-      .mutation(({ input }) => db.createProduto(input)),
+      .mutation(({ input }) => db.createProduto(sincronizarPrecoInput(input, "manual"))),
     
     update: protectedProcedure
       .input(z.object({
@@ -285,7 +282,7 @@ export const appRouter = router({
       }))
       .mutation(({ input }) => {
         const { id, ...data } = input;
-        return db.updateProduto(id, data);
+        return db.updateProduto(id, sincronizarPrecoInput(data, "manual"));
       }),
     
     delete: protectedProcedure
@@ -997,9 +994,12 @@ export const appRouter = router({
           planoColab: z.enum(["MTS", "JITO", "PV_MTO", "CRM"]).optional(),
         })
       )
-      .mutation(({ input }) => {
+      .mutation(async ({ input, ctx }) => {
         const { id, ...rest } = input;
-        return db.updateCicloComercialItem(id, rest);
+        return db.updateCicloComercialItem(id, rest, {
+          isAdmin: ctx.user?.role === "admin",
+          usuario: ctx.user?.email || ctx.user?.name || null,
+        });
       }),
 
     updateStatus: protectedProcedure
@@ -1036,14 +1036,18 @@ export const appRouter = router({
 
     snapshot: protectedProcedure
       .input(z.object({ cicloId: z.number() }))
-      .query(async ({ input }) => {
-        await materializarSnapshotsRetroativos();
-        return getLatestSnapshot(input.cicloId);
-      }),
+      .query(({ input }) => getLatestSnapshot(input.cicloId)),
 
     compararCiclos: protectedProcedure
       .input(z.object({ cicloA: z.number(), cicloB: z.number() }))
       .query(({ input }) => compararCiclos(input.cicloA, input.cicloB)),
+
+    acuracidadeSnapshot: protectedProcedure
+      .input(z.object({ cicloId: z.number() }))
+      .query(async ({ input }) => {
+        const { acuracidadeSnapshot } = await import("./services/ciclo-acuracidade");
+        return acuracidadeSnapshot(input.cicloId);
+      }),
 
     delete: protectedProcedure
       .input(z.object({ id: z.number() }))
@@ -1079,7 +1083,9 @@ export const appRouter = router({
 
     syncPvFromCarteira: protectedProcedure
       .input(z.object({ cicloId: z.number() }))
-      .mutation(({ input }) => syncPvFromCarteira(input.cicloId)),
+      .mutation(({ input, ctx }) =>
+        syncPvFromCarteira(input.cicloId, { ajusteAdmin: ctx.user?.role === "admin" })
+      ),
 
     pvMtoGrade: protectedProcedure
       .input(z.object({ cicloId: z.number() }))
@@ -1124,12 +1130,18 @@ export const appRouter = router({
           ),
         })
       )
-      .mutation(async ({ input }) => {
+      .mutation(async ({ input, ctx }) => {
         assertCrmExcelHeaders(input.headers);
         assertCrmImportRows(input.rows);
         const ciclo = await db.getCicloComercial(input.cicloId);
         if (ciclo && isCicloSomenteLeitura(ciclo.status)) {
           throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Ciclo aprovado ou congelado não aceita importação CRM." });
+        }
+        if (ciclo?.status === "CONSENSO" && ctx.user?.role !== "admin") {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Em CONSENSO o CRM só pode ser ajustado por admin.",
+          });
         }
         return importCrmParaCiclo(input.cicloId, input.rows);
       }),
@@ -1224,13 +1236,10 @@ export const appRouter = router({
             message: `Reimporte ${crmSemTipo.length} itens CRM sem classificação (Colaboração/Aposta).`,
           });
         }
-        return transicionarCiclo({
+        return fecharCicloComHistorico({
           cicloId: input.id,
-          next: "APROVADO",
           usuario: ctx.user?.email || ctx.user?.name || null,
-          comentario: "Fechar ciclo → aprovado (foto imutável)",
           isAdmin: ctx.user?.role === "admin",
-          viaFechar: true,
         });
       }),
 
@@ -1424,7 +1433,9 @@ export const appRouter = router({
      */
     refreshRecent: protectedProcedure
       .input(z.object({ force: z.boolean().optional() }).optional())
-      .mutation(({ input }) => syncFaturamentoRecent({ force: input?.force === true })),
+      .mutation(({ input }) => startRefreshRecentBackground({ force: input?.force === true })),
+
+    refreshRecentStatus: protectedProcedure.query(() => getRefreshRecentStatus()),
     
     delete: protectedProcedure
       .input(z.object({ id: z.number() }))

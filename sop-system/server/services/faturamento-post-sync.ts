@@ -34,7 +34,7 @@ export function formatFaturamentoPostSyncAlerts(post: FaturamentoPostSyncResult 
 }
 
 /** Rotinas após qualquer sync de faturamento (clientes, marcas×gestor). */
-export async function runAfterFaturamentoSync(): Promise<FaturamentoPostSyncResult> {
+export async function runAfterFaturamentoSync(range?: { desde?: string; ate?: string }): Promise<FaturamentoPostSyncResult> {
   const results: FaturamentoPostSyncResult = {};
   try {
     results.clientes = await seedProdutosClientesFromFaturamento({ dryRun: false, clientesOnly: true });
@@ -62,7 +62,7 @@ export async function runAfterFaturamentoSync(): Promise<FaturamentoPostSyncResu
   }
   try {
     invalidateFatSkuCatalogReady();
-    await refreshFatSkuCatalog();
+    await refreshFatSkuCatalog(range?.desde && range?.ate ? { desde: range.desde, ate: range.ate } : undefined);
     invalidatePendingSkusCache();
     invalidatePendingMarcasCache();
     await refreshPrecosProdutosAutomatico();

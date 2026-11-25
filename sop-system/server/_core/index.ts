@@ -7,6 +7,7 @@ import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
 import { appRouter } from "../routers";
 import { syncFaturamentoYears } from "../services/faturamento-sql-sync";
+import { aplicarMigracaoCicloNoBoot } from "../services/ciclo-snapshot";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { sdk } from "./sdk";
@@ -99,6 +100,7 @@ async function startServer() {
 
   server.listen(port, host, () => {
     console.log(`Server running on http://localhost:${port}/`);
+    aplicarMigracaoCicloNoBoot().catch(err => console.warn("[ciclo] migração retroativa:", err));
     if (host === "0.0.0.0") {
       console.log(`LAN access enabled on port ${port} (HOST=0.0.0.0).`);
     } else {

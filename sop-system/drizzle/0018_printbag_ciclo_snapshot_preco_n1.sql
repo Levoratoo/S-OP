@@ -89,9 +89,10 @@ ALTER TABLE `produtos`
   ADD COLUMN `precoOrigem` varchar(40) NULL,
   ADD COLUMN `precoAtualizadoEm` timestamp NULL;
 --> statement-breakpoint
+-- valorVenda > 0 vira precoUnitario com origem legado_cadastro (não manual).
 UPDATE `produtos`
 SET `precoUnitario` = `valorVenda`,
-    `precoOrigem` = 'manual',
+    `precoOrigem` = 'legado_cadastro',
     `precoAtualizadoEm` = CURRENT_TIMESTAMP
 WHERE `valorVenda` IS NOT NULL AND `valorVenda` > 0 AND `precoUnitario` IS NULL;
 --> statement-breakpoint

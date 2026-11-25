@@ -176,7 +176,7 @@ export const produtos = mysqlTable("produtos", {
   marcaId: int("marcaId"), // Referência para tabela marcas
   grupo: varchar("grupo", { length: 100 }),
   ramoAtuacao: varchar("ramoAtuacao", { length: 100 }),
-  valorVenda: decimal("valorVenda", { precision: 15, scale: 2 }),
+  valorVenda: decimal("valorVenda", { precision: 15, scale: 4 }),
   /** Preço unitário canônico (4 casas) usado em dashboard, PV e snapshot. */
   precoUnitario: decimal("precoUnitario", { precision: 15, scale: 4 }),
   precoOrigem: varchar("precoOrigem", { length: 40 }),
@@ -866,7 +866,7 @@ export const cicloComercialItens = mysqlTable("ciclo_comercial_itens", {
   m11: decimal("m11", { precision: 15, scale: 2 }),
   m12: decimal("m12", { precision: 15, scale: 2 }),
   qtdeColaborada: decimal("qtdeColaborada", { precision: 15, scale: 2 }),
-  valorVendaSnapshot: decimal("valorVendaSnapshot", { precision: 15, scale: 2 }),
+  valorVendaSnapshot: decimal("valorVendaSnapshot", { precision: 15, scale: 4 }),
   familiaSnapshot: varchar("familiaSnapshot", { length: 120 }),
   gestorSnapshot: varchar("gestorSnapshot", { length: 160 }),
   crmCard: varchar("crmCard", { length: 120 }),

@@ -46,7 +46,7 @@ import {
 } from "@shared/consolidado-arquivo";
 import { resolveProdutoFamilia } from "@shared/produto-familia";
 import { resolveGestorPorMarca } from "@shared/gestor-marca-resolve";
-import { resolveValorVendaUnitario } from "@shared/preco-unitario";
+import { precoCadastroProduto, precoUnitario4, resolveValorVendaUnitario } from "@shared/preco-unitario";
 import { isCicloSomenteLeitura } from "@shared/ciclo-status";
 import {
   buildCarteiraPrecoPorSkuFromEntregas,
@@ -148,12 +148,17 @@ export async function loadProdutoMaps() {
   return { byId, byCode, dimensionsByProductId };
 }
 
-export async function syncPvFromCarteira(cicloId: number) {
+export async function syncPvFromCarteira(cicloId: number, opts?: { ajusteAdmin?: boolean }) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const ciclo = await getCicloComercial(cicloId);
   if (!ciclo) throw new Error("Ciclo não encontrado");
 
+  if (ciclo.status === "CONSENSO" && !opts?.ajusteAdmin) {
+    throw new Error(
+      "Ciclo em CONSENSO não recebe sync automático de PV. Ajuste só com admin."
+    );
+  }
   if (isCicloSomenteLeitura(ciclo.status)) {
     throw new Error("Ciclo aprovado ou congelado não recebe atualização da carteira.");
   }
@@ -240,7 +245,7 @@ export async function syncPvFromCarteira(cicloId: number) {
         receitaBruta: pivot.receitaTotal,
         quantidade: pivot.quantidadeTotal,
         sku: pivot.sku,
-        cadastroPreco: prod ? toNum(prod.valorVenda) : undefined,
+        cadastroPreco: prod ? precoCadastroProduto(prod) : undefined,
         carteiraPrecoPorSku,
         faturamento12mPorSku: fatLookup.precoBySku,
       });
@@ -290,11 +295,11 @@ export async function syncPvFromCarteira(cicloId: number) {
       meses[idx] = toNum(ped.quantidade);
       const qtd = toNum(ped.quantidade);
       const precoRes = resolvePvPrecoUnitarioComOrigem({
-        erpPreco: resolveValorVendaUnitario(prod.valorVenda, toNum(ped.receitaBruta), qtd),
+        erpPreco: resolveValorVendaUnitario(precoCadastroProduto(prod), toNum(ped.receitaBruta), qtd),
         receitaBruta: toNum(ped.receitaBruta),
         quantidade: qtd,
         sku,
-        cadastroPreco: toNum(prod.valorVenda),
+        cadastroPreco: precoCadastroProduto(prod),
         carteiraPrecoPorSku,
         faturamento12mPorSku: fatLookup.precoBySku,
       });
@@ -337,7 +342,7 @@ export async function syncPvFromCarteira(cicloId: number) {
       tipoMarcaLinha: `${line.tipoEstoque}-${line.marca || "SEM-MARCA"}-${line.linha || "SEM-LINHA"}`,
       projetar: false,
       qtdeTotalEstatistica: "0",
-      valorVendaSnapshot: String(line.precoUnitario > 0 ? line.precoUnitario : 0),
+      valorVendaSnapshot: precoUnitario4(line.precoUnitario > 0 ? line.precoUnitario : 0),
       familiaSnapshot: line.familia,
       gestorSnapshot: line.gestor,
       crmCard: line.pedidoCodigo,
@@ -447,7 +452,7 @@ export async function syncPvFromCarteiraEmCiclosAbertos() {
     .from(ciclosComerciais);
   const resultados: Array<{ cicloId: number; itensCriados: number; pedidosLidos: number }> = [];
   for (const ciclo of ciclos) {
-    if (isCicloSomenteLeitura(ciclo.status)) continue;
+    if (isCicloSomenteLeitura(ciclo.status) || ciclo.status === "CONSENSO") continue;
     const synced = await syncPvFromCarteira(ciclo.id);
     resultados.push({
       cicloId: ciclo.id,
@@ -743,7 +748,7 @@ export async function importCrmParaCiclo(
       qtdeTotalEstatistica: "0",
       ...meses,
       qtdeColaborada: String(Math.round(total * 100) / 100),
-      valorVendaSnapshot: String(agg.valorVenda || toNum(prod.valorVenda)),
+      valorVendaSnapshot: precoUnitario4(agg.valorVenda || precoCadastroProduto(prod)),
       familiaSnapshot: dimensionsByProductId.get(prod.id)?.familia ?? null,
       gestorSnapshot:
         agg.gestor?.trim() ||
@@ -830,7 +835,7 @@ export async function getResumoRs(cicloId: number) {
 
   for (const item of itens) {
     const prod = byCode.get(item.sku.toUpperCase());
-    const valorUnit = toNum(item.valorVendaSnapshot ?? prod?.valorVenda);
+    const valorUnit = toNum(item.valorVendaSnapshot ?? precoCadastroProduto(prod));
     if (valorUnit <= 0) skusSemPreco.add(item.sku);
     const qtde = sumItemMonths(item as Record<string, unknown>);
     const valorTotal = qtde * valorUnit;
@@ -1141,7 +1146,7 @@ export async function getConsolidadoArquivo(cicloId: number) {
       resolveGestorPorMarca(marca, fatLookup.gestorByMarca) ||
       "";
     const gestor = gestorFonte ? properName(gestorFonte) : "";
-    const vendaCadastro = toNum(prod?.valorVenda);
+    const vendaCadastro = precoCadastroProduto(prod);
     const vendaInformada = toNum(item.valorVendaSnapshot);
     const venda =
       vendaCadastro > 0

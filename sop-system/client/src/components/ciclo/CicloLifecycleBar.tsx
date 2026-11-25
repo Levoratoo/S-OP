@@ -19,6 +19,7 @@ type Props = { cicloId: number; status: string };
 export function CicloLifecycleBar({ cicloId, status }: Props) {
   const utils = trpc.useUtils();
   const { data: historico } = trpc.cicloComercial.historicoStatus.useQuery({ cicloId });
+  const { data: snap } = trpc.cicloComercial.snapshot.useQuery({ cicloId });
   const [comentario, setComentario] = useState("");
   const [open, setOpen] = useState<"avancar" | "voltar" | null>(null);
   const atual = (CICLO_STATUS_ORDER as readonly string[]).includes(status) ? (status as CicloStatus) : "ABERTO";
@@ -93,6 +94,12 @@ export function CicloLifecycleBar({ cicloId, status }: Props) {
             </Button>
           </div>
         </div>
+      ) : null}
+      {snap?.retroativo ? (
+        <p className="text-xs text-amber-700">
+          Foto retroativa: De-Para e preços são os da data de geração, não os da época do ciclo.
+          {snap.comentario ? ` ${snap.comentario}` : ""}
+        </p>
       ) : null}
       {historico && historico.length > 0 ? (
         <ol className="max-h-28 space-y-1 overflow-auto text-xs text-muted-foreground">
