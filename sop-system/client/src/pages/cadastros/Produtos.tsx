@@ -451,8 +451,8 @@ export default function Produtos() {
             ) : pendingSkus.length === 0 ? (
               <p className="text-sm text-muted-foreground py-2">Nenhum SKU pendente</p>
             ) : (
-              <div className="rounded-md border max-h-80 overflow-auto">
-                <Table>
+              <div className="max-h-80 w-full min-w-0 overflow-x-auto overflow-y-auto rounded-md border">
+                <Table className="min-w-[640px]">
                   <TableHeader>
                     <TableRow>
                       <TableHead className="w-10">
@@ -476,10 +476,10 @@ export default function Produtos() {
                           aria-label="Selecionar todos filtrados"
                         />
                       </TableHead>
-                      <TableHead>Código</TableHead>
-                      <TableHead>Marca</TableHead>
-                      <TableHead>Descrição</TableHead>
-                      <TableHead className="w-[120px]">Ação</TableHead>
+                      <TableHead className="min-w-[7.5rem] whitespace-nowrap">Código</TableHead>
+                      <TableHead className="min-w-[6rem] whitespace-nowrap">Marca</TableHead>
+                      <TableHead className="min-w-[14rem] whitespace-nowrap">Descrição</TableHead>
+                      <TableHead className="min-w-[7.5rem] whitespace-nowrap">Ação</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>

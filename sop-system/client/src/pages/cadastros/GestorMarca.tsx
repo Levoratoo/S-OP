@@ -79,7 +79,7 @@ function IncludePendingMarcasDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[85vh] w-[95vw] max-w-6xl overflow-y-auto sm:max-w-6xl">
-        <DialogHeader>
+        <DialogHeader className="pr-8">
           <DialogTitle>Incluir marcas pendentes</DialogTitle>
           <DialogDescription>
             Associe um gestor a cada marca antes de incluir no cadastro. Marcas sem gestor também podem

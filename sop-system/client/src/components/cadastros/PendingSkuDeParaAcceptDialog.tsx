@@ -128,7 +128,7 @@ export function PendingSkuDeParaAcceptDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[90vh] w-[95vw] max-w-6xl overflow-y-auto sm:max-w-6xl">
-        <DialogHeader>
+        <DialogHeader className="pr-8">
           <DialogTitle>Substituição De-Para (SKU antigo → novo)</DialogTitle>
           <DialogDescription>
             Escolha o SKU de referência para cada código novo ou marque &quot;Sem referência&quot; para cadastrar
@@ -154,16 +154,31 @@ export function PendingSkuDeParaAcceptDialog({
                       value={row.skuAntigo ?? SEM_REF}
                       onValueChange={v => setRef(row.codMaterial, v === SEM_REF ? null : v)}
                     >
-                      <SelectTrigger className={cn("h-9 w-full", warn && row.skuAntigo ? "border-amber-400 bg-amber-50/80" : undefined)}>
+                      <SelectTrigger
+                        title={
+                          row.skuAntigo
+                            ? row.sugestoes.find(s => s.codigo === row.skuAntigo)?.descricao
+                              ? `${row.skuAntigo} — ${row.sugestoes.find(s => s.codigo === row.skuAntigo)?.descricao}`
+                              : row.skuAntigo
+                            : "Sem referência"
+                        }
+                        className={cn(
+                          "h-auto min-h-9 w-full whitespace-normal py-1.5 [&_[data-slot=select-value]]:line-clamp-2 [&_[data-slot=select-value]]:whitespace-normal",
+                          warn && row.skuAntigo ? "border-amber-400 bg-amber-50/80" : undefined
+                        )}
+                      >
                         <SelectValue placeholder="Sem referência" />
                       </SelectTrigger>
-                      <SelectContent>
+                      <SelectContent className="w-full sm:min-w-[28rem]">
                         <SelectItem value={SEM_REF}>Sem referência</SelectItem>
-                        {row.sugestoes.map(s => (
-                          <SelectItem key={s.codigo} value={s.codigo}>
-                            {s.codigo} — {s.descricao.slice(0, 48)} ({Math.round(s.score * 100)}%)
-                          </SelectItem>
-                        ))}
+                        {row.sugestoes.map(s => {
+                          const label = `${s.codigo} — ${s.descricao} (${Math.round(s.score * 100)}%)`;
+                          return (
+                            <SelectItem key={s.codigo} value={s.codigo} title={label} className="whitespace-normal">
+                              {label}
+                            </SelectItem>
+                          );
+                        })}
                       </SelectContent>
                     </Select>
                     {score != null && row.skuAntigo ? (
@@ -227,20 +242,28 @@ export function PendingSkuDeParaAcceptDialog({
                             onValueChange={v => setRef(row.codMaterial, v === SEM_REF ? null : v)}
                           >
                             <SelectTrigger
+                              title={
+                                row.skuAntigo
+                                  ? `${row.skuAntigo} — ${row.sugestoes.find(s => s.codigo === row.skuAntigo)?.descricao ?? ""}`
+                                  : "Sem referência"
+                              }
                               className={cn(
-                                "h-9",
+                                "h-auto min-h-9 w-full whitespace-normal py-1.5 [&_[data-slot=select-value]]:line-clamp-2 [&_[data-slot=select-value]]:whitespace-normal",
                                 warn && row.skuAntigo ? "border-amber-400 bg-amber-50/80" : undefined
                               )}
                             >
                               <SelectValue placeholder="Sem referência" />
                             </SelectTrigger>
-                            <SelectContent>
+                            <SelectContent className="w-full sm:min-w-[28rem]">
                               <SelectItem value={SEM_REF}>Sem referência</SelectItem>
-                              {row.sugestoes.map(s => (
-                                <SelectItem key={s.codigo} value={s.codigo}>
-                                  {s.codigo} — {s.descricao.slice(0, 48)} ({Math.round(s.score * 100)}%)
-                                </SelectItem>
-                              ))}
+                              {row.sugestoes.map(s => {
+                                const label = `${s.codigo} — ${s.descricao} (${Math.round(s.score * 100)}%)`;
+                                return (
+                                  <SelectItem key={s.codigo} value={s.codigo} title={label} className="whitespace-normal">
+                                    {label}
+                                  </SelectItem>
+                                );
+                              })}
                             </SelectContent>
                           </Select>
                           {score != null && row.skuAntigo ? (
