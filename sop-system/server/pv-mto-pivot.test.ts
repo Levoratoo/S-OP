@@ -42,6 +42,48 @@ describe("buildPvMtoPivotLinesFromEntregas", () => {
     expect(lines[0]!.quantidadeTotal).toBe(6000);
   });
 
+  it("soma entregas em meses posteriores à primeira competência (explica ↑ unidades vs lista antiga)", () => {
+    const competenciaOnly = buildPvMtoPivotLinesFromEntregas(
+      [
+        {
+          codigo: "176098",
+          sku: "80.06.001730",
+          precoUnitario: 10,
+          anoEnt: 2026,
+          mesEnt: 12,
+          quantidade: 200,
+        },
+      ],
+      2026,
+      11
+    );
+    const comEntregas = buildPvMtoPivotLinesFromEntregas(
+      [
+        {
+          codigo: "176098",
+          sku: "80.06.001730",
+          precoUnitario: 10,
+          anoEnt: 2026,
+          mesEnt: 12,
+          quantidade: 200,
+        },
+        {
+          codigo: "176098",
+          sku: "80.06.001730",
+          precoUnitario: 10,
+          anoEnt: 2027,
+          mesEnt: 2,
+          quantidade: 150,
+        },
+      ],
+      2026,
+      11
+    );
+    expect(competenciaOnly[0]!.quantidadeTotal).toBe(200);
+    expect(comEntregas[0]!.quantidadeTotal).toBe(350);
+    expect(comEntregas[0]!.meses[2]).toBe(150); // fev/27 = m3 do horizonte
+  });
+
   it("separa meses diferentes em colunas distintas do horizonto", () => {
     const lines = buildPvMtoPivotLinesFromEntregas(
       [

@@ -312,20 +312,58 @@ export async function seedProdutosClientesFromFaturamento(options?: {
 export type PendingSkuFromFaturamento = FatProdutoRow & { alreadyInDePara: boolean };
 export type PendingClienteFromFaturamento = FatClienteRow;
 
-export async function listPendingSkusFromFaturamento(): Promise<PendingSkuFromFaturamento[]> {
-  const fatProdutos = await loadDistinctProdutos();
-  const existingProdutos = await db.listProdutos();
+let pendingSkusCache: { at: number; data: PendingSkuFromFaturamento[] } | null = null;
+const PENDING_SKUS_TTL_MS = 60_000;
+
+export async function listPendingSkusFromFaturamento(options?: {
+  forceRefresh?: boolean;
+}): Promise<PendingSkuFromFaturamento[]> {
+  const now = Date.now();
+  if (!options?.forceRefresh && pendingSkusCache && now - pendingSkusCache.at < PENDING_SKUS_TTL_MS) {
+    return pendingSkusCache.data;
+  }
+
+  const conn = await getDb();
+  if (!conn) return [];
+
+  const [fatResult, existingResult, deParaRows] = await Promise.all([
+    conn.execute(sql`
+      SELECT
+        TRIM(f.codMaterial) AS codMaterial,
+        MAX(f.descricaoItem) AS descricaoItem,
+        MAX(f.marca) AS marca,
+        MAX(f.linhaProduto) AS linhaProduto,
+        MAX(f.tipoNegocio) AS tipoNegocio,
+        MAX(f.tipoEstoque) AS tipoEstoque,
+        MAX(f.grupoProduto) AS grupoProduto
+      FROM faturamento f
+      WHERE f.codMaterial IS NOT NULL AND TRIM(f.codMaterial) <> ''
+        AND NOT EXISTS (
+          SELECT 1 FROM produtos p
+          WHERE UPPER(TRIM(p.codItem)) = UPPER(TRIM(f.codMaterial))
+             OR UPPER(TRIM(p.codigo)) = UPPER(TRIM(f.codMaterial))
+        )
+      GROUP BY TRIM(f.codMaterial)
+      ORDER BY TRIM(f.codMaterial)
+    `),
+    conn.select({ codItem: produtos.codItem, codigo: produtos.codigo }).from(produtos),
+    conn.select({ skuAntigo: deParaCodigos.skuAntigo, skuNovo: deParaCodigos.skuNovo }).from(deParaCodigos),
+  ]);
+
+  const fatProdutos = ((fatResult[0] as unknown) as FatProdutoRow[]) ?? [];
   const existingCodes = new Set<string>();
-  for (const p of existingProdutos) {
+  for (const p of existingResult) {
     if (p.codItem) existingCodes.add(p.codItem.trim().toUpperCase());
     if (p.codigo) existingCodes.add(p.codigo.trim().toUpperCase());
   }
-  const dePara = await db.listDeParaCodigos();
   const deParaCodes = new Set(
-    dePara.flatMap(d => [d.skuAntigo, d.skuNovo].map(s => String(s || "").trim().toUpperCase()).filter(Boolean))
+    deParaRows
+      .flatMap(d => [d.skuAntigo, d.skuNovo])
+      .map(s => String(s || "").trim().toUpperCase())
+      .filter(Boolean)
   );
 
-  return fatProdutos
+  const data = fatProdutos
     .filter(r => {
       const cod = clean(r.codMaterial);
       return Boolean(cod && isSkuAcabado(cod) && !existingCodes.has(cod.toUpperCase()));
@@ -334,6 +372,43 @@ export async function listPendingSkusFromFaturamento(): Promise<PendingSkuFromFa
       ...r,
       alreadyInDePara: deParaCodes.has((clean(r.codMaterial) || "").toUpperCase()),
     }));
+
+  pendingSkusCache = { at: now, data };
+  return data;
+}
+
+export async function loadFaturamentoSkuMeta(
+  codes: string[]
+): Promise<Map<string, { descricao: string; marca: string | null; tipoNegocio: string | null }>> {
+  const out = new Map<string, { descricao: string; marca: string | null; tipoNegocio: string | null }>();
+  if (!codes.length) return out;
+  const conn = await getDb();
+  if (!conn) return out;
+  const unique = [...new Set(codes.map(c => clean(c)).filter(Boolean) as string[])];
+  for (let i = 0; i < unique.length; i += 200) {
+    const chunk = unique.slice(i, i + 200);
+    const placeholders = sql.join(chunk.map(c => sql`${c}`), sql`, `);
+    const result = await conn.execute(sql`
+      SELECT
+        UPPER(TRIM(codMaterial)) AS cod,
+        MAX(descricaoItem) AS descricaoItem,
+        MAX(marca) AS marca,
+        MAX(tipoNegocio) AS tipoNegocio
+      FROM faturamento
+      WHERE UPPER(TRIM(codMaterial)) IN (${placeholders})
+      GROUP BY UPPER(TRIM(codMaterial))
+    `);
+    for (const row of (result[0] as unknown as Array<Record<string, unknown>>) ?? []) {
+      const cod = String(row.cod ?? "").trim().toUpperCase();
+      if (!cod) continue;
+      out.set(cod, {
+        descricao: String(row.descricaoItem ?? cod),
+        marca: row.marca ? String(row.marca) : null,
+        tipoNegocio: row.tipoNegocio ? String(row.tipoNegocio) : null,
+      });
+    }
+  }
+  return out;
 }
 
 export async function acceptPendingSkuFromFaturamento(codMaterial: string) {
@@ -479,6 +554,9 @@ export async function acceptPendingSkusFromFaturamentoBatch(
 
   if (criados > 0) {
     invalidateDeParaCache();
+    pendingSkusCache = null;
+    const { invalidateSkuSimilarityCandidateCache } = await import("./pending-sku-accept");
+    invalidateSkuSimilarityCandidateCache();
   }
 
   return { criados, jaExistiam, erros, detalhes };

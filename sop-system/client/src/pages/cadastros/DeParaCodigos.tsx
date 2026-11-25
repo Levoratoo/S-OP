@@ -58,7 +58,13 @@ function ListaTab() {
   });
 
   const utils = trpc.useUtils();
-  const { data: deParaList, isLoading } = trpc.deParaCodigos.listEnriched.useQuery();
+  const {
+    data: deParaList,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = trpc.deParaCodigos.listEnriched.useQuery();
 
   const createMutation = trpc.deParaCodigos.create.useMutation({
     onSuccess: () => {
@@ -216,7 +222,15 @@ function ListaTab() {
             />
           </div>
         </div>
-        {isLoading ? (
+        {isError ? (
+          <div className="rounded-md border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive space-y-2">
+            <p>Não foi possível carregar os mapeamentos De-Para.</p>
+            <p className="text-xs opacity-90">{error?.message ?? "Erro desconhecido no servidor."}</p>
+            <Button type="button" size="sm" variant="outline" onClick={() => refetch()}>
+              Tentar novamente
+            </Button>
+          </div>
+        ) : isLoading ? (
           <div className="flex justify-center py-8"><Loader2 className="h-8 w-8 animate-spin" /></div>
         ) : (
           <div className="overflow-x-auto rounded-md border">

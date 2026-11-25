@@ -9,6 +9,13 @@ import { carteiraPedidos } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { carteiraPvAbertoWhere } from "./carteira-pv-aberto";
 import { sql } from "drizzle-orm";
+import { loadFaturamentoSkuMeta } from "./seed-from-faturamento";
+import {
+  buildCarteiraPrecoPorSkuFromEntregas,
+  resolvePvPrecoUnitarioComOrigem,
+  type PrecoOrigemPv,
+} from "@shared/pv-preco-fallback";
+import { loadPrecoEGestorFaturamento } from "./ciclo-colab-extras";
 
 function toNum(v: unknown) {
   const n = Number(String(v ?? "0").replace(",", "."));
@@ -21,12 +28,14 @@ export type CarteiraPivotRow = {
   descricao: string | null;
   tipo: string | null;
   precoUnitario: number;
+  precoOrigem?: PrecoOrigemPv | null;
   numPedido: string;
   meses: number[];
   quantidadeTotal: number;
   receitaTotal: number;
   cliente: string | null;
   faturado: boolean;
+  semCadastro?: boolean;
 };
 
 export async function getCarteiraPvPivotGrade() {
@@ -67,25 +76,56 @@ export async function getCarteiraPvPivotGrade() {
     }
   }
 
+  const fatLookup = await loadPrecoEGestorFaturamento();
+  const carteiraPrecoPorSku = buildCarteiraPrecoPorSkuFromEntregas(
+    entregas.map(e => ({
+      sku: e.sku,
+      precoUnitario: e.precoUnitario,
+      quantidade: e.quantidade,
+      receitaBruta: e.receitaBruta,
+    }))
+  );
+
   const columns = computeEntregaMonthColumns(entregas);
   const pivotLines = buildPvPivotLinesFromEntregas(entregas, columns);
   const { byCode } = await loadProdutoMaps();
 
+  const missingSkus = [
+    ...new Set(
+      pivotLines.map(l => l.sku.trim().toUpperCase()).filter(sku => sku && !byCode.has(sku))
+    ),
+  ];
+  const faturamentoMeta = await loadFaturamentoSkuMeta(missingSkus);
+
   const rows: CarteiraPivotRow[] = pivotLines
     .map(line => {
-      const prod = byCode.get(line.sku.toUpperCase());
+      const skuKey = line.sku.trim().toUpperCase();
+      const prod = byCode.get(skuKey);
+      const meta = !prod ? faturamentoMeta.get(skuKey) : undefined;
+      const semCadastro = !prod;
+      const precoRes = resolvePvPrecoUnitarioComOrigem({
+        erpPreco: line.precoUnitario,
+        receitaBruta: line.receitaTotal,
+        quantidade: line.quantidadeTotal,
+        sku: line.sku,
+        cadastroPreco: prod ? toNum(prod.valorVenda) : undefined,
+        carteiraPrecoPorSku,
+        faturamento12mPorSku: fatLookup.precoBySku,
+      });
       return {
-        marca: prod?.marca ?? null,
+        marca: prod?.marca ?? meta?.marca ?? null,
         codItem: line.sku,
-        descricao: prod?.descricao ?? prod?.nome ?? null,
-        tipo: prod?.tipoNegocio ?? null,
-        precoUnitario: line.precoUnitario,
+        descricao: prod?.descricao ?? prod?.nome ?? meta?.descricao ?? null,
+        tipo: prod?.tipoNegocio ?? meta?.tipoNegocio ?? null,
+        precoUnitario: precoRes.preco,
+        precoOrigem: precoRes.origem,
         numPedido: line.numPedido,
         meses: line.meses,
         quantidadeTotal: line.quantidadeTotal,
         receitaTotal: line.receitaTotal,
         cliente: null,
         faturado: false,
+        semCadastro,
       };
     })
     .sort((a, b) => {
@@ -99,9 +139,17 @@ export async function getCarteiraPvPivotGrade() {
   const monthTotals = Array(columns.length).fill(0);
   let grandQty = 0;
   let grandRs = 0;
+  let semCadastroQty = 0;
+  let semCadastroRs = 0;
+  const semCadastroSkus = new Set<string>();
   for (const row of rows) {
     grandQty += row.quantidadeTotal;
     grandRs += row.receitaTotal;
+    if (row.semCadastro) {
+      semCadastroSkus.add(row.codItem.toUpperCase());
+      semCadastroQty += row.quantidadeTotal;
+      semCadastroRs += row.receitaTotal;
+    }
     row.meses.forEach((v, i) => {
       monthTotals[i] += v;
     });
@@ -115,6 +163,9 @@ export async function getCarteiraPvPivotGrade() {
     WHERE faturado = 0
   `)) as unknown as [Array<{ qtd: string; receita: string }>];
 
+  const carteiraQuantidade = toNum(totaisCarteira?.[0]?.qtd);
+  const carteiraReceita = toNum(totaisCarteira?.[0]?.receita);
+
   return {
     horizonLabels: columns.map(c => c.label),
     rows,
@@ -122,10 +173,16 @@ export async function getCarteiraPvPivotGrade() {
     grandQuantidade: Math.round(grandQty * 100) / 100,
     grandReceita: Math.round(grandRs * 100) / 100,
     conferencia: {
-      carteiraQuantidade: toNum(totaisCarteira?.[0]?.qtd),
-      carteiraReceita: toNum(totaisCarteira?.[0]?.receita),
+      carteiraQuantidade,
+      carteiraReceita,
+      semCadastroSkuCount: semCadastroSkus.size,
+      semCadastroQuantidade: Math.round(semCadastroQty * 100) / 100,
+      semCadastroReceita: Math.round(semCadastroRs * 100) / 100,
+      explicacaoDiferencaLista:
+        "A pivot soma entregas por mês (carteira_pv_entregas) e inclui SKUs sem cadastro na grade. " +
+        "A lista carteira_pedidos só contém linhas com produto cadastrado — a diferença de unidades/receita " +
+        "costuma ser SKUs ainda não aceitos em Produtos (badge «sem cadastro»).",
     },
-    /** sequencia em carteira_pedidos = ordem do SKU dentro do pedido (1º, 2º item), não entrega. */
     numPedidoNota:
       "Nº Pedido exibe só o código ERP (NumPedido); o sufixo /sequencia na lista antiga era a linha do item no pedido.",
   };

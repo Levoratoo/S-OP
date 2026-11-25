@@ -389,10 +389,11 @@ SELECT
   anoEnt,
   mesEnt,
   precoUnitario,
-  qtde AS quantidade,
-  receitaLinha AS receitaBruta
+  SUM(qtde) AS quantidade,
+  SUM(receitaLinha) AS receitaBruta
 FROM abertos
 WHERE codigo <> N'' AND sku <> N''
+GROUP BY codigo, sku, anoEnt, mesEnt, precoUnitario
 ORDER BY codigo, sku, anoEnt, mesEnt
 `;
 }

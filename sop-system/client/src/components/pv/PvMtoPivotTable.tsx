@@ -3,7 +3,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { exportToCsv } from "@/lib/exportCsv";
-import { Download } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Download, Info } from "lucide-react";
+import { precoOrigemPvLabel, type PrecoOrigemPv } from "@shared/pv-preco-fallback";
 
 export type PvPivotRow = {
   marca: string | null;
@@ -11,12 +13,14 @@ export type PvPivotRow = {
   descricao: string | null;
   tipo: string | null;
   precoUnitario: number;
+  precoOrigem?: PrecoOrigemPv | null;
   numPedido: string;
   meses: number[];
   quantidadeTotal: number;
   receitaTotal: number;
   cliente?: string | null;
   faturado?: boolean;
+  semCadastro?: boolean;
 };
 
 type Props = {
@@ -227,12 +231,30 @@ export function PvMtoPivotTable({
               rows.map((row, idx) => (
                 <TableRow key={`${row.numPedido}-${row.codItem}-${row.precoUnitario}-${idx}`}>
                   <TableCell className="sticky left-0 z-10 bg-background font-medium">{row.marca || "—"}</TableCell>
-                  <TableCell className="sticky left-[120px] z-10 bg-background font-mono text-xs">{row.codItem}</TableCell>
-                  <TableCell className="max-w-[240px] truncate" title={row.descricao ?? ""}>
+                  <TableCell className="sticky left-[120px] z-10 bg-background font-mono text-xs">
+                    <div className="flex flex-wrap items-center gap-1">
+                      <span>{row.codItem}</span>
+                      {row.semCadastro ? (
+                        <Badge variant="outline" className="text-[10px] px-1 py-0 h-5">
+                          sem cadastro
+                        </Badge>
+                      ) : null}
+                    </div>
+                  </TableCell>
+                  <TableCell className="max-w-[240px] whitespace-normal text-xs" title={row.descricao ?? ""}>
                     {row.descricao || "—"}
                   </TableCell>
                   <TableCell>{row.tipo || "—"}</TableCell>
-                  <TableCell className="text-right tabular-nums">{formatPreco(row.precoUnitario)}</TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    <span className="inline-flex items-center justify-end gap-1">
+                      {formatPreco(row.precoUnitario)}
+                      {row.precoOrigem && row.precoOrigem !== "erp" ? (
+                        <span title={precoOrigemPvLabel(row.precoOrigem)} className="text-amber-600">
+                          <Info className="h-3.5 w-3.5" />
+                        </span>
+                      ) : null}
+                    </span>
+                  </TableCell>
                   <TableCell className="font-mono text-xs border-r">{row.numPedido || "—"}</TableCell>
                   {showClienteFaturado ? (
                     <>

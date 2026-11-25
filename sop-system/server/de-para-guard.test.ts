@@ -40,6 +40,17 @@ describe("projetar efetivo", () => {
   });
 });
 
+describe("de-para identidade", () => {
+  it("ignora mapa antigo==novo sem lançar", () => {
+    const map = buildValidatedDeParaMap([
+      { skuAntigo: "80.01.000001", skuNovo: "80.01.000001" },
+      { skuAntigo: "80.01.000002", skuNovo: "80.01.000003" },
+    ]);
+    expect(map.get("80.01.000002")).toBe("80.01.000003");
+    expect(map.has("80.01.000001")).toBe(false);
+  });
+});
+
 describe("preço unitário PV", () => {
   it("usa receita/qtd quando cadastro vazio", () => {
     expect(resolveValorVendaUnitario(0, 1000, 50)).toBe(20);

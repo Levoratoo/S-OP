@@ -3,11 +3,12 @@
  * filtrando Status Liberado + tipo PRG — sem importação manual.
  */
 import { eq } from "drizzle-orm";
-import { carteiraPedidos } from "../../drizzle/schema";
+import { carteiraPedidos, carteiraPvEntregas } from "../../drizzle/schema";
 import { getDb } from "../db";
 import { queryErpCarteiraPedidosAbertos } from "./erp-mssql";
-import { importCarteiraBySku, syncPvFromCarteiraEmCiclosAbertos } from "./ciclo-colab-extras";
-import { replaceCarteiraPvEntregas } from "./carteira-pv-entregas";
+import { prepareImportCarteiraBySku, syncPvFromCarteiraEmCiclosAbertos } from "./ciclo-colab-extras";
+import { buildCarteiraPvEntregasInserts } from "./carteira-pv-entregas";
+import { loadDeParaMap } from "./de-para-map";
 
 export type CarteiraSqlSyncResult = {
   fetched: number;
@@ -26,18 +27,33 @@ export async function syncCarteiraFromErp(): Promise<CarteiraSqlSyncResult> {
 
   const { rows, entregas, source, fetched } = await queryErpCarteiraPedidosAbertos();
 
-  // Substitui apenas pedidos em aberto (não faturados) — fonte da verdade = ERP.
+  const dePara = await loadDeParaMap(true);
+  const entregaInserts = buildCarteiraPvEntregasInserts(entregas, dePara);
+  const prepared = rows.length ? await prepareImportCarteiraBySku(
+    rows.map(r => ({
+      codigo: r.codigo,
+      sequencia: r.sequencia,
+      competencia: r.competencia,
+      sku: r.sku,
+      quantidade: r.quantidade,
+      receitaBruta: r.receitaBruta,
+      faturado: false,
+    }))
+  ) : { toInsert: [], erros: [], avisos: [] };
+
   const abertosAntes = await db
     .select({ id: carteiraPedidos.id })
     .from(carteiraPedidos)
     .where(eq(carteiraPedidos.faturado, false));
   const removidosAbertos = abertosAntes.length;
-  if (removidosAbertos > 0) {
-    await db.delete(carteiraPedidos).where(eq(carteiraPedidos.faturado, false));
-  }
 
   if (!rows.length) {
-    await replaceCarteiraPvEntregas([]);
+    await db.transaction(async tx => {
+      if (removidosAbertos > 0) {
+        await tx.delete(carteiraPedidos).where(eq(carteiraPedidos.faturado, false));
+      }
+      await tx.delete(carteiraPvEntregas);
+    });
     const pvCiclos = await syncPvFromCarteiraEmCiclosAbertos();
     return {
       fetched: 0,
@@ -51,29 +67,39 @@ export async function syncCarteiraFromErp(): Promise<CarteiraSqlSyncResult> {
     };
   }
 
-  await replaceCarteiraPvEntregas(entregas);
+  await db.transaction(async tx => {
+    await tx.delete(carteiraPedidos).where(eq(carteiraPedidos.faturado, false));
+    await tx.delete(carteiraPvEntregas);
 
-  const importResult = await importCarteiraBySku(
-    rows.map(r => ({
-      codigo: r.codigo,
-      sequencia: r.sequencia,
-      competencia: r.competencia,
-      sku: r.sku,
-      quantidade: r.quantidade,
-      receitaBruta: r.receitaBruta,
-      faturado: false,
-    }))
-  );
+    for (let i = 0; i < entregaInserts.length; i += 300) {
+      await tx.insert(carteiraPvEntregas).values(entregaInserts.slice(i, i + 300));
+    }
+
+    for (const row of prepared.toInsert) {
+      await tx
+        .insert(carteiraPedidos)
+        .values(row)
+        .onDuplicateKeyUpdate({
+          set: {
+            competencia: row.competencia,
+            quantidade: row.quantidade,
+            receitaBruta: row.receitaBruta,
+            produtoId: row.produtoId,
+            faturado: row.faturado,
+          },
+        });
+    }
+  });
 
   const pvCiclos = await syncPvFromCarteiraEmCiclosAbertos();
 
   return {
     fetched,
-    importados: importResult.importados,
+    importados: prepared.toInsert.length,
     removidosAbertos,
     source,
-    erros: importResult.erros,
-    avisos: importResult.avisos,
+    erros: prepared.erros,
+    avisos: prepared.avisos,
     ciclosPv: pvCiclos.length,
     pvItens: pvCiclos.reduce((sum, item) => sum + item.itensCriados, 0),
   };

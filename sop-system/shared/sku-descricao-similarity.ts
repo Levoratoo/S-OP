@@ -10,21 +10,6 @@ export type SkuSimilarityTarget = {
   marca?: string | null;
 };
 
-const MESES_CURTO = new Set([
-  "jan",
-  "fev",
-  "mar",
-  "abr",
-  "mai",
-  "jun",
-  "jul",
-  "ago",
-  "set",
-  "out",
-  "nov",
-  "dez",
-]);
-
 const BAIXO_PESO = new Set([
   "sacola",
   "envelope",
@@ -52,9 +37,23 @@ const BAIXO_PESO = new Set([
   "genérico",
   "generico",
   "sku",
+  "-",
 ]);
 
-const TAMANHOS = new Set(["pp", "p", "m", "g", "gg", "xg"]);
+const TAMANHOS = new Set(["pp", "p", "m", "g", "gg", "xg", "expp", "exg", "exp"]);
+
+const TIPO_PRIMEIRA_PALAVRA = new Set([
+  "sacola",
+  "envelope",
+  "papel",
+  "saco",
+  "caixa",
+  "adesivo",
+  "fita",
+  "bobina",
+  "etiqueta",
+  "tag",
+]);
 
 export function normalizeDescricaoTexto(raw: string): string {
   return String(raw ?? "")
@@ -64,6 +63,30 @@ export function normalizeDescricaoTexto(raw: string): string {
     .replace(/[^\p{L}\p{N}\s.-]/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+/** Tipo comercial (Sacola, Envelope, Papel de Seda…). */
+export function extractSkuProductType(descricao: string): string | null {
+  const norm = normalizeDescricaoTexto(descricao);
+  const tokens = norm.split(/\s+/).filter(Boolean);
+  if (!tokens.length) return null;
+  if (tokens[0] === "papel" && tokens[1] === "de" && tokens[2]) {
+    return `papel de ${tokens[2]}`;
+  }
+  const first = tokens[0]!;
+  if (TIPO_PRIMEIRA_PALAVRA.has(first)) return first;
+  if (first === "papel") return "papel";
+  return first.length >= 3 ? first : null;
+}
+
+export function extractSkuSize(descricao: string): string | null {
+  const norm = normalizeDescricaoTexto(descricao);
+  const tokens = norm.split(/\s+/).filter(Boolean);
+  for (const t of tokens) {
+    if (TAMANHOS.has(t)) return t;
+    if (/^expp$/i.test(t)) return "expp";
+  }
+  return null;
 }
 
 function tokenPeso(token: string): number {
@@ -114,11 +137,25 @@ function trigramSimilarity(a: string, b: string): number {
   return (2 * inter) / (sa.size + sb.size);
 }
 
+function sameMarca(a: string | null | undefined, b: string | null | undefined): boolean {
+  const ma = normalizeDescricaoTexto(a || "");
+  const mb = normalizeDescricaoTexto(b || "");
+  if (!ma || !mb) return false;
+  if (ma === mb) return true;
+  return ma.includes(mb) || mb.includes(ma);
+}
+
 export function scoreSkuDescricaoSimilarity(
   target: SkuSimilarityTarget,
   candidate: SkuSimilarityCandidate
 ): number {
   if (candidate.codigo.trim().toUpperCase() === target.codigo.trim().toUpperCase()) return 0;
+
+  const tipoT = extractSkuProductType(target.descricao);
+  const tipoC = extractSkuProductType(candidate.descricao);
+  if (tipoT && tipoC && tipoT !== tipoC) {
+    return Math.round(0.08 * 1000) / 1000;
+  }
 
   const ta = tokenizeDescricaoParaSimilaridade(target.descricao);
   const tb = tokenizeDescricaoParaSimilaridade(candidate.descricao);
@@ -128,17 +165,26 @@ export function scoreSkuDescricaoSimilarity(
   const nb = normalizeDescricaoTexto(candidate.descricao);
   const tri = trigramSimilarity(na, nb);
 
-  let score = jac * 0.55 + tri * 0.45;
+  let score = jac * 0.5 + tri * 0.35;
 
-  const marcaT = normalizeDescricaoTexto(target.marca || "");
-  const marcaC = normalizeDescricaoTexto(candidate.marca || "");
-  if (marcaT && marcaC) {
-    if (marcaT === marcaC) score = Math.min(1, score + 0.12);
-    else if (marcaT.includes(marcaC) || marcaC.includes(marcaT)) score = Math.min(1, score + 0.06);
-    else score *= 0.82;
+  if (tipoT && tipoC && tipoT === tipoC) {
+    score += 0.12;
   }
 
-  return Math.round(score * 1000) / 1000;
+  const marcaMatch = sameMarca(target.marca, candidate.marca);
+  if (marcaMatch) score += 0.1;
+  else if (normalizeDescricaoTexto(target.marca || "") && normalizeDescricaoTexto(candidate.marca || "")) {
+    score *= 0.75;
+  }
+
+  const sizeT = extractSkuSize(target.descricao);
+  const sizeC = extractSkuSize(candidate.descricao);
+  if (sizeT && sizeC) {
+    if (sizeT === sizeC) score += 0.08;
+    else score *= 0.92;
+  }
+
+  return Math.min(1, Math.round(score * 1000) / 1000);
 }
 
 export function rankSkuSimilarityCandidates(
@@ -146,7 +192,22 @@ export function rankSkuSimilarityCandidates(
   candidates: SkuSimilarityCandidate[],
   limit = 10
 ): Array<SkuSimilarityCandidate & { score: number }> {
-  return candidates
+  const tipoT = extractSkuProductType(target.descricao);
+  const marcaT = normalizeDescricaoTexto(target.marca || "");
+
+  const filtered = candidates.filter(c => {
+    if (c.codigo.trim().toUpperCase() === target.codigo.trim().toUpperCase()) return false;
+    const tipoC = extractSkuProductType(c.descricao);
+    if (tipoT && tipoC && tipoT !== tipoC) return false;
+    return true;
+  });
+
+  const pool =
+    marcaT && filtered.length > 80
+      ? filtered.filter(c => sameMarca(target.marca, c.marca) || !normalizeDescricaoTexto(c.marca || ""))
+      : filtered;
+
+  return pool
     .map(c => ({ ...c, score: scoreSkuDescricaoSimilarity(target, c) }))
     .filter(c => c.score > 0.05)
     .sort((a, b) => b.score - a.score || a.codigo.localeCompare(b.codigo, "pt-BR"))
@@ -157,3 +218,5 @@ export function rankSkuSimilarityCandidates(
 export const SKU_SIMILARITY_AUTO_PICK = 0.85;
 /** Abaixo disso destaca em amarelo (De-Para). */
 export const SKU_SIMILARITY_REVIEW_WARN = 0.6;
+/** Pré-preenche referência no modo De-Para só acima deste score. */
+export const SKU_SIMILARITY_DEPARA_AUTO_PICK = 0.6;

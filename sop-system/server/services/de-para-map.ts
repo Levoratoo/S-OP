@@ -39,7 +39,7 @@ export function buildValidatedDeParaMapDetailed(
     const novo = (row.skuNovo || "").trim();
     if (!antigo || !novo) continue;
     if (antigo === novo.toUpperCase()) {
-      throw new Error(`De-Para inválido: ${antigo} aponta para ele mesmo.`);
+      continue;
     }
     const existing = map.get(antigo);
     if (existing && existing.toUpperCase() !== novo.toUpperCase()) {

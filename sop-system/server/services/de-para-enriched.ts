@@ -16,35 +16,35 @@ export async function listDeParaCodigosComDescricoes(): Promise<DeParaComDescric
   const result = await conn.execute(sql`
     SELECT
       d.id,
-      d.skuAntigo,
-      d.skuNovo,
+      d.sku_antigo,
+      d.sku_novo,
       COALESCE(pa.descricao, pa.nome, fa.descricaoItem) AS descricaoAntigo,
       COALESCE(pn.descricao, pn.nome, fn.descricaoItem) AS descricaoNovo
     FROM de_para_codigos d
-    LEFT JOIN produtos pa ON UPPER(TRIM(pa.codItem)) = UPPER(TRIM(d.skuAntigo))
-      OR UPPER(TRIM(pa.codigo)) = UPPER(TRIM(d.skuAntigo))
-    LEFT JOIN produtos pn ON UPPER(TRIM(pn.codItem)) = UPPER(TRIM(d.skuNovo))
-      OR UPPER(TRIM(pn.codigo)) = UPPER(TRIM(d.skuNovo))
-  LEFT JOIN (
-      SELECT TRIM(codMaterial) AS cod, MAX(descricaoItem) AS descricaoItem
-      FROM faturamento
-      WHERE codMaterial IS NOT NULL AND TRIM(codMaterial) <> ''
-      GROUP BY TRIM(codMaterial)
-    ) fa ON fa.cod = TRIM(d.skuAntigo)
+    LEFT JOIN produtos pa ON UPPER(TRIM(pa.codItem)) = UPPER(TRIM(d.sku_antigo))
+      OR UPPER(TRIM(pa.codigo)) = UPPER(TRIM(d.sku_antigo))
+    LEFT JOIN produtos pn ON UPPER(TRIM(pn.codItem)) = UPPER(TRIM(d.sku_novo))
+      OR UPPER(TRIM(pn.codigo)) = UPPER(TRIM(d.sku_novo))
     LEFT JOIN (
       SELECT TRIM(codMaterial) AS cod, MAX(descricaoItem) AS descricaoItem
       FROM faturamento
       WHERE codMaterial IS NOT NULL AND TRIM(codMaterial) <> ''
       GROUP BY TRIM(codMaterial)
-    ) fn ON fn.cod = TRIM(d.skuNovo)
-    ORDER BY d.skuAntigo
+    ) fa ON fa.cod = TRIM(d.sku_antigo)
+    LEFT JOIN (
+      SELECT TRIM(codMaterial) AS cod, MAX(descricaoItem) AS descricaoItem
+      FROM faturamento
+      WHERE codMaterial IS NOT NULL AND TRIM(codMaterial) <> ''
+      GROUP BY TRIM(codMaterial)
+    ) fn ON fn.cod = TRIM(d.sku_novo)
+    ORDER BY d.sku_antigo
   `);
 
   const rows = (result[0] as unknown as Array<Record<string, unknown>>) ?? [];
   return rows.map(r => ({
     id: Number(r.id),
-    skuAntigo: String(r.skuAntigo ?? ""),
-    skuNovo: String(r.skuNovo ?? ""),
+    skuAntigo: String(r.sku_antigo ?? r.skuAntigo ?? ""),
+    skuNovo: String(r.sku_novo ?? r.skuNovo ?? ""),
     descricaoAntigo: r.descricaoAntigo ? String(r.descricaoAntigo) : null,
     descricaoNovo: r.descricaoNovo ? String(r.descricaoNovo) : null,
   }));

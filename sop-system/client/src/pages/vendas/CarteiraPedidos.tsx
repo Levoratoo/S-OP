@@ -38,12 +38,14 @@ export default function CarteiraPedidos() {
         descricao: r.descricao,
         tipo: r.tipo,
         precoUnitario: r.precoUnitario,
+        precoOrigem: r.precoOrigem,
         numPedido: r.numPedido,
         meses: r.meses,
         quantidadeTotal: r.quantidadeTotal,
         receitaTotal: r.receitaTotal,
         cliente: r.cliente,
         faturado: r.faturado,
+        semCadastro: r.semCadastro,
       })),
     [data?.rows]
   );
@@ -88,11 +90,21 @@ export default function CarteiraPedidos() {
             (carteira_pv_entregas). Nº Pedido = NumPedido (sem /sequencia — a sequência era a ordem do SKU dentro do
             pedido na lista antiga).
             {data?.conferencia ? (
-              <span className="block mt-1 text-xs">
-                Conferência: pivot {data.grandQuantidade.toLocaleString("pt-BR")} un · R${" "}
-                {data.grandReceita.toLocaleString("pt-BR", { minimumFractionDigits: 2 })} · lista carteira{" "}
-                {listTotals.q.toLocaleString("pt-BR")} un · R${" "}
-                {listTotals.rs.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+              <span className="block mt-1 text-xs text-muted-foreground space-y-0.5">
+                <span className="block">
+                  Pivot (entregas por mês): {data.grandQuantidade.toLocaleString("pt-BR")} un · R${" "}
+                  {data.grandReceita.toLocaleString("pt-BR", { minimumFractionDigits: 2 })} · lista cadastrada{" "}
+                  {listTotals.q.toLocaleString("pt-BR")} un · R${" "}
+                  {listTotals.rs.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                </span>
+                {data.conferencia.semCadastroSkuCount ? (
+                  <span className="block">
+                    Diferença esperada: {data.conferencia.semCadastroSkuCount} SKU(s) sem cadastro na pivot (
+                    {data.conferencia.semCadastroQuantidade.toLocaleString("pt-BR")} un · R${" "}
+                    {data.conferencia.semCadastroReceita.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}).
+                    {data.conferencia.explicacaoDiferencaLista}
+                  </span>
+                ) : null}
               </span>
             ) : null}
           </CardDescription>

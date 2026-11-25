@@ -3,10 +3,11 @@ import { getDb } from "../db";
 import { deParaCodigos } from "../../drizzle/schema";
 import {
   rankSkuSimilarityCandidates,
+  SKU_SIMILARITY_DEPARA_AUTO_PICK,
   type SkuSimilarityCandidate,
 } from "@shared/sku-descricao-similarity";
 import { invalidateDeParaCache } from "./de-para-map";
-import { validateDeParaEdge, inheritProjetarFromAntigo } from "./de-para-validate";
+import { assertDeParaAcyclic, validateDeParaEdge, inheritProjetarFromAntigo } from "./de-para-validate";
 import {
   acceptPendingSkusFromFaturamentoBatch,
   listPendingSkusFromFaturamento,
@@ -21,11 +22,20 @@ function clean(value: unknown): string | null {
   return s.length ? s : null;
 }
 
-async function loadSimilarityCandidates(): Promise<SkuSimilarityCandidate[]> {
-  const [produtosList, pending] = await Promise.all([
-    db.listProdutos(),
-    listPendingSkusFromFaturamento(),
-  ]);
+type ProdutoCandidateCache = {
+  at: number;
+  candidates: SkuSimilarityCandidate[];
+};
+
+let produtoCandidateCache: ProdutoCandidateCache | null = null;
+const CANDIDATES_TTL_MS = 120_000;
+
+async function loadRegisteredSimilarityCandidates(): Promise<SkuSimilarityCandidate[]> {
+  const now = Date.now();
+  if (produtoCandidateCache && now - produtoCandidateCache.at < CANDIDATES_TTL_MS) {
+    return produtoCandidateCache.candidates;
+  }
+  const produtosList = await db.listProdutos();
   const out: SkuSimilarityCandidate[] = [];
   const seen = new Set<string>();
   for (const p of produtosList) {
@@ -40,34 +50,38 @@ async function loadSimilarityCandidates(): Promise<SkuSimilarityCandidate[]> {
       marca: p.marca,
     });
   }
-  for (const p of pending) {
-    const codigo = clean(p.codMaterial);
-    if (!codigo) continue;
-    const key = codigo.toUpperCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push({
-      codigo,
-      descricao: clean(p.descricaoItem) || codigo,
-      marca: p.marca,
-    });
-  }
+  produtoCandidateCache = { at: now, candidates: out };
   return out;
+}
+
+export function invalidateSkuSimilarityCandidateCache() {
+  produtoCandidateCache = null;
 }
 
 export async function suggestSkuReferencias(
   codMaterial: string,
-  limit = 10
+  limit = 10,
+  opts?: { candidates?: SkuSimilarityCandidate[]; pendingCodes?: Set<string> }
 ): Promise<{ target: { codigo: string; descricao: string; marca: string | null }; sugestoes: SkuReferenciaSugestao[] }> {
   const cod = clean(codMaterial);
   if (!cod) throw new Error("Código inválido");
 
-  const pending = await listPendingSkusFromFaturamento();
+  const [pending, candidatesAll] = await Promise.all([
+    listPendingSkusFromFaturamento(),
+    opts?.candidates ? Promise.resolve(opts.candidates) : loadRegisteredSimilarityCandidates(),
+  ]);
+  const pendingCodes =
+    opts?.pendingCodes ??
+    new Set(pending.map(p => clean(p.codMaterial)?.toUpperCase()).filter(Boolean) as string[]);
+
   const row =
     pending.find(p => clean(p.codMaterial)?.toUpperCase() === cod.toUpperCase()) ??
-    (await loadSimilarityCandidates()).find(c => c.codigo.toUpperCase() === cod.toUpperCase());
+    candidatesAll.find(c => c.codigo.toUpperCase() === cod.toUpperCase());
 
-  const descricao = row && "descricaoItem" in row ? clean(row.descricaoItem) : (row as SkuSimilarityCandidate)?.descricao;
+  const descricao =
+    row && "descricaoItem" in row
+      ? clean(row.descricaoItem)
+      : (row as SkuSimilarityCandidate)?.descricao;
   const marca = row && "marca" in row ? clean(row.marca) : (row as SkuSimilarityCandidate)?.marca ?? null;
 
   const target = {
@@ -76,8 +90,9 @@ export async function suggestSkuReferencias(
     marca,
   };
 
-  const candidates = (await loadSimilarityCandidates()).filter(
-    c => c.codigo.toUpperCase() !== cod.toUpperCase()
+  const candidates = candidatesAll.filter(
+    c =>
+      c.codigo.toUpperCase() !== cod.toUpperCase() && !pendingCodes.has(c.codigo.toUpperCase())
   );
 
   return {
@@ -88,10 +103,26 @@ export async function suggestSkuReferencias(
 
 export async function suggestSkuReferenciasBatch(codMaterials: string[]) {
   const codes = [...new Set(codMaterials.map(c => clean(c)).filter(Boolean) as string[])];
+  const [candidates, pending] = await Promise.all([
+    loadRegisteredSimilarityCandidates(),
+    listPendingSkusFromFaturamento(),
+  ]);
+  const pendingCodes = new Set(
+    pending.map(p => clean(p.codMaterial)?.toUpperCase()).filter(Boolean) as string[]
+  );
+
   const results: Record<string, SkuReferenciaSugestao[]> = {};
   for (const cod of codes) {
-    const { sugestoes } = await suggestSkuReferencias(cod, 10);
-    results[cod] = sugestoes;
+  const pendingRow = pending.find(p => clean(p.codMaterial)?.toUpperCase() === cod.toUpperCase());
+    const target = {
+      codigo: cod,
+      descricao: clean(pendingRow?.descricaoItem) || cod,
+      marca: clean(pendingRow?.marca),
+    };
+    const pool = candidates.filter(
+      c => c.codigo.toUpperCase() !== cod.toUpperCase() && !pendingCodes.has(c.codigo.toUpperCase())
+    );
+    results[cod] = rankSkuSimilarityCandidates(target, pool, 10);
   }
   return results;
 }
@@ -112,6 +143,10 @@ export async function acceptPendingSkusWithDePara(
     return { criados: 0, jaExistiam: 0, erros: [], detalhes: [], deParaCriados: 0 };
   }
 
+  const batchCodes = new Set(
+    items.map(i => clean(i.codMaterial)?.toUpperCase()).filter(Boolean) as string[]
+  );
+
   const codes = items.map(i => i.codMaterial);
   const batch = await acceptPendingSkusFromFaturamentoBatch(codes, { skipIdentityDePara: true });
 
@@ -124,10 +159,31 @@ export async function acceptPendingSkusWithDePara(
   if (!database) throw new Error("Database not available");
 
   const antigos = new Set<string>();
+  const registeredCodes = new Set<string>();
+  for (const p of await db.listProdutos()) {
+    if (p.codItem) registeredCodes.add(p.codItem.trim().toUpperCase());
+    if (p.codigo) registeredCodes.add(p.codigo.trim().toUpperCase());
+  }
+
   for (const [cod, skuAntigo] of byCod) {
     if (!cod || !skuAntigo) continue;
-    if (skuAntigo.toUpperCase() === cod) continue;
-    antigos.add(`${skuAntigo.toUpperCase()}||${cod}`);
+    const ant = skuAntigo.toUpperCase();
+    if (ant === cod) continue;
+    if (batchCodes.has(ant)) {
+      batch.erros.push({
+        codMaterial: cod,
+        message: `Referência ${skuAntigo} está no mesmo lote de aceite — escolha um SKU já cadastrado.`,
+      });
+      continue;
+    }
+    if (!registeredCodes.has(ant)) {
+      batch.erros.push({
+        codMaterial: cod,
+        message: `Referência ${skuAntigo} não está cadastrada como produto.`,
+      });
+      continue;
+    }
+    antigos.add(`${ant}||${cod}`);
   }
 
   if (antigos.size > 0) {
@@ -137,6 +193,15 @@ export async function acceptPendingSkusWithDePara(
 
       for (const pairKey of antigos) {
         const [skuAntigo, skuNovo] = pairKey.split("||");
+        try {
+          assertDeParaAcyclic(accPairs, { extra: { skuAntigo, skuNovo } });
+        } catch (err) {
+          batch.erros.push({
+            codMaterial: skuNovo,
+            message: err instanceof Error ? err.message : String(err),
+          });
+          continue;
+        }
         await validateDeParaEdge(skuAntigo, skuNovo, accPairs);
         await tx
           .insert(deParaCodigos)
@@ -148,6 +213,7 @@ export async function acceptPendingSkusWithDePara(
       }
     });
     invalidateDeParaCache();
+    invalidateSkuSimilarityCandidateCache();
   }
 
   for (const d of batch.detalhes) {
@@ -161,3 +227,5 @@ export async function acceptPendingSkusWithDePara(
 
   return { ...batch, deParaCriados };
 }
+
+export { SKU_SIMILARITY_DEPARA_AUTO_PICK };

@@ -27,6 +27,7 @@ export function PvMtoPivotGrade({ cicloId, searchGlobal, marcasPermitidas }: Pro
       descricao: r.descricao,
       tipo: r.tipo,
       precoUnitario: r.precoUnitario,
+      precoOrigem: r.precoOrigem,
       numPedido: r.numPedido,
       meses: r.meses,
       quantidadeTotal: r.quantidadeTotal,
@@ -48,7 +49,7 @@ export function PvMtoPivotGrade({ cicloId, searchGlobal, marcasPermitidas }: Pro
       rows={rows}
       searchGlobal={searchGlobal}
       exportFileName={`pv-mto-ciclo-${cicloId}`}
-      emptyMessage='Nenhum PV MTO no horizonto — sincronize a carteira ERP ou use "Atualizar da Carteira"'
+      emptyMessage='Nenhum PV MTO no horizonte — sincronize a carteira ERP ou use "Atualizar da Carteira"'
     />
   );
 }

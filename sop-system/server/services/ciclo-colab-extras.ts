@@ -43,8 +43,15 @@ import {
 import { resolveProdutoFamilia } from "@shared/produto-familia";
 import { resolveGestorPorMarca } from "@shared/gestor-marca-resolve";
 import { resolveValorVendaUnitario } from "@shared/preco-unitario";
+import {
+  buildCarteiraPrecoPorSkuFromEntregas,
+  precoOrigemPvLabel,
+  resolvePvPrecoUnitarioComOrigem,
+  type PrecoOrigemPv,
+} from "@shared/pv-preco-fallback";
 import { buildPvMtoPivotLinesFromEntregas, pvMtoHorizonMonthLabel } from "@shared/pv-mto-pivot";
 import { listCarteiraPvEntregas } from "./carteira-pv-entregas";
+import { loadFaturamentoSkuMeta } from "./seed-from-faturamento";
 
 const MES_KEYS = ["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10", "m11", "m12"] as const;
 
@@ -151,6 +158,15 @@ export async function syncPvFromCarteira(cicloId: number) {
     .from(carteiraPedidos)
     .where(carteiraPvAbertoWhere());
   const entregasDb = await listCarteiraPvEntregas();
+  const fatLookup = await loadPrecoEGestorFaturamento();
+  const carteiraPrecoPorSku = buildCarteiraPrecoPorSkuFromEntregas(
+    entregasDb.map(e => ({
+      sku: e.sku,
+      precoUnitario: toNum(e.precoUnitario),
+      quantidade: toNum(e.quantidade),
+      receitaBruta: toNum(e.receitaBruta),
+    }))
+  );
 
   // A aba PV MTO é a carteira de PV em aberto (pedidos Liberado + PRG), não a previsão estatística.
   await db
@@ -167,6 +183,7 @@ export async function syncPvFromCarteira(cicloId: number) {
     linha: string | null;
     tipoEstoque: "MTS" | "MTO";
     precoUnitario: number;
+    precoOrigem: PrecoOrigemPv;
     receitaBruta: number;
     quantidade: number;
     familia: string | null;
@@ -174,6 +191,7 @@ export async function syncPvFromCarteira(cicloId: number) {
     meses: number[];
   };
   const lines: PvLine[] = [];
+  const skusSemCadastro = new Set<string>();
 
   let pedidosForaDoCiclo = 0;
   let pedidosNoCiclo = 0;
@@ -195,24 +213,49 @@ export async function syncPvFromCarteira(cicloId: number) {
         )
       : [];
 
+  let faturamentoMeta = new Map<string, { descricao: string; marca: string | null; tipoNegocio: string | null }>();
+
   if (pivotFromEntregas.length > 0) {
+    const missing = pivotFromEntregas
+      .map(p => p.sku.trim().toUpperCase())
+      .filter(sku => sku && !byCode.has(sku));
+    if (missing.length) faturamentoMeta = await loadFaturamentoSkuMeta([...new Set(missing)]);
+
     for (const pivot of pivotFromEntregas) {
-      const prod =
-        byCode.get(pivot.sku.toUpperCase()) ?? byCode.get(pivot.sku.trim().toUpperCase());
-      if (!prod) continue;
+      const skuKey = pivot.sku.trim().toUpperCase();
+      const prod = byCode.get(skuKey);
+      if (!prod) skusSemCadastro.add(pivot.sku);
+      const meta = !prod ? faturamentoMeta.get(skuKey) : undefined;
+      const precoRes = resolvePvPrecoUnitarioComOrigem({
+        erpPreco: pivot.precoUnitario,
+        receitaBruta: pivot.receitaTotal,
+        quantidade: pivot.quantidadeTotal,
+        sku: pivot.sku,
+        cadastroPreco: prod ? toNum(prod.valorVenda) : undefined,
+        carteiraPrecoPorSku,
+        faturamento12mPorSku: fatLookup.precoBySku,
+      });
+      if (precoRes.preco <= 0 && precoRes.origem === "erp") {
+        console.warn(`[pv-sync] SKU ${pivot.sku} pedido ${pivot.numPedido} sem preço após fallbacks`);
+      } else if (precoRes.origem !== "erp") {
+        console.info(
+          `[pv-sync] ${pivot.sku} pedido ${pivot.numPedido}: preço ${precoRes.preco} (${precoOrigemPvLabel(precoRes.origem)})`
+        );
+      }
       pedidosNoCiclo += 1;
       lines.push({
         pedidoCodigo: pivot.numPedido,
         sku: pivot.sku,
-        descricao: prod.descricao || prod.nome || null,
-        marca: prod.marca,
-        linha: prod.linha,
-        tipoEstoque: prod.tipoEstoque === "MTO" ? "MTO" : "MTS",
-        precoUnitario: pivot.precoUnitario,
+        descricao: prod?.descricao || prod?.nome || meta?.descricao || null,
+        marca: prod?.marca ?? meta?.marca ?? null,
+        linha: prod?.linha ?? null,
+        tipoEstoque: prod?.tipoEstoque === "MTO" ? "MTO" : "MTS",
+        precoUnitario: precoRes.preco,
+        precoOrigem: precoRes.origem,
         receitaBruta: pivot.receitaTotal,
         quantidade: pivot.quantidadeTotal,
-        familia: dimensionsByProductId.get(prod.id)?.familia ?? null,
-        gestor: dimensionsByProductId.get(prod.id)?.gestor ?? null,
+        familia: prod ? dimensionsByProductId.get(prod.id)?.familia ?? null : null,
+        gestor: prod ? dimensionsByProductId.get(prod.id)?.gestor ?? null : null,
         meses: pivot.meses,
       });
     }
@@ -234,6 +277,15 @@ export async function syncPvFromCarteira(cicloId: number) {
       const meses = Array(12).fill(0);
       meses[idx] = toNum(ped.quantidade);
       const qtd = toNum(ped.quantidade);
+      const precoRes = resolvePvPrecoUnitarioComOrigem({
+        erpPreco: resolveValorVendaUnitario(prod.valorVenda, toNum(ped.receitaBruta), qtd),
+        receitaBruta: toNum(ped.receitaBruta),
+        quantidade: qtd,
+        sku,
+        cadastroPreco: toNum(prod.valorVenda),
+        carteiraPrecoPorSku,
+        faturamento12mPorSku: fatLookup.precoBySku,
+      });
       lines.push({
         pedidoCodigo: String(ped.codigo || "").trim() || sku,
         sku,
@@ -241,7 +293,8 @@ export async function syncPvFromCarteira(cicloId: number) {
         marca: prod.marca,
         linha: prod.linha,
         tipoEstoque: prod.tipoEstoque === "MTO" ? "MTO" : "MTS",
-        precoUnitario: resolveValorVendaUnitario(prod.valorVenda, toNum(ped.receitaBruta), qtd),
+        precoUnitario: precoRes.preco,
+        precoOrigem: precoRes.origem,
         receitaBruta: toNum(ped.receitaBruta),
         quantidade: qtd,
         familia: dimensionsByProductId.get(prod.id)?.familia ?? null,
@@ -272,14 +325,11 @@ export async function syncPvFromCarteira(cicloId: number) {
       tipoMarcaLinha: `${line.tipoEstoque}-${line.marca || "SEM-MARCA"}-${line.linha || "SEM-LINHA"}`,
       projetar: false,
       qtdeTotalEstatistica: "0",
-      valorVendaSnapshot: String(
-        line.precoUnitario > 0
-          ? line.precoUnitario
-          : resolveValorVendaUnitario(null, line.receitaBruta, line.quantidade)
-      ),
+      valorVendaSnapshot: String(line.precoUnitario > 0 ? line.precoUnitario : 0),
       familiaSnapshot: line.familia,
       gestorSnapshot: line.gestor,
       crmCard: line.pedidoCodigo,
+      crmTipo: line.precoOrigem !== "erp" ? `preco:${line.precoOrigem}` : null,
       ...meses,
       qtdeColaborada: String(Math.round(total * 100) / 100),
       origem: "PV",
@@ -295,6 +345,7 @@ export async function syncPvFromCarteira(cicloId: number) {
     pedidosLidos: pedidos.length,
     pedidosNoCiclo,
     pedidosForaDoCiclo,
+    skusSemCadastro: skusSemCadastro.size,
   };
 }
 
@@ -305,6 +356,7 @@ export type PvMtoGradeRow = {
   descricao: string | null;
   tipo: string | null;
   precoUnitario: number;
+  precoOrigem?: PrecoOrigemPv | null;
   numPedido: string;
   meses: number[];
   quantidadeTotal: number;
@@ -328,12 +380,17 @@ export async function getPvMtoPivotGrade(cicloId: number) {
       const preco = toNum(item.valorVendaSnapshot);
       const qty = meses.reduce((s, v) => s + v, 0);
       const prod = byCode.get((item.sku || "").trim().toUpperCase());
+      const precoOrigemRaw = (item.crmTipo || "").trim();
+      const precoOrigem = precoOrigemRaw.startsWith("preco:")
+        ? (precoOrigemRaw.slice(6) as PrecoOrigemPv)
+        : null;
       return {
         marca: item.marca ?? null,
         codItem: item.sku,
         descricao: item.descricao ?? prod?.descricao ?? prod?.nome ?? null,
         tipo: prod?.tipoNegocio ?? null,
         precoUnitario: preco,
+        precoOrigem,
         numPedido: String(item.crmCard || "").trim(),
         meses,
         quantidadeTotal: Math.round(qty * 100) / 100,
@@ -813,7 +870,7 @@ let precoGestorCache: PrecoGestorCache | null = null;
 const PRECO_GESTOR_TTL_MS = 5 * 60 * 1000;
 
 /** Preço unitário (faturamento recente) e gestor mais frequente por marca, quando o cadastro não tem. */
-async function loadPrecoEGestorFaturamento(): Promise<PrecoGestorCache> {
+export async function loadPrecoEGestorFaturamento(): Promise<PrecoGestorCache> {
   if (precoGestorCache && Date.now() - precoGestorCache.at < PRECO_GESTOR_TTL_MS) {
     return precoGestorCache;
   }
@@ -1374,14 +1431,8 @@ export type CarteiraSkuRow = {
   faturado?: boolean;
 };
 
-/** Importa PV Aberto (Excel) resolvendo SKU → produtoId. */
-export async function importCarteiraBySku(rows: CarteiraSkuRow[]) {
-  const db = await getDb();
-  if (!db) throw new Error("Database not available");
-  const { byCode } = await loadProdutoMaps();
-  const dePara = await loadDeParaMap();
-
-  const toInsert: Array<{
+export type CarteiraImportPrepared = {
+  toInsert: Array<{
     codigo: string;
     sequencia: number;
     competencia: Date;
@@ -1389,7 +1440,17 @@ export async function importCarteiraBySku(rows: CarteiraSkuRow[]) {
     receitaBruta: string;
     produtoId: number;
     faturado: boolean;
-  }> = [];
+  }>;
+  erros: string[];
+  avisos: string[];
+};
+
+/** Valida e monta linhas de carteira sem gravar (para sync transacional). */
+export async function prepareImportCarteiraBySku(rows: CarteiraSkuRow[]): Promise<CarteiraImportPrepared> {
+  const { byCode } = await loadProdutoMaps();
+  const dePara = await loadDeParaMap();
+
+  const toInsert: CarteiraImportPrepared["toInsert"] = [];
   const erros: string[] = [];
   const avisos: string[] = [];
 
@@ -1428,7 +1489,16 @@ export async function importCarteiraBySku(rows: CarteiraSkuRow[]) {
     });
   }
 
-  for (const row of toInsert) {
+  return { toInsert, erros: erros.slice(0, 50), avisos: avisos.slice(0, 50) };
+}
+
+/** Importa PV Aberto (Excel) resolvendo SKU → produtoId. */
+export async function importCarteiraBySku(rows: CarteiraSkuRow[]) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const prepared = await prepareImportCarteiraBySku(rows);
+
+  for (const row of prepared.toInsert) {
     await db
       .insert(carteiraPedidos)
       .values(row)
@@ -1444,9 +1514,9 @@ export async function importCarteiraBySku(rows: CarteiraSkuRow[]) {
   }
 
   return {
-    importados: toInsert.length,
-    erros: erros.slice(0, 50),
-    avisos: avisos.slice(0, 50),
+    importados: prepared.toInsert.length,
+    erros: prepared.erros,
+    avisos: prepared.avisos,
   };
 }
 

@@ -19,7 +19,11 @@ import {
 } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { trpc } from "@/lib/trpc";
-import { SKU_SIMILARITY_AUTO_PICK, SKU_SIMILARITY_REVIEW_WARN } from "@shared/sku-descricao-similarity";
+import {
+  SKU_SIMILARITY_AUTO_PICK,
+  SKU_SIMILARITY_DEPARA_AUTO_PICK,
+  SKU_SIMILARITY_REVIEW_WARN,
+} from "@shared/sku-descricao-similarity";
 import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -84,7 +88,9 @@ export function PendingSkuDeParaAcceptDialog({
             const best = sugestoes[0];
             const autoPick =
               mode === "depara"
-                ? best?.codigo ?? null
+                ? best && best.score >= SKU_SIMILARITY_DEPARA_AUTO_PICK
+                  ? best.codigo
+                  : null
                 : best && best.score >= SKU_SIMILARITY_AUTO_PICK
                   ? best.codigo
                   : null;
