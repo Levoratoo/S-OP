@@ -1,4 +1,7 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { textMatchesSearch } from "@shared/text-search";
+import { Checkbox } from "@/components/ui/checkbox";
+import { PendingSkuDeParaAcceptDialog } from "@/components/cadastros/PendingSkuDeParaAcceptDialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -55,11 +58,12 @@ function ListaTab() {
   });
 
   const utils = trpc.useUtils();
-  const { data: deParaList, isLoading } = trpc.deParaCodigos.list.useQuery();
+  const { data: deParaList, isLoading } = trpc.deParaCodigos.listEnriched.useQuery();
 
   const createMutation = trpc.deParaCodigos.create.useMutation({
     onSuccess: () => {
       utils.deParaCodigos.list.invalidate();
+      utils.deParaCodigos.listEnriched.invalidate();
       toast.success("De-Para criado com sucesso!");
       resetForm();
     },
@@ -69,6 +73,7 @@ function ListaTab() {
   const updateMutation = trpc.deParaCodigos.update.useMutation({
     onSuccess: () => {
       utils.deParaCodigos.list.invalidate();
+      utils.deParaCodigos.listEnriched.invalidate();
       toast.success("De-Para atualizado com sucesso!");
       resetForm();
     },
@@ -78,6 +83,7 @@ function ListaTab() {
   const deleteMutation = trpc.deParaCodigos.delete.useMutation({
     onSuccess: () => {
       utils.deParaCodigos.list.invalidate();
+      utils.deParaCodigos.listEnriched.invalidate();
       toast.success("De-Para excluído com sucesso!");
     },
     onError: (error) => toast.error(error.message),
@@ -110,20 +116,36 @@ function ListaTab() {
     setIsOpen(true);
   };
 
-  const filteredList = deParaList?.filter(item => 
-    item.skuAntigo.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    item.skuNovo.toLowerCase().includes(searchTerm.toLowerCase())
-  ) || [];
+  const filteredList =
+    deParaList?.filter(item =>
+      textMatchesSearch(
+        [item.skuAntigo, item.skuNovo, item.descricaoAntigo, item.descricaoNovo]
+          .filter(Boolean)
+          .join(" "),
+        searchTerm
+      )
+    ) || [];
 
   const handleExport = () => {
     if (!deParaList || deParaList.length === 0) {
       toast.error("Nenhum dado para exportar");
       return;
     }
-    exportToCsv(deParaList, "de-para-codigos", [
-      { key: "skuAntigo", title: "SKU Antigo" },
-      { key: "skuNovo", title: "SKU Novo" },
-    ]);
+    exportToCsv(
+      filteredList.map(r => ({
+        skuAntigo: r.skuAntigo,
+        descricaoAntigo: r.descricaoAntigo ?? "—",
+        skuNovo: r.skuNovo,
+        descricaoNovo: r.descricaoNovo ?? "—",
+      })),
+      "de-para-codigos",
+      [
+        { key: "skuAntigo", title: "SKU Antigo" },
+        { key: "descricaoAntigo", title: "Descrição (antigo)" },
+        { key: "skuNovo", title: "SKU Novo" },
+        { key: "descricaoNovo", title: "Descrição (novo)" },
+      ]
+    );
     toast.success("Arquivo exportado com sucesso!");
   };
 
@@ -187,7 +209,7 @@ function ListaTab() {
           <div className="relative">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
-              placeholder="Buscar por SKU..."
+              placeholder="Buscar por SKU ou descrição..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="pl-10"
@@ -197,28 +219,37 @@ function ListaTab() {
         {isLoading ? (
           <div className="flex justify-center py-8"><Loader2 className="h-8 w-8 animate-spin" /></div>
         ) : (
+          <div className="overflow-x-auto rounded-md border">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>SKU Antigo</TableHead>
-                <TableHead></TableHead>
-                <TableHead>SKU Novo</TableHead>
+                <TableHead className="min-w-[120px]">SKU Antigo</TableHead>
+                <TableHead className="min-w-[200px]">Descrição (antigo)</TableHead>
+                <TableHead className="w-10"></TableHead>
+                <TableHead className="min-w-[120px]">SKU Novo</TableHead>
+                <TableHead className="min-w-[200px]">Descrição (novo)</TableHead>
                 <TableHead className="text-right">Ações</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {filteredList.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={4} className="text-center text-muted-foreground">
+                  <TableCell colSpan={6} className="text-center text-muted-foreground">
                     {searchTerm ? "Nenhum resultado encontrado" : "Nenhum mapeamento cadastrado"}
                   </TableCell>
                 </TableRow>
               ) : (
                 filteredList.map((item) => (
                   <TableRow key={item.id}>
-                    <TableCell className="font-mono">{item.skuAntigo}</TableCell>
+                    <TableCell className="font-mono text-sm">{item.skuAntigo}</TableCell>
+                    <TableCell className="max-w-xs whitespace-normal text-sm text-muted-foreground">
+                      {item.descricaoAntigo || "—"}
+                    </TableCell>
                     <TableCell className="text-center"><ArrowRight className="h-4 w-4 text-muted-foreground" /></TableCell>
-                    <TableCell className="font-mono">{item.skuNovo}</TableCell>
+                    <TableCell className="font-mono text-sm">{item.skuNovo}</TableCell>
+                    <TableCell className="max-w-xs whitespace-normal text-sm text-muted-foreground">
+                      {item.descricaoNovo || "—"}
+                    </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
                         <Button variant="ghost" size="icon" onClick={() => handleEdit(item)}>
@@ -252,6 +283,7 @@ function ListaTab() {
               )}
             </TableBody>
           </Table>
+          </div>
         )}
       </CardContent>
     </Card>
@@ -383,17 +415,58 @@ function ImportarTab() {
 
 function SkusNovosTab() {
   const utils = trpc.useUtils();
+  const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [acceptDialogSkus, setAcceptDialogSkus] = useState<
+    Array<{ codMaterial: string; marca?: string | null; descricaoItem?: string | null }> | null
+  >(null);
+
   const { data: pendingSkus = [], isLoading } = trpc.cadastrosSistema.pendingSkusFromFaturamento.useQuery();
-  const acceptMutation = trpc.cadastrosSistema.acceptPendingSku.useMutation({
-    onSuccess: () => {
+
+  const acceptMutation = trpc.cadastrosSistema.acceptPendingSkusWithDePara.useMutation({
+    onSuccess: result => {
       utils.cadastrosSistema.pendingSkusFromFaturamento.invalidate();
       utils.produtos.list.invalidate();
-      toast.success("SKU aceito no cadastro de produtos");
+      utils.deParaCodigos.listEnriched.invalidate();
+      setSelected(new Set());
+      setAcceptDialogSkus(null);
+      toast.success(
+        `${result.criados} SKU(s) cadastrados` +
+          (result.deParaCriados ? ` · ${result.deParaCriados} De-Para` : "")
+      );
     },
     onError: error => toast.error(error.message),
   });
-  const preview = pendingSkus.slice(0, 80);
-  const acceptingCod = acceptMutation.isPending ? acceptMutation.variables?.codMaterial : null;
+
+  const filtered = useMemo(() => {
+    const term = search.trim();
+    if (!term) return pendingSkus;
+    return pendingSkus.filter(sku =>
+      textMatchesSearch(
+        [sku.codMaterial, sku.marca, sku.descricaoItem].filter(Boolean).join(" "),
+        term
+      )
+    );
+  }, [pendingSkus, search]);
+
+  const allFilteredSelected =
+    filtered.length > 0 && filtered.every(s => selected.has(s.codMaterial));
+
+  const openAccept = (mode: "single" | "selected" | "filtered", sku?: (typeof pendingSkus)[0]) => {
+    if (mode === "single" && sku) {
+      setAcceptDialogSkus([sku]);
+      return;
+    }
+    const list =
+      mode === "selected"
+        ? pendingSkus.filter(s => selected.has(s.codMaterial))
+        : filtered;
+    if (!list.length) {
+      toast.error("Nenhum SKU para aceitar.");
+      return;
+    }
+    setAcceptDialogSkus(list);
+  };
 
   return (
     <Card>
@@ -403,10 +476,40 @@ function SkusNovosTab() {
           {!isLoading && <Badge variant="secondary">{pendingSkus.length}</Badge>}
         </CardTitle>
         <CardDescription>
-          SKUs que estão em Bases/Faturamento e ainda não estão em Produtos. Aceitar inclui o código no cadastro.
+          SKUs que estão em Bases/Faturamento e ainda não estão em Produtos. Aceitar abre o De-Para sugerido por
+          similaridade de descrição.
         </CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-3">
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="space-y-1">
+            <Label htmlFor="depara-pending-search">Filtrar lista</Label>
+            <Input
+              id="depara-pending-search"
+              className="w-72"
+              placeholder="Código, marca ou descrição…"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+            />
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={!filtered.length || acceptMutation.isPending}
+            onClick={() => openAccept("filtered")}
+          >
+            Aceitar todos (filtro atual)
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            disabled={!selected.size || acceptMutation.isPending}
+            onClick={() => openAccept("selected")}
+          >
+            Aceitar selecionados ({selected.size})
+          </Button>
+        </div>
         {isLoading ? (
           <div className="flex justify-center py-8">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -418,6 +521,26 @@ function SkusNovosTab() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-10">
+                    <Checkbox
+                      checked={allFilteredSelected}
+                      onCheckedChange={checked => {
+                        if (!checked) {
+                          setSelected(prev => {
+                            const next = new Set(prev);
+                            filtered.forEach(s => next.delete(s.codMaterial));
+                            return next;
+                          });
+                          return;
+                        }
+                        setSelected(prev => {
+                          const next = new Set(prev);
+                          filtered.forEach(s => next.add(s.codMaterial));
+                          return next;
+                        });
+                      }}
+                    />
+                  </TableHead>
                   <TableHead>Código</TableHead>
                   <TableHead>Marca</TableHead>
                   <TableHead>Descrição</TableHead>
@@ -425,8 +548,21 @@ function SkusNovosTab() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {preview.map(sku => (
+                {filtered.map(sku => (
                   <TableRow key={sku.codMaterial}>
+                    <TableCell>
+                      <Checkbox
+                        checked={selected.has(sku.codMaterial)}
+                        onCheckedChange={checked => {
+                          setSelected(prev => {
+                            const next = new Set(prev);
+                            if (checked) next.add(sku.codMaterial);
+                            else next.delete(sku.codMaterial);
+                            return next;
+                          });
+                        }}
+                      />
+                    </TableCell>
                     <TableCell className="font-mono text-sm">{sku.codMaterial}</TableCell>
                     <TableCell>{sku.marca || "—"}</TableCell>
                     <TableCell className="max-w-md truncate">{sku.descricaoItem || "—"}</TableCell>
@@ -435,26 +571,25 @@ function SkusNovosTab() {
                         size="sm"
                         variant="outline"
                         disabled={acceptMutation.isPending}
-                        onClick={() => acceptMutation.mutate({ codMaterial: sku.codMaterial })}
+                        onClick={() => openAccept("single", sku)}
                       >
-                        {acceptingCod === sku.codMaterial ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          "Aceitar"
-                        )}
+                        Aceitar
                       </Button>
                     </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
-            {pendingSkus.length > preview.length && (
-              <p className="border-t px-3 py-2 text-xs text-muted-foreground">
-                Exibindo {preview.length} de {pendingSkus.length} SKUs
-              </p>
-            )}
           </div>
         )}
+        <PendingSkuDeParaAcceptDialog
+          open={acceptDialogSkus !== null}
+          onOpenChange={open => !open && setAcceptDialogSkus(null)}
+          skus={acceptDialogSkus ?? []}
+          mode="depara"
+          isPending={acceptMutation.isPending}
+          onConfirm={items => acceptMutation.mutate({ items })}
+        />
       </CardContent>
     </Card>
   );
