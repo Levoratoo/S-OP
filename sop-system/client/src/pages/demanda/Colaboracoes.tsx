@@ -24,6 +24,7 @@ import { ColaboracaoResumos } from "./ColaboracaoResumos";
 import { PvMtoPivotGrade } from "./PvMtoPivotGrade";
 import { cicloHorizonCalendar } from "@shared/ciclo-horizon";
 import { CrmExcelLayoutError, parseCrmExcel } from "./parse-crm-excel";
+import { PipedriveCrmSync } from "./PipedriveCrmSync";
 
 type PlanoColab = "MTS" | "PV_MTO" | "CRM";
 type GradeAba = PlanoColab | "CONSOLIDADO";
@@ -513,7 +514,7 @@ export default function Colaboracoes() {
                         : abaGrade === "PV_MTO"
                           ? "Pivot PV MTO: uma linha por pedido × SKU × preço, com quantidades por mês de entrega (Liberado + PRG)"
                           : abaGrade === "CRM"
-                            ? "Cards do comercial. Importe o Excel para preencher a grade deste ciclo."
+                            ? "Cards do comercial. Importe o Excel ou sincronize o Pipedrive para preencher a grade deste ciclo."
                             : "MTS: total 12M do script redistribuído por fator % do SKU (badge “Fator %”); sem fator, sazonalidade histórica. Colab do vendedor sobrepõe a estatística (e*)."}
                     </CardDescription>
                   </div>
@@ -559,27 +560,31 @@ export default function Colaboracoes() {
                       ))}
                       <TabsTrigger value="CONSOLIDADO">Consolidado</TabsTrigger>
                     </TabsList>
-                    {abaGrade === "CRM" && ciclo?.status !== "FECHADO" && (
-                      <Label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-md border bg-background px-3 text-sm font-medium hover:bg-accent">
-                        {importCrm.isPending ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <Upload className="h-4 w-4" />
-                        )}
-                        Importar Excel
-                        <input
-                          type="file"
-                          accept=".xlsx,.xls,.csv"
-                          className="hidden"
-                          disabled={importCrm.isPending}
-                          onChange={event => {
-                            const file = event.target.files?.[0];
-                            if (file) void handleCrmFile(file);
-                            event.target.value = "";
-                          }}
-                        />
-                      </Label>
-                    )}
+                    {abaGrade === "CRM" && selectedCicloId && ciclo ? (
+                      <PipedriveCrmSync cicloId={selectedCicloId} status={ciclo.status}>
+                        {ciclo.status !== "FECHADO" ? (
+                          <Label className="inline-flex h-9 w-full cursor-pointer items-center justify-center gap-2 rounded-md border bg-background px-3 text-sm font-medium hover:bg-accent sm:w-auto">
+                            {importCrm.isPending ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Upload className="h-4 w-4" />
+                            )}
+                            Importar Excel
+                            <input
+                              type="file"
+                              accept=".xlsx,.xls,.csv"
+                              className="hidden"
+                              disabled={importCrm.isPending}
+                              onChange={event => {
+                                const file = event.target.files?.[0];
+                                if (file) void handleCrmFile(file);
+                                event.target.value = "";
+                              }}
+                            />
+                          </Label>
+                        ) : null}
+                      </PipedriveCrmSync>
+                    ) : null}
                   </div>
                   {PLANOS.map(p => (
                     <TabsContent key={p} value={p} className="mt-4">
