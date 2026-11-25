@@ -74,6 +74,46 @@ import {
 } from "./services/ciclo-colab-extras";
 import { syncCarteiraFromErp } from "./services/carteira-sql-sync";
 import { syncEstatisticaIaCadastros } from "./services/sync-estatistica-ia";
+import { carregarConfigPipedrive } from "@shared/pipedrive-config";
+import { PipedriveClient } from "./services/pipedrive/client";
+import { extrairPipedrive } from "./services/pipedrive/extract";
+import { criarRepositorioPipedrive } from "./services/pipedrive/repositorio";
+import {
+  desfazerPipedrive,
+  PipedriveSyncError,
+  previaPipedrive,
+  statusPipedrive,
+  syncPipedrive,
+} from "./services/pipedrive/sync";
+
+function erroPipedrive(err: unknown): never {
+  if (err instanceof PipedriveSyncError) {
+    const code = err.codigo === "CICLO_AUSENTE" ? "NOT_FOUND" : "PRECONDITION_FAILED";
+    throw new TRPCError({ code, message: err.message });
+  }
+  throw new TRPCError({
+    code: "BAD_GATEWAY",
+    message: err instanceof Error ? err.message : "Falha ao consultar o Pipedrive.",
+  });
+}
+
+function runtimePipedrive() {
+  const config = carregarConfigPipedrive();
+  const client = new PipedriveClient({
+    baseUrl: config.apiBase,
+    token: config.token,
+    log: mensagem => console.warn(mensagem),
+  });
+  return {
+    config,
+    repo: criarRepositorioPipedrive(),
+    extrair: () => extrairPipedrive(client, config),
+  };
+}
+
+function usuarioAtual(user: { email?: string | null; name?: string | null } | null | undefined) {
+  return user?.email || user?.name || "usuario";
+}
 
 function resolveDadosSistemaDir(explicit?: string): string {
   if (explicit?.trim()) return path.resolve(explicit.trim());
@@ -1041,6 +1081,58 @@ export const appRouter = router({
         assertCrmExcelHeaders(input.headers);
         assertCrmImportRows(input.rows);
         return importCrmParaCiclo(input.cicloId, input.rows);
+      }),
+
+    pipedriveStatus: protectedProcedure
+      .input(z.object({ cicloId: z.number() }))
+      .query(async ({ input }) => {
+        const runtime = runtimePipedrive();
+        return statusPipedrive({ config: runtime.config, repo: runtime.repo, cicloId: input.cicloId });
+      }),
+
+    previewPipedrive: protectedProcedure
+      .input(z.object({ cicloId: z.number() }))
+      .mutation(async ({ input }) => {
+        const runtime = runtimePipedrive();
+        try {
+          return await previaPipedrive({
+            config: runtime.config,
+            repo: runtime.repo,
+            extrair: runtime.extrair,
+            cicloId: input.cicloId,
+          });
+        } catch (err) {
+          erroPipedrive(err);
+        }
+      }),
+
+    syncPipedrive: protectedProcedure
+      .input(z.object({ cicloId: z.number(), previewHash: z.string().min(16) }))
+      .mutation(async ({ input, ctx }) => {
+        const runtime = runtimePipedrive();
+        try {
+          return await syncPipedrive({
+            config: runtime.config,
+            repo: runtime.repo,
+            extrair: runtime.extrair,
+            cicloId: input.cicloId,
+            previewHash: input.previewHash,
+            usuario: usuarioAtual(ctx.user),
+          });
+        } catch (err) {
+          erroPipedrive(err);
+        }
+      }),
+
+    undoLastPipedriveSync: protectedProcedure
+      .input(z.object({ cicloId: z.number() }))
+      .mutation(async ({ input }) => {
+        const runtime = runtimePipedrive();
+        try {
+          return await desfazerPipedrive({ repo: runtime.repo, cicloId: input.cicloId });
+        } catch (err) {
+          erroPipedrive(err);
+        }
       }),
 
     fecharCiclo: protectedProcedure

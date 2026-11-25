@@ -853,3 +853,23 @@ export const cicloComercialItens = mysqlTable("ciclo_comercial_itens", {
 
 export type CicloComercialItem = typeof cicloComercialItens.$inferSelect;
 export type InsertCicloComercialItem = typeof cicloComercialItens.$inferInsert;
+
+/** Auditoria e snapshot da carga CRM anterior a cada sincronização do Pipedrive. */
+export const cicloCrmPipedriveSync = mysqlTable("ciclo_crm_pipedrive_sync", {
+  id: int("id").autoincrement().primaryKey(),
+  cicloId: int("cicloId").notNull(),
+  usuario: varchar("usuario", { length: 320 }),
+  previewHash: varchar("previewHash", { length: 64 }).notNull(),
+  negocios: int("negocios").default(0).notNull(),
+  linhas: int("linhas").default(0).notNull(),
+  quantidade: decimal("quantidade", { precision: 18, scale: 2 }).default("0").notNull(),
+  valor: decimal("valor", { precision: 18, scale: 2 }).default("0").notNull(),
+  alertasQtd: int("alertasQtd").default(0).notNull(),
+  totaisJson: text("totaisJson").notNull(),
+  snapshotJson: text("snapshotJson").notNull(),
+  desfeitoEm: timestamp("desfeitoEm"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type CicloCrmPipedriveSync = typeof cicloCrmPipedriveSync.$inferSelect;
+export type InsertCicloCrmPipedriveSync = typeof cicloCrmPipedriveSync.$inferInsert;

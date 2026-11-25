@@ -2,7 +2,7 @@
  * Completa o arquivo de Colaboração Comercial (Passo a Passo):
  * PV-MTO, CRM, PVxCRM, Resumo R$, Base Ciclo, MTO Variação, RFS, AA/Prev/Real.
  */
-import { and, eq, gte, lte, sql } from "drizzle-orm";
+import { and, eq, gte, lte, sql, type SQL } from "drizzle-orm";
 import {
   getCicloComercial,
   getDb,
@@ -23,7 +23,11 @@ import {
   type InsertCicloComercialItem,
 } from "../../drizzle/schema";
 import { loadDeParaMap, resolveCodigoAtual } from "./de-para-map";
-import { isCrmSkuCodigoValido } from "@shared/crm-import-helpers";
+import {
+  apostaGenericaSemOrcamentoDeveBloquear,
+  isCrmSkuCodigoValido,
+  textoPareceSkuGenerico,
+} from "@shared/crm-import-helpers";
 import { ensureProdutoFromCrmImport } from "./crm-produto-auto";
 import { carteiraPvAbertoWhere } from "./carteira-pv-aberto";
 import {
@@ -514,7 +518,47 @@ function parseCrmCompetencia(raw: string | undefined): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-export async function importCrmParaCiclo(cicloId: number, rows: CrmImportRow[]) {
+export type ImportCrmOptions = {
+  /**
+   * Pipedrive: aposta genérica sem número de cálculo entra com alerta.
+   * O Excel continua bloqueando quando a opção não é passada.
+   */
+  permitirApostaGenericaSemOrcamento?: boolean;
+  /** Devolve os itens e não grava. A sync do Pipedrive grava na própria transação. */
+  somenteMontar?: boolean;
+};
+
+export async function substituirCargaCrmDoCiclo(
+  runner: {
+    delete: (table: typeof cicloComercialItens) => {
+      where: (clause: SQL | undefined) => PromiseLike<unknown>;
+    };
+    insert: (table: typeof cicloComercialItens) => {
+      values: (vals: InsertCicloComercialItem[]) => PromiseLike<unknown>;
+    };
+  },
+  cicloId: number,
+  itens: InsertCicloComercialItem[]
+) {
+  await runner
+    .delete(cicloComercialItens)
+    .where(
+      and(
+        eq(cicloComercialItens.cicloId, cicloId),
+        eq(cicloComercialItens.planoColab, "CRM"),
+        eq(cicloComercialItens.origem, "CRM")
+      )
+    );
+  for (let i = 0; i < itens.length; i += 200) {
+    await runner.insert(cicloComercialItens).values(itens.slice(i, i + 200));
+  }
+}
+
+export async function importCrmParaCiclo(
+  cicloId: number,
+  rows: CrmImportRow[],
+  options?: ImportCrmOptions
+) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const ciclo = await getCicloComercial(cicloId);
@@ -654,16 +698,24 @@ export async function importCrmParaCiclo(cicloId: number, rows: CrmImportRow[]) 
         continue;
       }
     }
-    const generic =
-      /generico|genérico/i.test(agg.sku) ||
-      /generico|genérico/i.test(prod.descricao || "");
+    const generic = textoPareceSkuGenerico(agg.sku, prod.descricao);
     if (generic && agg.crmTipo === "COLABORACAO") {
       erros.push(`${agg.sku}: colaboração não pode usar SKU genérico; classifique como Aposta`);
       continue;
     }
-    if (generic && agg.crmTipo === "APOSTA" && agg.orcamento <= 0) {
+    if (
+      apostaGenericaSemOrcamentoDeveBloquear(
+        generic,
+        agg.crmTipo,
+        agg.orcamento,
+        options?.permitirApostaGenericaSemOrcamento
+      )
+    ) {
       erros.push(`${agg.sku}: aposta com SKU genérico exige orçamento`);
       continue;
+    }
+    if (generic && agg.crmTipo === "APOSTA" && agg.orcamento <= 0) {
+      avisos.push(`${agg.sku}: aposta com SKU genérico sem número de cálculo (importada com alerta)`);
     }
     const meses = emptyMeses();
     let total = 0;
@@ -707,38 +759,21 @@ export async function importCrmParaCiclo(cicloId: number, rows: CrmImportRow[]) 
     });
   }
 
-  if (!itens.length) {
-    return {
-      itensCriados: 0,
-      skusCriados,
-      erros: erros.slice(0, 100),
-      avisos: avisos.slice(0, 50),
-      foraHorizonte,
-    };
-  }
-
-  await db.transaction(async tx => {
-    await tx
-      .delete(cicloComercialItens)
-      .where(
-        and(
-          eq(cicloComercialItens.cicloId, cicloId),
-          eq(cicloComercialItens.planoColab, "CRM"),
-          eq(cicloComercialItens.origem, "CRM")
-        )
-      );
-    for (let i = 0; i < itens.length; i += 200) {
-      await tx.insert(cicloComercialItens).values(itens.slice(i, i + 200));
-    }
-  });
-
-  return {
+  const resumo = {
     itensCriados: itens.length,
     skusCriados,
     erros: erros.slice(0, 100),
     avisos: avisos.slice(0, 50),
     foraHorizonte,
+    ...(options?.somenteMontar ? { itens } : {}),
   };
+  if (!itens.length || options?.somenteMontar) return resumo;
+
+  await db.transaction(async tx => {
+    await substituirCargaCrmDoCiclo(tx, cicloId, itens);
+  });
+
+  return resumo;
 }
 
 export async function getPvVsCrmDetalhado(cicloId: number) {
