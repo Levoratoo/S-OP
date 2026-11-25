@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { exportToCsv } from "@/lib/exportCsv";
 import { Badge } from "@/components/ui/badge";
 import { Download, Info } from "lucide-react";
@@ -150,8 +150,8 @@ export function PvMtoPivotTable({
           Exportar
         </Button>
       </div>
-      <div className="w-full min-w-0 max-w-full overflow-auto rounded-md border max-h-[70vh]">
-        <Table className="min-w-[1100px] text-sm">
+      <div className="w-full min-w-0 max-w-full max-h-[70vh] overflow-x-auto overflow-y-auto rounded-md border">
+        <table className="min-w-[1100px] w-full caption-bottom border-separate border-spacing-0 text-sm">
           <TableHeader>
             <TableRow className="bg-sky-800 hover:bg-sky-800">
               <TableHead colSpan={fixedCols} className="sticky left-0 z-20 bg-sky-800 text-white font-semibold" />
@@ -188,7 +188,7 @@ export function PvMtoPivotTable({
               <TableHead className="text-white text-right">Total</TableHead>
               <TableHead className="text-white text-right">R$ Total</TableHead>
             </TableRow>
-            <TableRow className="bg-sky-100/80 dark:bg-sky-950/40">
+            <TableRow className="bg-sky-100 dark:bg-sky-950">
               <TableHead className="sticky left-0 z-30 bg-sky-100 p-1 dark:bg-sky-950">
                 <Input className="h-7 text-xs" placeholder="Filtrar" value={fMarca} onChange={e => setFMarca(e.target.value)} />
               </TableHead>
@@ -230,8 +230,8 @@ export function PvMtoPivotTable({
             ) : (
               rows.map((row, idx) => (
                 <TableRow key={`${row.numPedido}-${row.codItem}-${row.precoUnitario}-${idx}`}>
-                  <TableCell className="sticky left-0 z-10 bg-background font-medium">{row.marca || "—"}</TableCell>
-                  <TableCell className="sticky left-[88px] z-10 bg-background font-mono text-xs">
+                  <TableCell className="sticky left-0 z-20 bg-white font-medium dark:bg-slate-950">{row.marca || "—"}</TableCell>
+                  <TableCell className="sticky left-[88px] z-20 bg-white font-mono text-xs dark:bg-slate-950">
                     <div className="flex flex-wrap items-center gap-1">
                       <span>{row.codItem}</span>
                       {row.semCadastro ? (
@@ -287,7 +287,7 @@ export function PvMtoPivotTable({
               </TableRow>
             )}
           </TableBody>
-        </Table>
+        </table>
       </div>
     </div>
   );

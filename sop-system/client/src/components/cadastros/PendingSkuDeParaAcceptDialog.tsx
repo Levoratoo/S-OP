@@ -127,7 +127,7 @@ export function PendingSkuDeParaAcceptDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] w-[95vw] max-w-6xl overflow-y-auto">
+      <DialogContent className="max-h-[90vh] w-[95vw] max-w-6xl overflow-y-auto sm:max-w-6xl">
         <DialogHeader>
           <DialogTitle>Substituição De-Para (SKU antigo → novo)</DialogTitle>
           <DialogDescription>
