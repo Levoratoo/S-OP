@@ -1,11 +1,19 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { textMatchesSearch } from "@shared/text-search";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
@@ -17,22 +25,154 @@ import { exportToCsv } from "@/lib/exportCsv";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
 
+function IncludePendingMarcasDialog({
+  open,
+  onOpenChange,
+  marcas,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  marcas: Array<{ nome: string; gestorSugerido?: string | null }>;
+}) {
+  const utils = trpc.useUtils();
+  const { data: gestores = [] } = trpc.gestores.list.useQuery();
+  const [rows, setRows] = useState<Array<{ nome: string; gestorId: number | null }>>([]);
+  const [bulkGestorId, setBulkGestorId] = useState<string>("");
+
+  useEffect(() => {
+    if (!open) return;
+    setRows(
+      marcas.map(m => {
+        const sug = m.gestorSugerido?.trim();
+        const g = sug
+          ? gestores.find(x => x.nome.trim().toLowerCase() === sug.toLowerCase())
+          : undefined;
+        return { nome: m.nome, gestorId: g?.id ?? null };
+      })
+    );
+    setBulkGestorId("");
+  }, [open, marcas, gestores]);
+
+  const mutation = trpc.cadastrosSistema.acceptPendingMarcasWithGestores.useMutation({
+    onSuccess: result => {
+      toast.success(
+        `${result.created} marca(s) criada(s) · ${result.vinculos} vínculo(s)` +
+          (result.semGestor ? ` · ${result.semGestor} sem gestor` : "")
+      );
+      if (result.semGestor > 0) {
+        toast.message(`${result.semGestor} marca(s) incluída(s) sem vínculo de gestor.`);
+      }
+      utils.cadastrosSistema.pendingMarcasFromFaturamento.invalidate();
+      utils.marcas.list.invalidate();
+      utils.gestorMarca.list.invalidate();
+      onOpenChange(false);
+    },
+    onError: e => toast.error(e.message),
+  });
+
+  const applyBulk = () => {
+    const id = Number(bulkGestorId);
+    if (!id) return;
+    setRows(prev => prev.map(r => ({ ...r, gestorId: id })));
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Incluir marcas pendentes</DialogTitle>
+          <DialogDescription>
+            Associe um gestor a cada marca antes de incluir no cadastro. Marcas sem gestor também podem
+            ser incluídas.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-wrap items-end gap-2 pb-2">
+          <div className="flex-1 min-w-[200px] space-y-1">
+            <Label>Aplicar o mesmo gestor a todas</Label>
+            <Select value={bulkGestorId} onValueChange={setBulkGestorId}>
+              <SelectTrigger>
+                <SelectValue placeholder="Escolha o gestor…" />
+              </SelectTrigger>
+              <SelectContent>
+                {gestores.map(g => (
+                  <SelectItem key={g.id} value={String(g.id)}>
+                    {g.nome}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <Button type="button" size="sm" variant="secondary" onClick={applyBulk} disabled={!bulkGestorId}>
+            Aplicar a todas
+          </Button>
+        </div>
+        <div className="rounded-md border overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Marca</TableHead>
+                <TableHead>Gestor</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((row, i) => (
+                <TableRow key={row.nome}>
+                  <TableCell className="font-medium">{row.nome}</TableCell>
+                  <TableCell>
+                    <Select
+                      value={row.gestorId != null ? String(row.gestorId) : "__none__"}
+                      onValueChange={v =>
+                        setRows(prev =>
+                          prev.map((r, idx) =>
+                            idx === i ? { ...r, gestorId: v === "__none__" ? null : Number(v) } : r
+                          )
+                        )
+                      }
+                    >
+                      <SelectTrigger className="h-9">
+                        <SelectValue placeholder="Sem gestor" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">Sem gestor</SelectItem>
+                        {gestores.map(g => (
+                          <SelectItem key={g.id} value={String(g.id)}>
+                            {g.nome}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            Cancelar
+          </Button>
+          <Button
+            type="button"
+            disabled={mutation.isPending}
+            onClick={() => mutation.mutate({ items: rows })}
+          >
+            {mutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            Confirmar inclusão
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function GestorMarca() {
   const [activeTab, setActiveTab] = useState("relacionamento");
-  const [acceptingMarcas, setAcceptingMarcas] = useState(false);
 
   const utils = trpc.useUtils();
   const { data: pendingMarcas = [] } =
     trpc.cadastrosSistema.pendingMarcasFromFaturamento.useQuery();
 
-  const acceptPendingMarcasMutation = trpc.cadastrosSistema.acceptPendingMarcas.useMutation({
-    onSuccess: result => {
-      toast.success(`${result.created} marca(s) incluída(s) no cadastro`);
-      utils.cadastrosSistema.pendingMarcasFromFaturamento.invalidate();
-      utils.marcas.list.invalidate();
-    },
-    onError: error => toast.error(error.message),
-  });
+  const [includeMarcasOpen, setIncludeMarcasOpen] = useState(false);
 
   return (
     <div className="p-6 space-y-6">
@@ -70,23 +210,14 @@ export default function GestorMarca() {
                 <span className="text-xs text-amber-800">+{pendingMarcas.length - 24}</span>
               )}
             </div>
-            <Button
-              size="sm"
-              disabled={acceptingMarcas || acceptPendingMarcasMutation.isPending}
-              onClick={async () => {
-                setAcceptingMarcas(true);
-                try {
-                  await acceptPendingMarcasMutation.mutateAsync({});
-                } finally {
-                  setAcceptingMarcas(false);
-                }
-              }}
-            >
-              {(acceptingMarcas || acceptPendingMarcasMutation.isPending) && (
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-              )}
+            <Button size="sm" onClick={() => setIncludeMarcasOpen(true)}>
               Incluir marcas no cadastro ({pendingMarcas.length})
             </Button>
+            <IncludePendingMarcasDialog
+              open={includeMarcasOpen}
+              onOpenChange={setIncludeMarcasOpen}
+              marcas={pendingMarcas}
+            />
           </AlertDescription>
         </Alert>
       )}

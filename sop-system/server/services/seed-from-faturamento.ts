@@ -337,7 +337,8 @@ export async function listPendingSkusFromFaturamento(): Promise<PendingSkuFromFa
 }
 
 export async function acceptPendingSkuFromFaturamento(codMaterial: string) {
-  const result = await acceptPendingSkusFromFaturamentoBatch([codMaterial]);
+  const { acceptPendingSkusWithDePara } = await import("./pending-sku-accept");
+  const result = await acceptPendingSkusWithDePara([{ codMaterial, skuAntigo: null }]);
   if (result.erros.length > 0) {
     throw new Error(result.erros[0]!.message);
   }
@@ -361,11 +362,22 @@ export type AcceptPendingSkusBatchResult = {
   }>;
 };
 
+export type AcceptPendingSkuItem = { codMaterial: string; skuAntigo?: string | null };
+
 export async function acceptPendingSkusFromFaturamentoBatch(
-  codMaterials: string[]
+  items: string[] | AcceptPendingSkuItem[],
+  opts?: { skipIdentityDePara?: boolean }
 ): Promise<AcceptPendingSkusBatchResult> {
+  const normalizedItems: AcceptPendingSkuItem[] = items.map(item =>
+    typeof item === "string" ? { codMaterial: item } : item
+  );
   const codes = Array.from(
-    new Set(codMaterials.map(c => clean(c)).filter((c): c is string => Boolean(c)))
+    new Set(normalizedItems.map(i => clean(i.codMaterial)).filter((c): c is string => Boolean(c)))
+  );
+  const antigoByCod = new Map(
+    normalizedItems
+      .map(i => [clean(i.codMaterial)?.toUpperCase() ?? "", clean(i.skuAntigo)] as const)
+      .filter(([k]) => Boolean(k))
   );
   if (codes.length === 0) {
     return { criados: 0, jaExistiam: 0, erros: [], detalhes: [] };
@@ -435,12 +447,23 @@ export async function acceptPendingSkusFromFaturamentoBatch(
       existingByCode.set(cod, produtoId);
 
       let deParaCriado = false;
-      if (!deParaCodes.has(cod)) {
+      const skuAntigoRef = antigoByCod.get(cod);
+      if (
+        !opts?.skipIdentityDePara &&
+        skuAntigoRef &&
+        skuAntigoRef.toUpperCase() !== cod &&
+        skuAntigoRef.toUpperCase() !== clean(row.codMaterial)!.toUpperCase()
+      ) {
+        const { validateDeParaEdge, inheritProjetarFromAntigo } = await import("./de-para-validate");
+        const others = (await tx.select().from(deParaCodigos)).map(r => ({
+          skuAntigo: r.skuAntigo,
+          skuNovo: r.skuNovo,
+        }));
+        await validateDeParaEdge(skuAntigoRef.toUpperCase(), clean(row.codMaterial)!, others);
         await tx.insert(deParaCodigos).values({
-          skuAntigo: cod,
+          skuAntigo: skuAntigoRef.toUpperCase(),
           skuNovo: clean(row.codMaterial)!,
         });
-        deParaCodes.add(cod);
         deParaCriado = true;
       }
 
@@ -544,9 +567,47 @@ export async function acceptPendingMarcasFromFaturamento(nomes?: string[]) {
     ? new Set(nomes.map(nome => nome.trim().toLowerCase()).filter(Boolean))
     : null;
   const toCreate = pending.filter(row => !wanted || wanted.has(row.nome.toLowerCase()));
-  if (toCreate.length === 0) return { created: 0 };
-  await db.createMarcasBatch(toCreate.map(row => ({ nome: row.nome, ativo: true })));
-  const { applyImportMapLinksForMarcaNomes } = await import("./gestor-marca-import-apply");
-  await applyImportMapLinksForMarcaNomes(toCreate.map(row => row.nome));
-  return { created: toCreate.length };
+  if (toCreate.length === 0) return { created: 0, vinculos: 0, semGestor: 0 };
+  return acceptPendingMarcasWithGestores(
+    toCreate.map(row => ({ nome: row.nome, gestorId: null as number | null }))
+  );
+}
+
+export type AcceptPendingMarcaInput = { nome: string; gestorId?: number | null };
+
+export async function acceptPendingMarcasWithGestores(items: AcceptPendingMarcaInput[]) {
+  if (!items.length) return { created: 0, vinculos: 0, semGestor: 0 };
+
+  const { applyImportMapLinkForMarcaNome } = await import("./gestor-marca-import-apply");
+
+  const existingMarcas = await db.listMarcas();
+  const existingGestores = await db.listGestores();
+  const gestorById = new Set(existingGestores.map(g => g.id));
+
+  let created = 0;
+  let vinculos = 0;
+  let semGestor = 0;
+
+  for (const item of items) {
+    const nome = item.nome.trim();
+    if (!nome) continue;
+    const already = existingMarcas.some(m => m.nome.trim().toLowerCase() === nome.toLowerCase());
+    if (already) continue;
+
+    const inserted = await db.createMarca({ nome, ativo: true });
+    const marcaId = Number(inserted.id);
+    created += 1;
+
+    const gestorId = item.gestorId ?? null;
+    if (gestorId != null && gestorById.has(gestorId)) {
+      await db.createGestorMarca({ marcaId, gestorId, ativo: true });
+      vinculos += 1;
+    } else {
+      const linked = await applyImportMapLinkForMarcaNome(nome);
+      if (linked) vinculos += 1;
+      else semGestor += 1;
+    }
+  }
+
+  return { created, vinculos, semGestor };
 }
