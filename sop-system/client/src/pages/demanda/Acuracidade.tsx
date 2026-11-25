@@ -14,6 +14,7 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { trpc } from "@/lib/trpc";
 import { Loader2, Target, TrendingUp, Gauge, BarChart3, Factory } from "lucide-react";
+import { isCicloSomenteLeitura } from "@shared/ciclo-status";
 
 const MESES = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
 
@@ -36,13 +37,20 @@ function formatPercentLegacy(value: number | null | undefined) {
 }
 
 export default function Acuracidade() {
-  const [fonte, setFonte] = useState<"snapshot" | "legado">("snapshot");
+  const [fonte, setFonte] = useState<"snapshot" | "legado">("legado");
   const [cicloId, setCicloId] = useState<number | null>(null);
   const { data: ciclos } = trpc.cicloComercial.list.useQuery();
   const cicloEscolhido = cicloId ?? ciclos?.[0]?.id ?? 0;
+  const cicloAtual = (ciclos ?? []).find(c => c.id === cicloEscolhido);
+  const statusComFoto = Boolean(cicloAtual && isCicloSomenteLeitura(cicloAtual.status));
+  const { data: foto } = trpc.cicloComercial.snapshot.useQuery(
+    { cicloId: cicloEscolhido },
+    { enabled: cicloEscolhido > 0 && statusComFoto }
+  );
+  const temFoto = Boolean(foto);
   const { data: acurSnap, isLoading: loadingSnap } = trpc.cicloComercial.acuracidadeSnapshot.useQuery(
     { cicloId: cicloEscolhido },
-    { enabled: fonte === "snapshot" && cicloEscolhido > 0, retry: false }
+    { enabled: fonte === "snapshot" && temFoto, retry: false }
   );
 
   const [anoInput, setAnoInput] = useState(String(new Date().getFullYear()));
@@ -197,8 +205,15 @@ export default function Acuracidade() {
           </Select>
         </div>
         {loadingSnap ? <Loader2 className="h-5 w-5 animate-spin" /> : null}
-        {acurSnap?.aviso ? <p className="text-sm text-amber-700">{acurSnap.aviso}</p> : null}
-        {acurSnap ? (
+        {!temFoto ? (
+          <p className="text-sm text-muted-foreground">
+            Este ciclo ainda não tem foto aprovada. A acuracidade do snapshot fica disponível depois de aprovar o ciclo.
+          </p>
+        ) : null}
+        {acurSnap && !acurSnap.temSnapshot ? (
+          <p className="text-sm text-muted-foreground">Sem snapshot aprovado para este ciclo.</p>
+        ) : null}
+        {acurSnap?.temSnapshot ? (
           <Card>
             <CardHeader>
               <CardTitle>WMAPE {acurSnap.wmape == null ? "—" : `${(acurSnap.wmape * 100).toFixed(1)}%`}</CardTitle>
@@ -231,9 +246,8 @@ export default function Acuracidade() {
               </Table>
             </CardContent>
           </Card>
-        ) : !loadingSnap ? (
-          <p className="text-sm text-muted-foreground">Sem snapshot aprovado para este ciclo.</p>
         ) : null}
+        {acurSnap?.aviso ? <p className="text-sm text-amber-700">{acurSnap.aviso}</p> : null}
       </div>
     );
   }

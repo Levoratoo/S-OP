@@ -1,3 +1,4 @@
+import { TRPCError } from "@trpc/server";
 import { sql } from "drizzle-orm";
 import { getCicloComercial, getDb } from "../db";
 import { cicloHorizonCalendar } from "@shared/ciclo-horizon";
@@ -16,14 +17,34 @@ function juntarItens(linhas: Array<{ tipo: string; payloadJson: string }>) {
     }) as Array<Record<string, unknown>>;
 }
 
-/** Previsão do snapshot aprovado × faturamento real. WMAPE e bias. */
+/** Previsão do snapshot aprovado × faturamento real. Sem foto, retorna vazio (não é erro). */
 export async function acuracidadeSnapshot(cicloId: number) {
+  const vazio = {
+    temSnapshot: false as const,
+    cicloId,
+    retroativo: false,
+    aviso: null as string | null,
+    wmape: null as number | null,
+    bias: null as number | null,
+    linhas: [] as Array<{
+      sku: string;
+      marca: string;
+      ano: number;
+      mes: number;
+      previsto: number;
+      real: number;
+    }>,
+  };
   const snap = await getLatestSnapshot(cicloId);
-  if (!snap) throw new Error("Este ciclo não tem snapshot aprovado.");
+  if (!snap) return vazio;
   const ciclo = await getCicloComercial(cicloId);
-  if (!ciclo) throw new Error("Ciclo não encontrado");
+  if (!ciclo) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Ciclo não encontrado." });
+  }
   const db = await getDb();
-  if (!db) throw new Error("Database not available");
+  if (!db) {
+    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
+  }
 
   const previsto = new Map<string, { sku: string; marca: string; ano: number; mes: number; qtd: number }>();
   for (const item of juntarItens(snap.linhas)) {
@@ -87,8 +108,9 @@ export async function acuracidadeSnapshot(cicloId: number) {
   const wmape = sumReal > 0 ? absErr / sumReal : null;
   const bias = sumReal > 0 ? (sumPrev - sumReal) / sumReal : null;
   return {
+    temSnapshot: true as const,
     cicloId,
-    retroativo: snap.retroativo,
+    retroativo: Boolean(snap.retroativo),
     aviso: snap.retroativo ? snap.comentario : null,
     wmape,
     bias,

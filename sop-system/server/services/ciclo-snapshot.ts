@@ -1,3 +1,4 @@
+import { TRPCError } from "@trpc/server";
 import { createHash } from "crypto";
 import { desc, eq } from "drizzle-orm";
 import { getDb, listCicloComercialItens, listDeParaCodigos } from "../db";
@@ -159,7 +160,18 @@ function juntarTipo(snap: { linhas: Array<{ tipo: string; payloadJson: string }>
 export async function compararCiclos(cicloA: number, cicloB: number) {
   const [a, b] = await Promise.all([getLatestSnapshot(cicloA), getLatestSnapshot(cicloB)]);
   if (!a || !b) {
-    throw new Error("Os dois ciclos precisam ter snapshot aprovado para comparar.");
+    const ciclosSemSnapshot = [!a ? cicloA : null, !b ? cicloB : null].filter(
+      (id): id is number => id != null
+    );
+    return {
+      disponivel: false as const,
+      motivo: "Os dois ciclos precisam ter snapshot aprovado para comparar.",
+      ciclosSemSnapshot,
+      cicloA: null,
+      cicloB: null,
+      porSkuMes: [] as Array<{ sku: string; marca: string; mes: number; qtdA: number; qtdB: number; delta: number }>,
+      porMarcaMes: [] as Array<{ marca: string; mes: number; qtdA: number; qtdB: number; delta: number }>,
+    };
   }
   const buckets = (snap: NonNullable<typeof a>) => {
     const map = new Map<string, { sku: string; marca: string; mes: number; qtd: number }>();
@@ -202,6 +214,9 @@ export async function compararCiclos(cicloA: number, cicloB: number) {
     marcaMap.set(k, acc);
   }
   return {
+    disponivel: true as const,
+    motivo: null as string | null,
+    ciclosSemSnapshot: [] as number[],
     cicloA: { id: cicloA, versao: a.versao, hash: a.hash, retroativo: a.retroativo, aviso: a.retroativo ? a.comentario : null },
     cicloB: { id: cicloB, versao: b.versao, hash: b.hash, retroativo: b.retroativo, aviso: b.retroativo ? b.comentario : null },
     porSkuMes: porSkuMes.filter(r => r.delta !== 0).slice(0, 500),
@@ -257,6 +272,6 @@ export async function aplicarMigracaoCicloNoBoot() {
 
 export function assertStatusCongelavel(status: string): asserts status is CicloStatus {
   if (status !== "APROVADO" && status !== "CONGELADO" && status !== "CONSENSO" && status !== "EM_COLABORACAO" && status !== "ABERTO") {
-    throw new Error(`Status desconhecido: ${status}`);
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: `Status desconhecido: ${status}` });
   }
 }

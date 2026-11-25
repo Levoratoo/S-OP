@@ -16,7 +16,7 @@ export async function transicionarCiclo(input: {
   viaFechar?: boolean;
 }) {
   const db = await getDb();
-  if (!db) throw new Error("Database not available");
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
   const [ciclo] = await db.select().from(ciclosComerciais).where(eq(ciclosComerciais.id, input.cicloId)).limit(1);
   if (!ciclo) throw new TRPCError({ code: "NOT_FOUND", message: "Ciclo não encontrado." });
   if (!isCicloStatus(ciclo.status)) {
@@ -55,7 +55,7 @@ export async function fecharCicloComHistorico(input: {
   isAdmin: boolean;
 }) {
   const db = await getDb();
-  if (!db) throw new Error("Database not available");
+  if (!db) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Banco indisponível." });
   const [ciclo] = await db.select().from(ciclosComerciais).where(eq(ciclosComerciais.id, input.cicloId)).limit(1);
   if (!ciclo) throw new TRPCError({ code: "NOT_FOUND", message: "Ciclo não encontrado." });
   if (!isCicloStatus(ciclo.status)) {
