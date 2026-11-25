@@ -23,6 +23,7 @@ import { ColaboracaoArquivo } from "./ColaboracaoArquivo";
 import { ColaboracaoResumos } from "./ColaboracaoResumos";
 import { PvMtoPivotGrade } from "./PvMtoPivotGrade";
 import { cicloHorizonCalendar } from "@shared/ciclo-horizon";
+import { formatPreco4 } from "@shared/pv-preco-round";
 import { isCicloSomenteLeitura } from "@shared/ciclo-status";
 import { CicloLifecycleBar } from "@/components/ciclo/CicloLifecycleBar";
 import { CrmExcelLayoutError, parseCrmExcel } from "./parse-crm-excel";
@@ -297,7 +298,7 @@ export default function Colaboracoes() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 max-w-full space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Colaboração Comercial</h1>
@@ -774,9 +775,7 @@ export default function Colaboracoes() {
                                       <TableCell className="text-xs">{item.crmTemperatura || "—"}</TableCell>
                                       <TableCell className="text-right tabular-nums text-xs">
                                         {Number(item.valorVendaSnapshot || 0) > 0
-                                          ? Number(item.valorVendaSnapshot).toLocaleString("pt-BR", {
-                                              minimumFractionDigits: 2,
-                                            })
+                                          ? formatPreco4(Number(item.valorVendaSnapshot))
                                           : "—"}
                                       </TableCell>
                                       {MES_KEYS.map(key => (

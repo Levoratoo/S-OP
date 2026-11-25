@@ -3,6 +3,7 @@
  * PV-MTO, CRM, PVxCRM, Resumo R$, Base Ciclo, MTO Variação, RFS, AA/Prev/Real.
  */
 import { and, eq, gte, lte, sql, type SQL } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
 import {
   getCicloComercial,
   getDb,
@@ -152,15 +153,19 @@ export async function syncPvFromCarteira(cicloId: number, opts?: { ajusteAdmin?:
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const ciclo = await getCicloComercial(cicloId);
-  if (!ciclo) throw new Error("Ciclo não encontrado");
+  if (!ciclo) throw new TRPCError({ code: "NOT_FOUND", message: "Ciclo não encontrado." });
 
   if (ciclo.status === "CONSENSO" && !opts?.ajusteAdmin) {
-    throw new Error(
-      "Ciclo em CONSENSO não recebe sync automático de PV. Ajuste só com admin."
-    );
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "Ciclo em CONSENSO não recebe sync automático de PV. Ajuste só com admin.",
+    });
   }
   if (isCicloSomenteLeitura(ciclo.status)) {
-    throw new Error("Ciclo aprovado ou congelado não recebe atualização da carteira.");
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "Ciclo aprovado ou congelado não recebe atualização da carteira.",
+    });
   }
 
   const { byId, byCode, dimensionsByProductId } = await loadProdutoMaps();

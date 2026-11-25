@@ -127,15 +127,78 @@ export function PendingSkuDeParaAcceptDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
+      <DialogContent className="max-h-[90vh] w-[95vw] max-w-6xl overflow-y-auto sm:max-w-6xl">
+        <DialogHeader className="pr-8">
           <DialogTitle>Substituição De-Para (SKU antigo → novo)</DialogTitle>
           <DialogDescription>
             Escolha o SKU de referência para cada código novo ou marque &quot;Sem referência&quot; para cadastrar
             sem De-Para.
           </DialogDescription>
         </DialogHeader>
-        <div className="overflow-x-auto rounded-md border">
+        <div className="space-y-3 md:hidden">
+          {rows.map(row => {
+            const score = scoreFor(row);
+            const warn = score != null && score < SKU_SIMILARITY_REVIEW_WARN;
+            const busca = manualBusca[row.codMaterial] ?? "";
+            return (
+              <article key={row.codMaterial} className="space-y-2 rounded-md border p-3">
+                <p className="font-mono text-xs">{row.codMaterial}</p>
+                <p className="text-sm">{row.descricao}</p>
+                <p className="text-xs text-muted-foreground">{row.marca || "—"}</p>
+                {row.loading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <>
+                    <Label className="text-xs">Substitui o SKU (De-Para)</Label>
+                    <Select
+                      value={row.skuAntigo ?? SEM_REF}
+                      onValueChange={v => setRef(row.codMaterial, v === SEM_REF ? null : v)}
+                    >
+                      <SelectTrigger
+                        title={
+                          row.skuAntigo
+                            ? row.sugestoes.find(s => s.codigo === row.skuAntigo)?.descricao
+                              ? `${row.skuAntigo} — ${row.sugestoes.find(s => s.codigo === row.skuAntigo)?.descricao}`
+                              : row.skuAntigo
+                            : "Sem referência"
+                        }
+                        className={cn(
+                          "h-auto min-h-9 w-full whitespace-normal py-1.5 [&_[data-slot=select-value]]:line-clamp-2 [&_[data-slot=select-value]]:whitespace-normal",
+                          warn && row.skuAntigo ? "border-amber-400 bg-amber-50/80" : undefined
+                        )}
+                      >
+                        <SelectValue placeholder="Sem referência" />
+                      </SelectTrigger>
+                      <SelectContent className="w-full sm:min-w-[28rem]">
+                        <SelectItem value={SEM_REF}>Sem referência</SelectItem>
+                        {row.sugestoes.map(s => {
+                          const label = `${s.codigo} — ${s.descricao} (${Math.round(s.score * 100)}%)`;
+                          return (
+                            <SelectItem key={s.codigo} value={s.codigo} title={label} className="whitespace-normal">
+                              {label}
+                            </SelectItem>
+                          );
+                        })}
+                      </SelectContent>
+                    </Select>
+                    {score != null && row.skuAntigo ? (
+                      <p className={cn("text-xs", warn ? "text-amber-700" : "text-muted-foreground")}>
+                        Similaridade: {Math.round(score * 100)}%{warn ? " — revise" : ""}
+                      </p>
+                    ) : null}
+                    <Input
+                      className="h-8 text-xs"
+                      placeholder="Buscar outro SKU"
+                      value={busca}
+                      onChange={e => setManualBusca(prev => ({ ...prev, [row.codMaterial]: e.target.value }))}
+                    />
+                  </>
+                )}
+              </article>
+            );
+          })}
+        </div>
+        <div className="hidden overflow-x-auto rounded-md border md:block">
           <Table>
             <TableHeader>
               <TableRow>
@@ -179,20 +242,28 @@ export function PendingSkuDeParaAcceptDialog({
                             onValueChange={v => setRef(row.codMaterial, v === SEM_REF ? null : v)}
                           >
                             <SelectTrigger
+                              title={
+                                row.skuAntigo
+                                  ? `${row.skuAntigo} — ${row.sugestoes.find(s => s.codigo === row.skuAntigo)?.descricao ?? ""}`
+                                  : "Sem referência"
+                              }
                               className={cn(
-                                "h-9",
+                                "h-auto min-h-9 w-full whitespace-normal py-1.5 [&_[data-slot=select-value]]:line-clamp-2 [&_[data-slot=select-value]]:whitespace-normal",
                                 warn && row.skuAntigo ? "border-amber-400 bg-amber-50/80" : undefined
                               )}
                             >
                               <SelectValue placeholder="Sem referência" />
                             </SelectTrigger>
-                            <SelectContent>
+                            <SelectContent className="w-full sm:min-w-[28rem]">
                               <SelectItem value={SEM_REF}>Sem referência</SelectItem>
-                              {row.sugestoes.map(s => (
-                                <SelectItem key={s.codigo} value={s.codigo}>
-                                  {s.codigo} — {s.descricao.slice(0, 48)} ({Math.round(s.score * 100)}%)
-                                </SelectItem>
-                              ))}
+                              {row.sugestoes.map(s => {
+                                const label = `${s.codigo} — ${s.descricao} (${Math.round(s.score * 100)}%)`;
+                                return (
+                                  <SelectItem key={s.codigo} value={s.codigo} title={label} className="whitespace-normal">
+                                    {label}
+                                  </SelectItem>
+                                );
+                              })}
                             </SelectContent>
                           </Select>
                           {score != null && row.skuAntigo ? (
@@ -237,7 +308,7 @@ export function PendingSkuDeParaAcceptDialog({
             </TableBody>
           </Table>
         </div>
-        <DialogFooter>
+        <DialogFooter className="flex flex-wrap gap-2">
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             Cancelar
           </Button>

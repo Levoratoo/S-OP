@@ -61,7 +61,7 @@ export default function CarteiraPedidos() {
   }, [pedidos]);
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 max-w-full space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Carteira de Pedidos (PV Aberto)</h1>

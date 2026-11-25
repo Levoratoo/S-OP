@@ -12,6 +12,7 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { CONSOLIDADO_EXCEL_HEADERS } from "@shared/consolidado-arquivo";
 import { textMatchesSearch } from "@shared/text-search";
+import { formatPreco4 } from "@shared/pv-preco-round";
 import { trpc } from "@/lib/trpc";
 import { Download, Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -285,7 +286,7 @@ export function ColaboracaoArquivo({
                   </TableCell>
                   <TableCell>{row.linha}</TableCell>
                   <TableCell>{row.marca}</TableCell>
-                  <TableCell className="text-right tabular-nums">{formatMoney(row.venda)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{formatPreco4(row.venda)}</TableCell>
                   <TableCell className="whitespace-nowrap">{formatMes(row.mes)}</TableCell>
                   <TableCell className="text-right tabular-nums">{formatQty(row.qtd)}</TableCell>
                   <TableCell className="text-right tabular-nums">{formatQty(row.valorTotal)}</TableCell>

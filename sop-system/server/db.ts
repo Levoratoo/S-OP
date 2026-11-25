@@ -1,5 +1,6 @@
 import { isSkuAcabado } from "@shared/sku-acabado";
 import { isCicloSomenteLeitura } from "@shared/ciclo-status";
+import { TRPCError } from "@trpc/server";
 import { eq, desc, and, sql, asc, gte, lt, inArray } from "drizzle-orm";
 import { cfopDigitosSqlIn } from "@shared/cfop-faturamento";
 import { drizzle } from "drizzle-orm/mysql2";
@@ -2623,22 +2624,29 @@ export async function updateCicloComercialItem(
     .from(cicloComercialItens)
     .where(eq(cicloComercialItens.id, id))
     .limit(1);
-  if (!current) throw new Error("Item do ciclo não encontrado.");
+  if (!current) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Item do ciclo não encontrado." });
+  }
   const [ciclo] = await db
     .select({ status: ciclosComerciais.status })
     .from(ciclosComerciais)
     .where(eq(ciclosComerciais.id, current.cicloId))
     .limit(1);
   if (isCicloSomenteLeitura(ciclo?.status || "")) {
-    throw new Error("Ciclo aprovado ou congelado não pode ser alterado.");
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "Ciclo aprovado ou congelado não pode ser alterado.",
+    });
   }
   if (ciclo?.status === "CONSENSO") {
     const plano = (data.planoColab ?? current.planoColab) as string;
     const bloqueado = plano === "MTS" || plano === "JITO" || plano === "CRM" || plano === "PV_MTO";
     if (bloqueado && !actor?.isAdmin) {
-      throw new Error(
-        "Em CONSENSO a edição de MTS, CRM e PV fica só com admin (com auditoria). Vendedor pode voltar para EM_COLABORACAO com motivo."
-      );
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message:
+          "Em CONSENSO a edição de MTS, CRM e PV fica só com admin (com auditoria). Vendedor pode voltar para EM_COLABORACAO com motivo.",
+      });
     }
     if (actor?.isAdmin) {
       await db.execute(sql`

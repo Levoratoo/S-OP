@@ -95,13 +95,16 @@ import {
 } from "./services/pipedrive/sync";
 
 function erroPipedrive(err: unknown): never {
+  if (err instanceof TRPCError) throw err;
   if (err instanceof PipedriveSyncError) {
-    const code = err.codigo === "CICLO_AUSENTE" ? "NOT_FOUND" : "PRECONDITION_FAILED";
-    throw new TRPCError({ code, message: err.message });
+    throw new TRPCError({
+      code: err.codigo === "CICLO_AUSENTE" ? "NOT_FOUND" : "PRECONDITION_FAILED",
+      message: err.message,
+    });
   }
   throw new TRPCError({
     code: "BAD_GATEWAY",
-    message: err instanceof Error ? err.message : "Falha ao consultar o Pipedrive.",
+    message: err instanceof Error && err.message ? err.message : "Falha ao consultar o Pipedrive. Tente de novo.",
   });
 }
 
@@ -1150,7 +1153,11 @@ export const appRouter = router({
       .input(z.object({ cicloId: z.number() }))
       .query(async ({ input }) => {
         const runtime = runtimePipedrive();
-        return statusPipedrive({ config: runtime.config, repo: runtime.repo, cicloId: input.cicloId });
+        try {
+          return await statusPipedrive({ config: runtime.config, repo: runtime.repo, cicloId: input.cicloId });
+        } catch (err) {
+          erroPipedrive(err);
+        }
       }),
 
     previewPipedrive: protectedProcedure

@@ -22,6 +22,7 @@ import {
   ROTULOS_ALERTA,
   type TipoAlertaPipedrive,
 } from "@shared/pipedrive-crm";
+import { formatPreco4 } from "@shared/pv-preco-round";
 import { Download, Loader2, RefreshCw, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -69,7 +70,7 @@ function formatQtd(value: number) {
 }
 
 function formatRs(value: number) {
-  return value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  return `R$ ${formatPreco4(value)}`;
 }
 
 function formatQuando(iso: string) {
@@ -169,7 +170,7 @@ export function PipedriveCrmSync({
   };
 
   return (
-    <div className="flex w-full flex-col gap-2 sm:items-end">
+    <div className="flex w-full min-w-0 flex-col gap-2 sm:items-end">
       <div className="flex w-full flex-wrap gap-2 sm:w-auto sm:justify-end">
         <Tooltip>
           <TooltipTrigger asChild>
@@ -229,7 +230,7 @@ export function PipedriveCrmSync({
       ) : null}
 
       <Dialog open={aberto} onOpenChange={setAberto}>
-        <DialogContent className="max-h-[92vh] w-[calc(100vw-1rem)] max-w-4xl overflow-y-auto p-4 sm:p-6">
+        <DialogContent className="max-h-[90vh] w-[95vw] max-w-6xl overflow-y-auto sm:max-w-6xl">
           <DialogHeader>
             <DialogTitle>Prévia do Pipedrive</DialogTitle>
             <DialogDescription>
@@ -260,7 +261,7 @@ export function PipedriveCrmSync({
                   : ""}
               </p>
 
-              <div className="overflow-x-auto rounded-md border">
+              <div className="max-h-64 max-w-full overflow-auto rounded-md border">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -289,7 +290,7 @@ export function PipedriveCrmSync({
                 Pipedrive que entram no horizonte, somadas por mês e, abaixo, por marca.
               </p>
               {previa.marcas.length ? (
-                <div className="max-h-48 overflow-auto rounded-md border">
+                <div className="max-h-48 max-w-full overflow-auto rounded-md border">
                   <Table>
                     <TableHeader>
                       <TableRow>
@@ -323,7 +324,7 @@ export function PipedriveCrmSync({
                 </Button>
               </div>
               <Tabs value={abaAlerta} onValueChange={valor => setAbaAlerta(valor as TipoAlertaPipedrive)}>
-                <div className="overflow-x-auto">
+                <div className="max-w-full overflow-x-auto">
                   <TabsList className="inline-flex h-auto w-max min-w-full flex-nowrap">
                     {ORDEM_ALERTAS.map(tipo => {
                       const grave = gravidadeAlerta(tipo) === "vermelho";
@@ -354,7 +355,7 @@ export function PipedriveCrmSync({
                     ) : (
                       <div className="max-h-64 space-y-2 overflow-y-auto">
                         {alertasDaAba.map((item, index) => (
-                          <div key={`${item.dealId}-${item.sku}-${index}`} className="rounded-md border p-2 text-sm">
+                          <div key={`${item.dealId}-${item.sku}-${index}`} className="break-words rounded-md border p-2 text-sm">
                             <p className="font-medium">
                               #{item.dealId} {item.titulo}
                               {item.sku ? ` · ${item.sku}` : ""}

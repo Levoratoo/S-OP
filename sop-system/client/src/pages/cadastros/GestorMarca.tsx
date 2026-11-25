@@ -78,8 +78,8 @@ function IncludePendingMarcasDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
-        <DialogHeader>
+      <DialogContent className="max-h-[85vh] w-[95vw] max-w-6xl overflow-y-auto sm:max-w-6xl">
+        <DialogHeader className="pr-8">
           <DialogTitle>Incluir marcas pendentes</DialogTitle>
           <DialogDescription>
             Associe um gestor a cada marca antes de incluir no cadastro. Marcas sem gestor também podem
@@ -106,7 +106,36 @@ function IncludePendingMarcasDialog({
             Aplicar a todas
           </Button>
         </div>
-        <div className="rounded-md border overflow-x-auto">
+        <div className="space-y-3 sm:hidden">
+          {rows.map((row, i) => (
+            <div key={row.nome} className="space-y-2 rounded-md border p-3">
+              <p className="font-medium">{row.nome}</p>
+              <Select
+                value={row.gestorId != null ? String(row.gestorId) : "__none__"}
+                onValueChange={v =>
+                  setRows(prev =>
+                    prev.map((r, idx) =>
+                      idx === i ? { ...r, gestorId: v === "__none__" ? null : Number(v) } : r
+                    )
+                  )
+                }
+              >
+                <SelectTrigger className="h-9 w-full">
+                  <SelectValue placeholder="Sem gestor" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">Sem gestor</SelectItem>
+                  {gestores.map(g => (
+                    <SelectItem key={g.id} value={String(g.id)}>
+                      {g.nome}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          ))}
+        </div>
+        <div className="hidden overflow-x-auto rounded-md border sm:block">
           <Table>
             <TableHeader>
               <TableRow>
