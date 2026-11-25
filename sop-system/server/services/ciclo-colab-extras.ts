@@ -84,7 +84,7 @@ export function competenciaYearMonth(value: unknown): { year: number; month: num
   return { year: parsed.getUTCFullYear(), month: parsed.getUTCMonth() + 1 };
 }
 
-async function loadProdutoMaps() {
+export async function loadProdutoMaps() {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   const [rows, familyRows, managerRows, managerBrandRows, marcaRows] = await Promise.all([

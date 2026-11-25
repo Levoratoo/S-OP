@@ -40,12 +40,53 @@ export function pvMtoPivotLineKey(codigo: string, sku: string, precoUnitario: nu
   return `${String(codigo).trim().toUpperCase()}||${String(sku).trim().toUpperCase()}||${preco.toFixed(2)}`;
 }
 
-/** Agrupa entregas em linhas pivot (pedido × SKU × preço) com m1…m12 no horizonto do ciclo. */
-export function buildPvMtoPivotLinesFromEntregas(
+export type PvPivotMonthColumn = { year: number; month: number; label: string; abs: number };
+
+function monthAbs(year: number, month: number) {
+  return year * 12 + (month - 1);
+}
+
+export function monthColumnLabel(year: number, month: number): string {
+  return `${MESES_CURTO[month - 1]}/${String(year).slice(-2)}`;
+}
+
+/** Meses distintos presentes nas entregas (ordenados). */
+export function computeEntregaMonthColumns(entregas: PvMtoEntregaInput[]): PvPivotMonthColumn[] {
+  const set = new Map<number, { year: number; month: number }>();
+  for (const row of entregas) {
+    const y = Number(row.anoEnt);
+    const m = Number(row.mesEnt);
+    if (!y || m < 1 || m > 12) continue;
+    const abs = monthAbs(y, m);
+    if (!set.has(abs)) set.set(abs, { year: y, month: m });
+  }
+  return Array.from(set.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([abs, { year, month }]) => ({
+      year,
+      month,
+      abs,
+      label: monthColumnLabel(year, month),
+    }));
+}
+
+export function monthColumnIndex(
+  columns: PvPivotMonthColumn[],
+  year: number,
+  month: number
+): number | null {
+  const abs = monthAbs(year, month);
+  const idx = columns.findIndex(c => c.abs === abs);
+  return idx >= 0 ? idx : null;
+}
+
+/** Agrupa entregas em linhas pivot (pedido × SKU × preço) nas colunas de mês informadas. */
+export function buildPvPivotLinesFromEntregas(
   entregas: PvMtoEntregaInput[],
-  anoInicio: number,
-  mesInicio: number
+  columns: PvPivotMonthColumn[]
 ): PvMtoPivotLine[] {
+  const colCount = columns.length;
+  if (!colCount) return [];
   const groups = new Map<string, PvMtoPivotLine>();
 
   for (const row of entregas) {
@@ -56,22 +97,17 @@ export function buildPvMtoPivotLinesFromEntregas(
     if (qtd <= 0) continue;
     const preco = Number(row.precoUnitario) || 0;
     const key = pvMtoPivotLineKey(codigo, sku, preco);
-    const idx = cicloHorizonIndexFromCalendar(
-      anoInicio,
-      mesInicio,
-      Number(row.anoEnt),
-      Number(row.mesEnt)
-    );
+    const idx = monthColumnIndex(columns, Number(row.anoEnt), Number(row.mesEnt));
     if (idx == null) continue;
 
-  let line = groups.get(key);
+    let line = groups.get(key);
     if (!line) {
       line = {
         lineKey: key,
         numPedido: codigo,
         sku,
         precoUnitario: Math.round(preco * 100) / 100,
-        meses: Array(12).fill(0),
+        meses: Array(colCount).fill(0),
         quantidadeTotal: 0,
         receitaTotal: 0,
       };
@@ -91,13 +127,26 @@ export function buildPvMtoPivotLinesFromEntregas(
   return Array.from(groups.values());
 }
 
+/** Agrupa entregas em linhas pivot (pedido × SKU × preço) com m1…m12 no horizonto do ciclo. */
+export function buildPvMtoPivotLinesFromEntregas(
+  entregas: PvMtoEntregaInput[],
+  anoInicio: number,
+  mesInicio: number
+): PvMtoPivotLine[] {
+  const columns: PvPivotMonthColumn[] = Array.from({ length: 12 }, (_, i) => {
+    const { year, month } = cicloHorizonCalendar(anoInicio, mesInicio, i);
+    return { year, month, abs: monthAbs(year, month), label: monthColumnLabel(year, month) };
+  });
+  return buildPvPivotLinesFromEntregas(entregas, columns);
+}
+
 export function pvMtoHorizonMonthLabel(
   anoInicio: number,
   mesInicio: number,
   index: number
 ): string {
   const { year, month } = cicloHorizonCalendar(anoInicio, mesInicio, index);
-  return `${MESES_CURTO[month - 1]}/${String(year).slice(-2)}`;
+  return monthColumnLabel(year, month);
 }
 
 /** Agrega linhas pivot para SKU × mês (conferência com ciclo_comercial_itens). */

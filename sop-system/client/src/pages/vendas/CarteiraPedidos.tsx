@@ -1,18 +1,21 @@
+import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { PvMtoPivotTable, type PvPivotRow } from "@/components/pv/PvMtoPivotTable";
 import { trpc } from "@/lib/trpc";
 import { Database, Loader2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 
 export default function CarteiraPedidos() {
+  const [search, setSearch] = useState("");
   const utils = trpc.useUtils();
-  const { data: pedidos, isLoading } = trpc.carteiraPedidos.list.useQuery({
-    limit: 2000,
+  const { data, isLoading } = trpc.carteiraPedidos.pivotGrade.useQuery();
+  const { data: pedidos } = trpc.carteiraPedidos.list.useQuery({
+    limit: 5000,
     apenasPvAberto: true,
   });
-  const { data: produtos } = trpc.produtos.list.useQuery();
-  const { data: clientes } = trpc.clientes.list.useQuery();
 
   const syncErpMutation = trpc.carteiraPedidos.syncFromErp.useMutation({
     onSuccess: r => {
@@ -20,18 +23,40 @@ export default function CarteiraPedidos() {
         `ERP: ${r.importados} linhas (Liberado+PRG) · ${r.fetched} lidas · PV MTO atualizado em ${r.ciclosPv} ciclo(s)`
       );
       if (r.avisos.length) toast.message(`${r.avisos.length} avisos`);
-      if (r.erros.length) toast.error(`${r.erros.length} SKUs sem cadastro (veja console)`);
-      if (r.erros.length) console.warn("[carteira syncFromErp] erros", r.erros);
+      if (r.erros.length) toast.error(`${r.erros.length} SKUs sem cadastro`);
       utils.carteiraPedidos.list.invalidate();
+      utils.carteiraPedidos.pivotGrade.invalidate();
     },
     onError: e => toast.error(e.message),
   });
 
-  const produtoNome = (id: number) => produtos?.find(p => p.id === id)?.nome || "-";
-  const clienteNome = (id: number | null) =>
-    id ? clientes?.find(c => c.id === id)?.razaoSocial || "-" : "-";
-  const formatDate = (value: Date | null) =>
-    value ? new Date(value).toLocaleDateString("pt-BR") : "-";
+  const rows: PvPivotRow[] = useMemo(
+    () =>
+      (data?.rows ?? []).map(r => ({
+        marca: r.marca,
+        codItem: r.codItem,
+        descricao: r.descricao,
+        tipo: r.tipo,
+        precoUnitario: r.precoUnitario,
+        numPedido: r.numPedido,
+        meses: r.meses,
+        quantidadeTotal: r.quantidadeTotal,
+        receitaTotal: r.receitaTotal,
+        cliente: r.cliente,
+        faturado: r.faturado,
+      })),
+    [data?.rows]
+  );
+
+  const listTotals = useMemo(() => {
+    let q = 0;
+    let rs = 0;
+    for (const p of pedidos ?? []) {
+      q += Number(p.quantidade || 0);
+      rs += Number(p.receitaBruta || 0);
+    }
+    return { q, rs };
+  }, [pedidos]);
 
   return (
     <div className="space-y-6">
@@ -39,14 +64,10 @@ export default function CarteiraPedidos() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Carteira de Pedidos (PV Aberto)</h1>
           <p className="text-muted-foreground">
-            Uma linha por pedido × SKU (ERP Liberado + PRG). Sincronização automática — sem importação manual.
+            Pivot PV: pedido × SKU × preço, quantidades por mês de entrega (DataEntrega).
           </p>
         </div>
-        <Button
-          type="button"
-          onClick={() => syncErpMutation.mutate()}
-          disabled={syncErpMutation.isPending}
-        >
+        <Button type="button" onClick={() => syncErpMutation.mutate()} disabled={syncErpMutation.isPending}>
           {syncErpMutation.isPending ? (
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
           ) : (
@@ -63,59 +84,37 @@ export default function CarteiraPedidos() {
             Pedidos em Carteira
           </CardTitle>
           <CardDescription>
-            Fonte: ERP MetricsPROD (View_Usr_PedidoVenda_SEOP1) · Liberado + PRG · competência = 1ª
-            entrega do SKU no pedido.
+            Fonte: ERP MetricsPROD (View_Usr_PedidoVenda_SEOP1) · Liberado + PRG · entregas gravadas por mês
+            (carteira_pv_entregas). Nº Pedido = NumPedido (sem /sequencia — a sequência era a ordem do SKU dentro do
+            pedido na lista antiga).
+            {data?.conferencia ? (
+              <span className="block mt-1 text-xs">
+                Conferência: pivot {data.grandQuantidade.toLocaleString("pt-BR")} un · R${" "}
+                {data.grandReceita.toLocaleString("pt-BR", { minimumFractionDigits: 2 })} · lista carteira{" "}
+                {listTotals.q.toLocaleString("pt-BR")} un · R${" "}
+                {listTotals.rs.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+              </span>
+            ) : null}
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-3">
+          <div className="w-full max-w-sm space-y-1">
+            <Label>Buscar</Label>
+            <Input placeholder="Marca, SKU, pedido…" value={search} onChange={e => setSearch(e.target.value)} />
+          </div>
           {isLoading ? (
             <div className="flex justify-center py-8">
               <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Código</TableHead>
-                  <TableHead>Competência</TableHead>
-                  <TableHead>Produto</TableHead>
-                  <TableHead>Cliente</TableHead>
-                  <TableHead className="text-right">Quantidade</TableHead>
-                  <TableHead className="text-right">Receita</TableHead>
-                  <TableHead className="text-center">Faturado</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {!pedidos || pedidos.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={7} className="py-8 text-center text-muted-foreground">
-                      Nenhum pedido na carteira — clique em Atualizar do ERP
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  pedidos.map(item => (
-                    <TableRow key={item.id}>
-                      <TableCell>
-                        {item.codigo}/{item.sequencia}
-                      </TableCell>
-                      <TableCell>{formatDate(item.competencia)}</TableCell>
-                      <TableCell>{produtoNome(item.produtoId)}</TableCell>
-                      <TableCell>{clienteNome(item.clienteId)}</TableCell>
-                      <TableCell className="text-right">
-                        {Number(item.quantidade || 0).toLocaleString("pt-BR")}
-                      </TableCell>
-                      <TableCell className="text-right font-medium">
-                        R${" "}
-                        {Number(item.receitaBruta || 0).toLocaleString("pt-BR", {
-                          minimumFractionDigits: 2,
-                        })}
-                      </TableCell>
-                      <TableCell className="text-center">{item.faturado ? "Sim" : "Não"}</TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
+            <PvMtoPivotTable
+              horizonLabels={data?.horizonLabels ?? []}
+              rows={rows}
+              searchGlobal={search}
+              exportFileName="carteira-pv-pivot"
+              emptyMessage="Nenhum pedido na carteira — clique em Atualizar do ERP"
+              showClienteFaturado
+            />
           )}
         </CardContent>
       </Card>

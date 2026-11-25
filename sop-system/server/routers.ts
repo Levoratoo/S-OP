@@ -22,6 +22,7 @@ import { seedDadosMestresOperacionais } from "./services/seed-mestres";
 import {
   acceptPendingClienteFromFaturamento,
   acceptPendingMarcasFromFaturamento,
+  acceptPendingMarcasWithGestores,
   acceptPendingSkuFromFaturamento,
   acceptPendingSkusFromFaturamentoBatch,
   listPendingClientesFromFaturamento,
@@ -30,6 +31,13 @@ import {
   seedProdutosClientesFromFaturamento,
 } from "./services/seed-from-faturamento";
 import { applyGestorMarcaImportMerge } from "./services/gestor-marca-import-apply";
+import { getCarteiraPvPivotGrade } from "./services/carteira-pv-pivot";
+import { listDeParaCodigosComDescricoes } from "./services/de-para-enriched";
+import {
+  acceptPendingSkusWithDePara,
+  suggestSkuReferencias,
+  suggestSkuReferenciasBatch,
+} from "./services/pending-sku-accept";
 import { assertCrmExcelHeaders, assertCrmImportRows } from "./services/crm-import-validate";
 import {
   clearSazonalidadeFatores,
@@ -682,6 +690,8 @@ export const appRouter = router({
      * uma linha por pedido × SKU × mês de entrega.
      */
     syncFromErp: protectedProcedure.mutation(() => syncCarteiraFromErp()),
+
+    pivotGrade: protectedProcedure.query(() => getCarteiraPvPivotGrade()),
   }),
 
   // ==================== FORECAST ====================
@@ -1413,6 +1423,8 @@ export const appRouter = router({
   // ==================== DE-PARA DE CÓDIGOS ====================
   deParaCodigos: router({
     list: protectedProcedure.query(() => db.listDeParaCodigos()),
+
+    listEnriched: protectedProcedure.query(() => listDeParaCodigosComDescricoes()),
     create: protectedProcedure
       .input(z.object({ 
         skuAntigo: z.string().min(1), 
@@ -2097,7 +2109,33 @@ export const appRouter = router({
           codMaterials: z.array(z.string().min(1)).min(1).max(5000),
         })
       )
-      .mutation(({ input }) => acceptPendingSkusFromFaturamentoBatch(input.codMaterials)),
+      .mutation(({ input }) =>
+        acceptPendingSkusFromFaturamentoBatch(input.codMaterials, { skipIdentityDePara: true })
+      ),
+
+    acceptPendingSkusWithDePara: protectedProcedure
+      .input(
+        z.object({
+          items: z
+            .array(
+              z.object({
+                codMaterial: z.string().min(1),
+                skuAntigo: z.string().nullable().optional(),
+              })
+            )
+            .min(1)
+            .max(5000),
+        })
+      )
+      .mutation(({ input }) => acceptPendingSkusWithDePara(input.items)),
+
+    suggestSkuReferencias: protectedProcedure
+      .input(z.object({ codMaterial: z.string().min(1), limit: z.number().min(1).max(20).optional() }))
+      .query(({ input }) => suggestSkuReferencias(input.codMaterial, input.limit ?? 10)),
+
+    suggestSkuReferenciasBatch: protectedProcedure
+      .input(z.object({ codMaterials: z.array(z.string().min(1)).min(1).max(500) }))
+      .mutation(({ input }) => suggestSkuReferenciasBatch(input.codMaterials)),
 
     /** Clientes no faturamento ainda não cadastrados. */
     pendingClientesFromFaturamento: protectedProcedure.query(() =>
@@ -2116,6 +2154,21 @@ export const appRouter = router({
     acceptPendingMarcas: protectedProcedure
       .input(z.object({ nomes: z.array(z.string().min(1)).optional() }).optional())
       .mutation(({ input }) => acceptPendingMarcasFromFaturamento(input?.nomes)),
+
+    acceptPendingMarcasWithGestores: protectedProcedure
+      .input(
+        z.object({
+          items: z
+            .array(
+              z.object({
+                nome: z.string().min(1),
+                gestorId: z.number().nullable().optional(),
+              })
+            )
+            .min(1),
+        })
+      )
+      .mutation(({ input }) => acceptPendingMarcasWithGestores(input.items)),
 
     /**
      * Baseline de capacidade: velocidade calibrada, config mensal (turno),
