@@ -18,6 +18,8 @@ from pathlib import Path
 
 import paramiko
 
+from env_merge import managed_docker_env, merge_env, parse_assignments
+
 HOST = os.environ.get("SNOP_SSH_HOST", "192.168.1.82")
 USER = os.environ.get("SNOP_SSH_USER", "pedro-levorato")
 PASSWORD = os.environ.get("SNOP_SSH_PASS") or os.environ.get("SNOP_DOCKER_PASS")
@@ -195,6 +197,45 @@ def sftp_put(client: paramiko.SSHClient, local: Path, remote: str) -> None:
         sftp.close()
 
 
+def read_remote_text(client: paramiko.SSHClient, remote: str) -> str:
+    sftp = client.open_sftp()
+    try:
+        try:
+            with sftp.open(remote, "r") as fh:
+                data = fh.read()
+        except FileNotFoundError:
+            return ""
+        except OSError as exc:
+            if getattr(exc, "errno", None) == 2:
+                return ""
+            raise
+    finally:
+        sftp.close()
+    if isinstance(data, bytes):
+        return data.decode("utf-8", errors="replace")
+    return str(data)
+
+
+def write_remote_text(client: paramiko.SSHClient, remote: str, text: str) -> None:
+    sftp = client.open_sftp()
+    try:
+        with sftp.open(remote, "w") as fh:
+            fh.write(text.encode("utf-8"))
+    finally:
+        sftp.close()
+
+
+def erp_local() -> dict[str, str]:
+    path = ROOT / ".env"
+    if not path.is_file():
+        return {}
+    return {
+        key: value
+        for key, value in parse_assignments(path.read_text(encoding="utf-8", errors="replace")).items()
+        if key.startswith("ERP_")
+    }
+
+
 def main() -> None:
     # stdout sem buffer (útil no Windows/PowerShell)
     try:
@@ -213,6 +254,10 @@ def main() -> None:
         try:
             run(client, f"mkdir -p {REMOTE_DIR}")
             remote_tgz = posixpath.join(REMOTE_DIR, "snop-deploy.tgz")
+            remote_env_path = posixpath.join(REMOTE_DIR, ".env")
+            # Lê antes do tar: o pacote não leva .env, mas a mescla parte do arquivo
+            # que já está no servidor (PIPEDRIVE_* e demais segredos).
+            remote_env = read_remote_text(client, remote_env_path)
             sftp_put(client, tarball, remote_tgz)
 
             # Extrai por cima (preserva .env se já existir)
@@ -221,53 +266,18 @@ def main() -> None:
                 f"cd {REMOTE_DIR} && tar -xzf snop-deploy.tgz && rm -f snop-deploy.tgz",
             )
 
-            # Sempre garante .env Docker (nunca reaproveitar .env Windows local).
-            # Preserva ERP_* do .env remoto atual; se faltar, injeta do ambiente local do deploy.
-            erp_from_local = ""
-            local_env = ROOT / ".env"
-            if local_env.is_file():
-                for line in local_env.read_text(encoding="utf-8", errors="replace").splitlines():
-                    if line.startswith("ERP_"):
-                        erp_from_local += line + "\n"
-            erp_fallback = erp_from_local.replace("'", "'\"'\"'")
-            run(
-                client,
-                f"""
-set -e
-ERP_BLOCK=""
-if [ -f {REMOTE_DIR}/.env ]; then
-  ERP_BLOCK=$(grep -E '^ERP_' {REMOTE_DIR}/.env || true)
-fi
-if [ -z "$ERP_BLOCK" ]; then
-  ERP_BLOCK='{erp_fallback}'
-fi
-cat > {REMOTE_DIR}/.env <<'EOF'
-APP_PORT={APP_PORT}
-MYSQL_ROOT_PASSWORD=snop_root_change_me
-MYSQL_DATABASE=sop_system
-MYSQL_USER=snop
-MYSQL_PASSWORD=SnopApp!{APP_PORT}
-JWT_SECRET=snop-jwt-{APP_PORT}-change-me
-DEV_AUTH_BYPASS=true
-DEV_AUTH_OPEN_ID=local-dev-user
-DEV_AUTH_NAME=Admin S&OP
-DEV_AUTH_EMAIL=admin@printbag.local
-DEV_AUTH_ROLE=admin
-DEV_AUTH_NIVEL_ACESSO=3
-VITE_APP_ID=snop-printbag
-PREVISAO_PYTHON_TIMEOUT_MIN=70
-PREVISAO_PYTHON_HEARTBEAT_SEC=15
-HOST=0.0.0.0
-PORT=3012
-NODE_ENV=production
-EOF
-if [ -n "$ERP_BLOCK" ]; then
-  printf '%s\\n' "$ERP_BLOCK" >> {REMOTE_DIR}/.env
-fi
-grep -q '^PREVISAO_PYTHON_TIMEOUT_MIN=' {REMOTE_DIR}/.env || echo PREVISAO_PYTHON_TIMEOUT_MIN=70 >> {REMOTE_DIR}/.env
-sed -i 's/^PREVISAO_PYTHON_TIMEOUT_MIN=.*/PREVISAO_PYTHON_TIMEOUT_MIN=70/' {REMOTE_DIR}/.env
-chmod 600 {REMOTE_DIR}/.env
-""".strip(),
+            # Mescla o .env remoto: atualiza só as chaves do Docker e preserva
+            # PIPEDRIVE_*, ERP_* e qualquer outra chave que não está no arquivo local.
+            # Os valores não entram no comando SSH nem no log.
+            merged_env, env_stats = merge_env(remote_env, managed_docker_env(APP_PORT), erp_local())
+            write_remote_text(client, remote_env_path, merged_env)
+            run(client, f"chmod 600 {remote_env_path}")
+            print(
+                ".env mesclado: "
+                f"{env_stats.updated} atualizada(s), "
+                f"{env_stats.preserved} preservada(s), "
+                f"{env_stats.added} acrescentada(s), "
+                f"recreate={'sim' if env_stats.changed else 'nao'}"
             )
 
             # Garantir CRLF->LF no entrypoint
@@ -277,14 +287,10 @@ chmod 600 {REMOTE_DIR}/.env
             )
 
             print("Building and starting containers (this can take several minutes)...")
+            recreate = " --force-recreate" if env_stats.changed else ""
             run(
                 client,
-                f"cd {REMOTE_DIR} && docker compose down --remove-orphans || true",
-                check=False,
-            )
-            run(
-                client,
-                f"cd {REMOTE_DIR} && docker compose up -d --build",
+                f"cd {REMOTE_DIR} && docker compose up -d --build{recreate}",
             )
 
             # Espera health

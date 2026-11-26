@@ -27,6 +27,9 @@ import { formatPreco4 } from "@shared/pv-preco-round";
 import { isCicloSomenteLeitura } from "@shared/ciclo-status";
 import { CicloLifecycleBar } from "@/components/ciclo/CicloLifecycleBar";
 import { CrmExcelLayoutError, parseCrmExcel } from "./parse-crm-excel";
+import { PipedriveCrmSync } from "./PipedriveCrmSync";
+import { GradeMts } from "./GradeMts";
+import { CompraPapel } from "./CompraPapel";
 
 type PlanoColab = "MTS" | "PV_MTO" | "CRM";
 type GradeAba = PlanoColab | "CONSOLIDADO";
@@ -73,7 +76,7 @@ export default function Colaboracoes() {
   const [abaGrade, setAbaGrade] = useState<GradeAba>("MTS");
   const plano: PlanoColab = abaGrade === "CONSOLIDADO" ? "MTS" : abaGrade;
   const [search, setSearch] = useState("");
-  const [abaPrincipal, setAbaPrincipal] = useState<"grade" | "consolidado">("grade");
+  const [abaPrincipal, setAbaPrincipal] = useState<"grade" | "consolidado" | "papel">("grade");
   const [wizardOpen, setWizardOpen] = useState(false);
   const defaults = defaultCicloInicio();
   const [jobIdInput, setJobIdInput] = useState("");
@@ -99,8 +102,8 @@ export default function Colaboracoes() {
     { enabled: Boolean(selectedCicloId) }
   );
 
-  const { data: realizadoAnual } = trpc.cicloComercial.realizadoAnual.useQuery(
-    { anos: [2025, 2026] },
+  const { data: gradeMts } = trpc.cicloComercial.gradeMts.useQuery(
+    { cicloId: selectedCicloId ?? 0 },
     { enabled: Boolean(selectedCicloId) && abaGrade === "MTS" }
   );
 
@@ -128,7 +131,14 @@ export default function Colaboracoes() {
       utils.cicloComercial.list.invalidate();
       if (selectedCicloId) utils.cicloComercial.getById.invalidate({ id: selectedCicloId });
     },
-    onError: error => toast.error(error.message),
+    onError: error => {
+      toast.error(error.message);
+      if (error.message.includes("Compra de papel")) {
+        utils.cicloComercial.list.invalidate();
+        if (selectedCicloId) utils.cicloComercial.getById.invalidate({ id: selectedCicloId });
+        setAbaPrincipal("papel");
+      }
+    },
   });
 
   const desagregarMutation = trpc.cicloComercial.desagregarDoJob.useMutation({
@@ -239,11 +249,18 @@ export default function Colaboracoes() {
     const term = search.trim().toLowerCase();
     if (!term) return list;
     return list.filter(item =>
-      [item.sku, item.descricao, item.marca, item.linha, item.tipoMarcaLinha]
+      [
+        item.sku,
+        item.descricao,
+        descricaoPorSku.get(String(item.sku || "").trim().toUpperCase()),
+        item.marca,
+        item.linha,
+        item.tipoMarcaLinha,
+      ]
         .filter(Boolean)
         .some(v => String(v).toLowerCase().includes(term))
     );
-  }, [itens, search, podeVerTodasMarcas, marcasPermitidasNomes]);
+  }, [itens, search, podeVerTodasMarcas, marcasPermitidasNomes, descricaoPorSku]);
 
   const marcasConsolidado = useMemo(() => {
     const entries = Object.entries(consolidado?.byMarca ?? {});
@@ -408,7 +425,11 @@ export default function Colaboracoes() {
               </Select>
             )}
             {ciclo && (
-              <CicloLifecycleBar cicloId={ciclo.id} status={ciclo.status} />
+              <CicloLifecycleBar
+                cicloId={ciclo.id}
+                status={ciclo.status}
+                onCompraPapel={() => setAbaPrincipal("papel")}
+              />
             )}
           </CardContent>
         </Card>
@@ -487,7 +508,7 @@ export default function Colaboracoes() {
           </CardContent>
         </Card>
       ) : (
-        <Tabs value={abaPrincipal} onValueChange={v => setAbaPrincipal(v as "grade" | "consolidado")}>
+        <Tabs value={abaPrincipal} onValueChange={v => setAbaPrincipal(v as "grade" | "consolidado" | "papel")}>
           <TabsList>
             <TabsTrigger value="grade" data-tour="page-colab-grade">
               Grade
@@ -495,6 +516,9 @@ export default function Colaboracoes() {
             <TabsTrigger value="consolidado" data-tour="page-colab-consolidado">
               Resumos do ciclo
             </TabsTrigger>
+            {ciclo && ["CONSENSO", "APROVADO", "CONGELADO"].includes(ciclo.status) ? (
+              <TabsTrigger value="papel">Compra de papel</TabsTrigger>
+            ) : null}
           </TabsList>
 
           <TabsContent value="grade" className="mt-4">
@@ -509,7 +533,7 @@ export default function Colaboracoes() {
                         : abaGrade === "PV_MTO"
                           ? "Pivot PV MTO: uma linha por pedido × SKU × preço, com quantidades por mês de entrega (Liberado + PRG)"
                           : abaGrade === "CRM"
-                            ? "Cards do comercial. Importe o Excel para preencher a grade deste ciclo."
+                            ? "Cards do comercial. Importe o Excel ou sincronize o Pipedrive para preencher a grade deste ciclo."
                             : "MTS: total 12M do script redistribuído por fator % do SKU (badge “Fator %”); sem fator, sazonalidade histórica. Colab do vendedor sobrepõe a estatística (e*)."}
                     </CardDescription>
                   </div>
@@ -555,27 +579,31 @@ export default function Colaboracoes() {
                       ))}
                       <TabsTrigger value="CONSOLIDADO">Consolidado</TabsTrigger>
                     </TabsList>
-                    {abaGrade === "CRM" && ciclo?.status && !isCicloSomenteLeitura(ciclo.status) && (
-                      <Label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-md border bg-background px-3 text-sm font-medium hover:bg-accent">
-                        {importCrm.isPending ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <Upload className="h-4 w-4" />
-                        )}
-                        Importar Excel
-                        <input
-                          type="file"
-                          accept=".xlsx,.xls,.csv"
-                          className="hidden"
-                          disabled={importCrm.isPending}
-                          onChange={event => {
-                            const file = event.target.files?.[0];
-                            if (file) void handleCrmFile(file);
-                            event.target.value = "";
-                          }}
-                        />
-                      </Label>
-                    )}
+                    {abaGrade === "CRM" && selectedCicloId && ciclo ? (
+                      <PipedriveCrmSync cicloId={selectedCicloId} status={ciclo.status}>
+                        {!isCicloSomenteLeitura(ciclo.status) ? (
+                          <Label className="inline-flex h-9 w-full cursor-pointer items-center justify-center gap-2 rounded-md border bg-background px-3 text-sm font-medium hover:bg-accent sm:w-auto">
+                            {importCrm.isPending ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Upload className="h-4 w-4" />
+                            )}
+                            Importar Excel
+                            <input
+                              type="file"
+                              accept=".xlsx,.xls,.csv"
+                              className="hidden"
+                              disabled={importCrm.isPending}
+                              onChange={event => {
+                                const file = event.target.files?.[0];
+                                if (file) void handleCrmFile(file);
+                                event.target.value = "";
+                              }}
+                            />
+                          </Label>
+                        ) : null}
+                      </PipedriveCrmSync>
+                    ) : null}
                   </div>
                   {PLANOS.map(p => (
                     <TabsContent key={p} value={p} className="mt-4">
@@ -585,121 +613,19 @@ export default function Colaboracoes() {
                         <div className="flex justify-center py-8">
                           <Loader2 className="h-5 w-5 animate-spin" />
                         </div>
-                      ) : p === "MTS" ? (
-                        <div className="max-h-[70vh] overflow-auto rounded-md border">
-                          <Table>
-                            <TableHeader className="sticky top-0 z-10 bg-background shadow-sm">
-                              <TableRow>
-                                <TableHead className="sticky left-0 z-20 bg-background min-w-[120px]">
-                                  SKU
-                                </TableHead>
-                                <TableHead className="min-w-[200px]">Descrição</TableHead>
-                                {MESES_CURTO.map((m, i) => (
-                                  <TableHead key={`r25-${i}`} className="text-right text-xs text-muted-foreground">
-                                    {m}/25
-                                  </TableHead>
-                                ))}
-                                {MESES_CURTO.map((m, i) => (
-                                  <TableHead key={`r26-${i}`} className="text-right text-xs text-muted-foreground">
-                                    {m}/26
-                                  </TableHead>
-                                ))}
-                                {MES_KEYS.map((key, i) => (
-                                  <Fragment key={`pair-h-${key}`}>
-                                    <TableHead className="border-l text-right text-xs bg-blue-50/80">
-                                      {cicloMesLabel(i)} Prev
-                                    </TableHead>
-                                    <TableHead className="text-right text-xs bg-amber-50/80">
-                                      {cicloMesLabel(i)} Colab
-                                    </TableHead>
-                                  </Fragment>
-                                ))}
-                                <TableHead className="text-right">Total</TableHead>
-                              </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                              {filteredItens.length === 0 ? (
-                                <TableRow>
-                                  <TableCell colSpan={51} className="text-center text-muted-foreground">
-                                    Sem itens neste plano.
-                                  </TableCell>
-                                </TableRow>
-                              ) : (
-                                filteredItens.map(item => {
-                                  const skuKey = String(item.sku || "").trim().toUpperCase();
-                                  const r25 = realizadoAnual?.[skuKey]?.[2025] ?? Array(12).fill(0);
-                                  const r26 = realizadoAnual?.[skuKey]?.[2026] ?? Array(12).fill(0);
-                                  let total = 0;
-                                  for (let i = 0; i < 12; i++) {
-                                    const mRaw = item[MES_KEYS[i]];
-                                    const eRaw = (item as Record<string, unknown>)[EST_KEYS[i]];
-                                    const hasColab =
-                                      mRaw !== null && mRaw !== undefined && String(mRaw).trim() !== "";
-                                    total += hasColab ? Number(mRaw || 0) : Number(eRaw || 0);
-                                  }
-                                  return (
-                                    <TableRow key={item.id} className="text-sm">
-                                      <TableCell className="sticky left-0 z-10 bg-background max-w-[140px] truncate font-medium">
-                                        <span className="inline-flex items-center gap-1">
-                                          {item.sku}
-                                          {(item as { estatUsouFatorSku?: boolean }).estatUsouFatorSku ? (
-                                            <Badge variant="outline" className="text-[10px] px-1 py-0">
-                                              Fator %
-                                            </Badge>
-                                          ) : null}
-                                        </span>
-                                      </TableCell>
-                                      <TableCell
-                                        className="max-w-[220px] truncate"
-                                        title={descricaoDoItem(item)}
-                                      >
-                                        {descricaoDoItem(item)}
-                                      </TableCell>
-                                      {r25.map((q, i) => (
-                                        <TableCell key={`r25-${i}`} className="p-1 text-right text-muted-foreground tabular-nums">
-                                          {q ? formatNum(q) : "·"}
-                                        </TableCell>
-                                      ))}
-                                      {r26.map((q, i) => (
-                                        <TableCell key={`r26-${i}`} className="p-1 text-right text-muted-foreground tabular-nums">
-                                          {q ? formatNum(q) : "·"}
-                                        </TableCell>
-                                      ))}
-                                      {MES_KEYS.map((key, i) => {
-                                        const estKey = EST_KEYS[i];
-                                        const v = (item as Record<string, unknown>)[estKey];
-                                        const raw = item[key];
-                                        const empty =
-                                          raw === null || raw === undefined || String(raw).trim() === "";
-                                        return (
-                                          <Fragment key={`pair-${item.id}-${key}`}>
-                                            <TableCell className="border-l p-1 text-right tabular-nums bg-blue-50/40">
-                                              {formatNum(Number(v || 0))}
-                                            </TableCell>
-                                            <TableCell className="p-0.5 bg-amber-50/50">
-                                              <Input
-                                                className="h-8 w-[4.5rem] px-1 text-right"
-                                                placeholder="—"
-                                                defaultValue={empty ? "" : String(Math.round(Number(raw || 0)))}
-                                                disabled={isCicloSomenteLeitura(ciclo?.status || "")}
-                                                onBlur={e =>
-                                                  handleMonthEdit(item.id, key, e.target.value)
-                                                }
-                                              />
-                                            </TableCell>
-                                          </Fragment>
-                                        );
-                                      })}
-                                      <TableCell className="font-medium text-right tabular-nums">
-                                        {formatNum(total)}
-                                      </TableCell>
-                                    </TableRow>
-                                  );
-                                })
-                              )}
-                            </TableBody>
-                          </Table>
-                        </div>
+                      ) : p === "MTS" && ciclo ? (
+                        <GradeMts
+                          itens={filteredItens}
+                          anoInicio={ciclo.anoInicio}
+                          mesInicio={ciclo.mesInicio}
+                          realizado={gradeMts?.realizado}
+                          previsto={gradeMts?.previsto}
+                          mesesComFoto={gradeMts?.mesesComFoto ?? {}}
+                          descricaoDe={descricaoDoItem}
+                          somenteLeitura={isCicloSomenteLeitura(ciclo.status)}
+                          revisarExcecoes={ciclo.status === "EM_COLABORACAO" || ciclo.status === "CONSENSO"}
+                          onEdit={handleMonthEdit}
+                        />
                       ) : p === "PV_MTO" ? (
                         selectedCicloId ? (
                           <PvMtoPivotGrade
@@ -715,8 +641,8 @@ export default function Colaboracoes() {
                           <Table>
                             <TableHeader>
                               <TableRow>
-                                <TableHead>SKU</TableHead>
-                                <TableHead className="min-w-[180px]">Descrição</TableHead>
+                                <TableHead className="sticky left-0 z-20 w-[7.5rem] min-w-[7.5rem] bg-background">SKU</TableHead>
+                                <TableHead className="sticky left-[7.5rem] z-20 w-[10rem] min-w-[10rem] bg-background sm:w-[20rem] sm:min-w-[20rem]">Descrição</TableHead>
                                 <TableHead>Marca</TableHead>
                                 <TableHead>Gestor</TableHead>
                                 <TableHead className="min-w-[140px]">Modalidade</TableHead>
@@ -749,13 +675,10 @@ export default function Colaboracoes() {
                                   }
                                   return (
                                     <TableRow key={item.id}>
-                                      <TableCell className="max-w-[140px] truncate font-medium">
+                                      <TableCell className="sticky left-0 z-20 w-[7.5rem] min-w-[7.5rem] max-w-[7.5rem] bg-background align-top font-medium shadow-[2px_0_0_0_hsl(var(--border))]">
                                         {item.sku}
                                       </TableCell>
-                                      <TableCell
-                                        className="max-w-[200px] truncate"
-                                        title={descricaoDoItem(item)}
-                                      >
+                                      <TableCell className="sticky left-[7.5rem] z-20 w-[10rem] min-w-[10rem] max-w-[10rem] whitespace-normal break-words bg-background align-top shadow-[2px_0_0_0_hsl(var(--border))] sm:left-[7.5rem] sm:w-[20rem] sm:min-w-[20rem] sm:max-w-[20rem]">
                                         {descricaoDoItem(item)}
                                       </TableCell>
                                       <TableCell>{item.marca || "—"}</TableCell>
@@ -811,6 +734,10 @@ export default function Colaboracoes() {
                 </Tabs>
               </CardContent>
             </Card>
+          </TabsContent>
+
+          <TabsContent value="papel" className="mt-4">
+            {selectedCicloId && ciclo ? <CompraPapel cicloId={selectedCicloId} status={ciclo.status} /> : null}
           </TabsContent>
 
           <TabsContent value="consolidado" className="mt-4">

@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { exportToCsv } from "@/lib/exportCsv";
 import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Download, Info } from "lucide-react";
 import { precoOrigemPvLabel, type PrecoOrigemPv } from "@shared/pv-preco-fallback";
 import { formatPreco4Moeda } from "@shared/pv-preco-round";
@@ -32,6 +33,7 @@ type Props = {
   emptyMessage: string;
   extraColumns?: React.ReactNode;
   showClienteFaturado?: boolean;
+  onCadastrar?: (row: PvPivotRow) => void;
 };
 
 function formatQty(value: number) {
@@ -54,6 +56,7 @@ export function PvMtoPivotTable({
   exportFileName,
   emptyMessage,
   showClienteFaturado,
+  onCadastrar,
 }: Props) {
   const [fMarca, setFMarca] = useState("");
   const [fCod, setFCod] = useState("");
@@ -168,7 +171,9 @@ export function PvMtoPivotTable({
               <TableHead className="sticky left-[88px] z-30 min-w-[104px] bg-sky-700 text-white">
                 Cod Item
               </TableHead>
-              <TableHead className="min-w-[200px] bg-sky-700 text-white">Descrição</TableHead>
+              <TableHead className="sticky left-[192px] z-30 w-[10rem] min-w-[10rem] bg-sky-700 text-white sm:w-[18rem] sm:min-w-[18rem]">
+                Descrição
+              </TableHead>
               <TableHead className="min-w-[72px] bg-sky-700 text-white">Tipo</TableHead>
               <TableHead className="min-w-[100px] bg-sky-700 text-white text-right">Preço Unitário</TableHead>
               <TableHead className="min-w-[100px] bg-sky-700 text-white border-r border-sky-600">
@@ -195,7 +200,7 @@ export function PvMtoPivotTable({
               <TableHead className="sticky left-[88px] z-30 bg-sky-100 p-1 dark:bg-sky-950">
                 <Input className="h-7 text-xs" placeholder="Filtrar" value={fCod} onChange={e => setFCod(e.target.value)} />
               </TableHead>
-              <TableHead className="p-1">
+              <TableHead className="sticky left-[192px] z-30 bg-sky-100 p-1 dark:bg-sky-950">
                 <Input className="h-7 text-xs" placeholder="Filtrar" value={fDesc} onChange={e => setFDesc(e.target.value)} />
               </TableHead>
               <TableHead className="p-1">
@@ -235,13 +240,31 @@ export function PvMtoPivotTable({
                     <div className="flex flex-wrap items-center gap-1">
                       <span>{row.codItem}</span>
                       {row.semCadastro ? (
-                        <Badge variant="outline" className="text-[10px] px-1 py-0 h-5">
-                          sem cadastro
-                        </Badge>
+                        onCadastrar ? (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <button
+                                type="button"
+                                className="cursor-pointer"
+                                aria-label={`Cadastrar item ${row.codItem}`}
+                                onClick={() => onCadastrar(row)}
+                              >
+                                <Badge variant="outline" className="h-5 cursor-pointer px-1 py-0 text-[10px] hover:bg-amber-50">
+                                  sem cadastro
+                                </Badge>
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent>Cadastrar item</TooltipContent>
+                          </Tooltip>
+                        ) : (
+                          <Badge variant="outline" className="h-5 px-1 py-0 text-[10px]">
+                            sem cadastro
+                          </Badge>
+                        )
                       ) : null}
                     </div>
                   </TableCell>
-                  <TableCell className="max-w-[240px] whitespace-normal text-xs" title={row.descricao ?? ""}>
+                  <TableCell className="sticky left-[192px] z-20 w-[10rem] min-w-[10rem] max-w-[10rem] whitespace-normal break-words bg-white align-top text-xs shadow-[2px_0_0_0_hsl(var(--border))] dark:bg-slate-950 sm:w-[18rem] sm:min-w-[18rem] sm:max-w-[18rem]">
                     {row.descricao || "—"}
                   </TableCell>
                   <TableCell>{row.tipo || "—"}</TableCell>

@@ -14,9 +14,9 @@ import { trpc } from "@/lib/trpc";
 import { Lock } from "lucide-react";
 import { toast } from "sonner";
 
-type Props = { cicloId: number; status: string };
+type Props = { cicloId: number; status: string; onCompraPapel?: () => void };
 
-export function CicloLifecycleBar({ cicloId, status }: Props) {
+export function CicloLifecycleBar({ cicloId, status, onCompraPapel }: Props) {
   const utils = trpc.useUtils();
   const { data: historico } = trpc.cicloComercial.historicoStatus.useQuery({ cicloId });
   const { data: snap } = trpc.cicloComercial.snapshot.useQuery({ cicloId });
@@ -36,7 +36,14 @@ export function CicloLifecycleBar({ cicloId, status }: Props) {
       utils.cicloComercial.getById.invalidate({ id: cicloId });
       utils.cicloComercial.historicoStatus.invalidate({ cicloId });
     },
-    onError: e => toast.error(e.message),
+    onError: e => {
+      toast.error(e.message);
+      if (e.message.includes("Compra de papel")) {
+        utils.cicloComercial.list.invalidate();
+        utils.cicloComercial.getById.invalidate({ id: cicloId });
+        onCompraPapel?.();
+      }
+    },
   });
 
   return (
@@ -105,7 +112,9 @@ export function CicloLifecycleBar({ cicloId, status }: Props) {
         <ol className="max-h-28 space-y-1 overflow-auto text-xs text-muted-foreground">
           {historico.map(h => (
             <li key={h.id}>
-              {h.statusDe || "—"} → {h.statusPara}
+              {h.statusDe && h.statusDe !== h.statusPara
+                ? `${h.statusDe} → ${h.statusPara}`
+                : "Registro"}
               {h.comentario ? ` · ${h.comentario}` : ""}
             </li>
           ))}

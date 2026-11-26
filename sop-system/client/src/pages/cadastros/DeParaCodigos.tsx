@@ -1,4 +1,6 @@
 import { useMemo, useState } from "react";
+import { ProdutoCombobox, type ProdutoOpcao } from "@/components/cadastros/ProdutoCombobox";
+import { validarParesDePara } from "@shared/de-para-combobox";
 import { textMatchesSearch } from "@shared/text-search";
 import { Checkbox } from "@/components/ui/checkbox";
 import { PendingSkuDeParaAcceptDialog } from "@/components/cadastros/PendingSkuDeParaAcceptDialog";
@@ -52,10 +54,9 @@ function ListaTab() {
   const [isOpen, setIsOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
-  const [formData, setFormData] = useState({
-    skuAntigo: "",
-    skuNovo: "",
-  });
+  const [antigos, setAntigos] = useState<ProdutoOpcao[]>([]);
+  const [novo, setNovo] = useState<ProdutoOpcao | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
 
   const utils = trpc.useUtils();
   const {
@@ -74,7 +75,7 @@ function ListaTab() {
       toast.success("De-Para criado");
       resetForm();
     },
-    onError: e => toast.error(e.message),
+    onError: e => setFormError(e.message),
   });
   const { data: diagnostico } = trpc.deParaCodigos.diagnostico.useQuery();
 
@@ -86,7 +87,7 @@ function ListaTab() {
       toast.success("De-Para criado com sucesso!");
       resetForm();
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => setFormError(error.message),
   });
 
   const updateMutation = trpc.deParaCodigos.update.useMutation({
@@ -96,7 +97,7 @@ function ListaTab() {
       toast.success("De-Para atualizado com sucesso!");
       resetForm();
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error) => setFormError(error.message),
   });
 
   const deleteMutation = trpc.deParaCodigos.delete.useMutation({
@@ -109,36 +110,42 @@ function ListaTab() {
   });
 
   const resetForm = () => {
-    setFormData({
-      skuAntigo: "",
-      skuNovo: "",
-    });
+    setAntigos([]);
+    setNovo(null);
+    setFormError(null);
     setEditingId(null);
     setIsOpen(false);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const erro = validarParesDePara(
+      antigos.map(item => item.codigo),
+      novo?.codigo ?? ""
+    );
+    if (erro) {
+      setFormError(erro);
+      return;
+    }
+    setFormError(null);
+    const skuNovo = novo!.codigo;
     if (editingId) {
-      updateMutation.mutate({ id: editingId, ...formData });
+      updateMutation.mutate({ id: editingId, skuAntigo: antigos[0]?.codigo, skuNovo });
       return;
     }
-    const antigos = formData.skuAntigo
-      .split(/[\n,;]+/)
-      .map(s => s.trim())
-      .filter(Boolean);
     if (antigos.length > 1) {
-      importBatch.mutate(antigos.map(skuAntigo => ({ skuAntigo, skuNovo: formData.skuNovo })));
+      importBatch.mutate(antigos.map(item => ({ skuAntigo: item.codigo, skuNovo })));
       return;
     }
-    createMutation.mutate({ skuAntigo: antigos[0] || formData.skuAntigo, skuNovo: formData.skuNovo });
+    createMutation.mutate({ skuAntigo: antigos[0]!.codigo, skuNovo });
   };
 
   const handleEdit = (item: NonNullable<typeof deParaList>[0]) => {
-    setFormData({
-      skuAntigo: item.skuAntigo,
-      skuNovo: item.skuNovo,
-    });
+    setAntigos([
+      { codigo: item.skuAntigo, descricao: item.descricaoAntigo || "", marca: null },
+    ]);
+    setNovo({ codigo: item.skuNovo, descricao: item.descricaoNovo || "", marca: null });
+    setFormError(null);
     setEditingId(item.id);
     setIsOpen(true);
   };
@@ -213,35 +220,60 @@ function ListaTab() {
                 <Plus className="h-4 w-4 mr-2" /> Novo De-Para
               </Button>
             </DialogTrigger>
-            <DialogContent>
+            <DialogContent className="w-[95vw] max-w-lg">
               <DialogHeader>
                 <DialogTitle>{editingId ? "Editar" : "Novo"} De-Para</DialogTitle>
               </DialogHeader>
               <form onSubmit={handleSubmit} className="space-y-4">
                 <div className="space-y-2">
-                  <Label>SKUs antigos * (um por linha para N:1)</Label>
-                  <textarea
-                    className="flex min-h-[88px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                    value={formData.skuAntigo}
-                    onChange={e => setFormData({ ...formData, skuAntigo: e.target.value })}
-                    placeholder={"80.02.000100\n80.02.000101"}
-                    required
-                  />
+                  <Label>{editingId ? "SKU antigo *" : "SKUs antigos * (vários para N:1)"}</Label>
+                  {editingId ? (
+                    <ProdutoCombobox
+                      value={antigos[0] ?? null}
+                      onChange={item => {
+                        setAntigos(item ? [item] : []);
+                        setFormError(null);
+                      }}
+                      placeholder="Buscar SKU antigo"
+                    />
+                  ) : (
+                    <ProdutoCombobox
+                      multiple
+                      value={antigos}
+                      onChange={itens => {
+                        setAntigos(itens);
+                        setFormError(null);
+                      }}
+                      placeholder="Buscar SKUs antigos"
+                    />
+                  )}
                 </div>
                 <div className="space-y-2">
                   <Label>SKU Novo *</Label>
-                  <Input 
-                    value={formData.skuNovo} 
-                    onChange={(e) => setFormData({ ...formData, skuNovo: e.target.value })} 
-                    placeholder="Ex: 1.00.000002"
-                    required 
+                  <ProdutoCombobox
+                    value={novo}
+                    onChange={item => {
+                      setNovo(item);
+                      setFormError(null);
+                    }}
+                    placeholder="Buscar SKU novo"
                   />
                 </div>
+                {formError ? (
+                  <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/5 p-2 text-sm text-destructive">
+                    {formError}
+                  </p>
+                ) : null}
 
                 <div className="flex justify-end gap-2">
                   <Button type="button" variant="outline" onClick={resetForm}>Cancelar</Button>
-                  <Button type="submit" disabled={createMutation.isPending || updateMutation.isPending}>
-                    {(createMutation.isPending || updateMutation.isPending) && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                  <Button
+                    type="submit"
+                    disabled={createMutation.isPending || updateMutation.isPending || importBatch.isPending}
+                  >
+                    {(createMutation.isPending || updateMutation.isPending || importBatch.isPending) && (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    )}
                     {editingId ? "Atualizar" : "Criar"}
                   </Button>
                 </div>

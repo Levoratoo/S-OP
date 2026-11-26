@@ -50,6 +50,7 @@ import {
   suggestSkuReferencias,
   suggestSkuReferenciasBatch,
 } from "./services/pending-sku-accept";
+import { buscarProdutosCadastrados, exigirProdutosCadastrados } from "./services/produto-busca";
 import { assertCrmExcelHeaders, assertCrmImportRows } from "./services/crm-import-validate";
 import {
   clearSazonalidadeFatores,
@@ -61,7 +62,6 @@ import {
 } from "./services/produto-sazonalidade-fator";
 import { validateFatoresPercentuais } from "@shared/sku-fator-sazonalidade";
 import { legacyApiDisabled } from "./legacy-api-disabled";
-import { assertCicloStatusTransition } from "./services/ciclo-status-flow";
 import { seedCapacidadeBaseline } from "./services/seed-capacidade";
 import { invalidateDeParaCache } from "./services/de-para-map";
 import {
@@ -81,8 +81,62 @@ import {
   importCrmParaCiclo,
   syncPvFromCarteira,
 } from "./services/ciclo-colab-extras";
+import { getGradeMtsDados } from "./services/grade-colab-dados";
+import {
+  confirmarImportacaoCompraPapel,
+  criarPapel,
+  atualizarPapel,
+  importarEstoquePapel,
+  listarCompraPapel,
+  preverImportacaoCompraPapel,
+  salvarDecisoesCompraPapel,
+} from "./services/compra-papel";
+import { DECISOES_COMPRA, RISCOS_COMPRA } from "@shared/compra-papel";
 import { syncCarteiraFromErp } from "./services/carteira-sql-sync";
 import { syncEstatisticaIaCadastros } from "./services/sync-estatistica-ia";
+import { carregarConfigPipedrive } from "@shared/pipedrive-config";
+import { PipedriveClient } from "./services/pipedrive/client";
+import { extrairPipedrive } from "./services/pipedrive/extract";
+import { criarRepositorioPipedrive } from "./services/pipedrive/repositorio";
+import {
+  desfazerPipedrive,
+  PipedriveSyncError,
+  previaPipedrive,
+  statusPipedrive,
+  syncPipedrive,
+} from "./services/pipedrive/sync";
+
+function erroPipedrive(err: unknown): never {
+  if (err instanceof TRPCError) throw err;
+  if (err instanceof PipedriveSyncError) {
+    throw new TRPCError({
+      code: err.codigo === "CICLO_AUSENTE" ? "NOT_FOUND" : "PRECONDITION_FAILED",
+      message: err.message,
+    });
+  }
+  throw new TRPCError({
+    code: "BAD_GATEWAY",
+    message: err instanceof Error && err.message ? err.message : "Falha ao consultar o Pipedrive. Tente de novo.",
+  });
+}
+
+function runtimePipedrive() {
+  const config = carregarConfigPipedrive();
+  const client = new PipedriveClient({
+    baseUrl: config.apiBase,
+    token: config.token,
+    log: mensagem => console.warn(mensagem),
+  });
+  return {
+    config,
+    repo: criarRepositorioPipedrive(),
+    extrair: () => extrairPipedrive(client, config),
+  };
+}
+
+function usuarioAtual(user: { email?: string | null; name?: string | null } | null | undefined) {
+  return user?.email || user?.name || "usuario";
+}
 
 function resolveDadosSistemaDir(explicit?: string): string {
   if (explicit?.trim()) return path.resolve(explicit.trim());
@@ -109,6 +163,12 @@ async function runGerarBasesOrThrow(input?: { dataInicio?: string; dataFim?: str
     }
     throw error;
   }
+}
+
+function erroNegocioDePara(err: unknown): TRPCError {
+  if (err instanceof TRPCError) return err;
+  const message = err instanceof Error && err.message ? err.message : "Não foi possível gravar o De-Para.";
+  return new TRPCError({ code: "BAD_REQUEST", message });
 }
 
 export const appRouter = router({
@@ -157,6 +217,21 @@ export const appRouter = router({
   // ==================== PRODUTOS ====================
   produtos: router({
     list: protectedProcedure.query(() => db.listProdutos()),
+    buscar: protectedProcedure
+      .input(
+        z.object({
+          query: z.string().max(120).default(""),
+          limit: z.number().int().min(1).max(50).default(30),
+          excluir: z.array(z.string()).max(20).optional(),
+        })
+      )
+      .query(({ input }) =>
+        buscarProdutosCadastrados({
+          query: input.query,
+          limit: input.limit,
+          excluir: input.excluir,
+        })
+      ),
     backfillPrecos: protectedProcedure.mutation(() => refreshPrecosProdutosAutomatico()),
     setPrecoManual: protectedProcedure
       .input(z.object({ id: z.number(), precoUnitario: z.number().positive() }))
@@ -929,6 +1004,10 @@ export const appRouter = router({
       .input(z.object({ cicloId: z.number() }))
       .query(({ input }) => db.getCicloComercialConsolidado(input.cicloId)),
 
+    gradeMts: protectedProcedure
+      .input(z.object({ cicloId: z.number() }))
+      .query(({ input }) => getGradeMtsDados(input.cicloId)),
+
     /** Realizado mensal 2025/2026 (e outros anos) para grade MTS. */
     realizadoAnual: protectedProcedure
       .input(z.object({ anos: z.array(z.number()).default([2025, 2026]) }))
@@ -1105,6 +1184,66 @@ export const appRouter = router({
           });
         }
         return importCrmParaCiclo(input.cicloId, input.rows);
+      }),
+
+    pipedriveStatus: protectedProcedure
+      .input(z.object({ cicloId: z.number() }))
+      .query(async ({ input }) => {
+        const runtime = runtimePipedrive();
+        try {
+          return await statusPipedrive({ config: runtime.config, repo: runtime.repo, cicloId: input.cicloId });
+        } catch (err) {
+          erroPipedrive(err);
+        }
+      }),
+
+    previewPipedrive: protectedProcedure
+      .input(z.object({ cicloId: z.number() }))
+      .mutation(async ({ input }) => {
+        const runtime = runtimePipedrive();
+        try {
+          return await previaPipedrive({
+            config: runtime.config,
+            repo: runtime.repo,
+            extrair: runtime.extrair,
+            cicloId: input.cicloId,
+          });
+        } catch (err) {
+          erroPipedrive(err);
+        }
+      }),
+
+    syncPipedrive: protectedProcedure
+      .input(z.object({ cicloId: z.number(), previewHash: z.string().min(16) }))
+      .mutation(async ({ input, ctx }) => {
+        const runtime = runtimePipedrive();
+        try {
+          return await syncPipedrive({
+            config: runtime.config,
+            repo: runtime.repo,
+            extrair: runtime.extrair,
+            cicloId: input.cicloId,
+            previewHash: input.previewHash,
+            usuario: usuarioAtual(ctx.user),
+          });
+        } catch (err) {
+          erroPipedrive(err);
+        }
+      }),
+
+    undoLastPipedriveSync: protectedProcedure
+      .input(z.object({ cicloId: z.number() }))
+      .mutation(async ({ input, ctx }) => {
+        const runtime = runtimePipedrive();
+        try {
+          return await desfazerPipedrive({
+            repo: runtime.repo,
+            cicloId: input.cicloId,
+            usuario: usuarioAtual(ctx.user),
+          });
+        } catch (err) {
+          erroPipedrive(err);
+        }
       }),
 
     fecharCiclo: protectedProcedure
@@ -1507,10 +1646,15 @@ export const appRouter = router({
         skuNovo: z.string().min(1), 
       }))
       .mutation(async ({ input }) => {
-        const result = await db.createDeParaCodigo(input);
-        invalidateDeParaCache();
-        invalidateDeParaEnrichedCache();
-        return result;
+        try {
+          await exigirProdutosCadastrados([input.skuAntigo, input.skuNovo]);
+          const result = await db.createDeParaCodigo(input);
+          invalidateDeParaCache();
+          invalidateDeParaEnrichedCache();
+          return result;
+        } catch (err) {
+          throw erroNegocioDePara(err);
+        }
       }),
     update: protectedProcedure
       .input(z.object({ 
@@ -1519,11 +1663,17 @@ export const appRouter = router({
         skuNovo: z.string().optional(), 
       }))
       .mutation(async ({ input }) => {
-        const { id, ...rest } = input;
-        const result = await db.updateDeParaCodigo(id, rest);
-        invalidateDeParaCache();
-        invalidateDeParaEnrichedCache();
-        return result;
+        try {
+          const codigos = [input.skuAntigo, input.skuNovo].filter((codigo): codigo is string => Boolean(codigo));
+          await exigirProdutosCadastrados(codigos);
+          const { id, ...rest } = input;
+          const result = await db.updateDeParaCodigo(id, rest);
+          invalidateDeParaCache();
+          invalidateDeParaEnrichedCache();
+          return result;
+        } catch (err) {
+          throw erroNegocioDePara(err);
+        }
       }),
     delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ input }) => {
       const result = await db.deleteDeParaCodigo(input.id);
@@ -1537,10 +1687,15 @@ export const appRouter = router({
         skuNovo: z.string(), 
       })))
       .mutation(async ({ input }) => {
-        const result = await db.createDeParaCodigosBatch(input);
-        invalidateDeParaCache();
-        invalidateDeParaEnrichedCache();
-        return result;
+        try {
+          await exigirProdutosCadastrados(input.flatMap(item => [item.skuAntigo, item.skuNovo]));
+          const result = await db.createDeParaCodigosBatch(input);
+          invalidateDeParaCache();
+          invalidateDeParaEnrichedCache();
+          return result;
+        } catch (err) {
+          throw erroNegocioDePara(err);
+        }
       }),
     getCodigoAtual: protectedProcedure
       .input(z.object({ codigo: z.string() }))
@@ -2201,17 +2356,44 @@ export const appRouter = router({
               z.object({
                 codMaterial: z.string().min(1),
                 skuAntigo: z.string().nullable().optional(),
+                cadastro: z
+                  .object({
+                    descricao: z.string().min(1).max(300),
+                    marca: z.string().max(100).nullable().optional(),
+                    tipoNegocio: z.string().max(20).nullable().optional(),
+                    precoUnitario: z.number().min(0).nullable().optional(),
+                  })
+                  .nullable()
+                  .optional(),
               })
             )
             .min(1)
             .max(5000),
         })
       )
-      .mutation(({ input }) => acceptPendingSkusWithDePara(input.items)),
+      .mutation(async ({ input }) => {
+        try {
+          return await acceptPendingSkusWithDePara(input.items);
+        } catch (err) {
+          throw erroNegocioDePara(err);
+        }
+      }),
 
     suggestSkuReferencias: protectedProcedure
-      .input(z.object({ codMaterial: z.string().min(1), limit: z.number().min(1).max(20).optional() }))
-      .query(({ input }) => suggestSkuReferencias(input.codMaterial, input.limit ?? 10)),
+      .input(
+        z.object({
+          codMaterial: z.string().min(1),
+          limit: z.number().min(1).max(20).optional(),
+          descricao: z.string().max(300).optional(),
+          marca: z.string().max(120).optional(),
+        })
+      )
+      .query(({ input }) =>
+        suggestSkuReferencias(input.codMaterial, input.limit ?? 10, {
+          descricao: input.descricao,
+          marca: input.marca,
+        })
+      ),
 
     suggestSkuReferenciasBatch: protectedProcedure
       .input(z.object({ codMaterials: z.array(z.string().min(1)).min(1).max(500) }))
@@ -2480,6 +2662,100 @@ export const appRouter = router({
         
         return resultados;
       }),
+  }),
+
+  compraPapel: router({
+    visao: protectedProcedure
+      .input(z.object({ cicloId: z.number() }))
+      .query(({ input }) => listarCompraPapel(input.cicloId)),
+    salvar: protectedProcedure
+      .input(
+        z.object({
+          cicloId: z.number(),
+          itens: z.array(
+            z.object({
+              linhaId: z.string().min(1),
+              papelId: z.number().nullable(),
+              risco: z.enum(RISCOS_COMPRA).nullable(),
+              comprar: z.enum(DECISOES_COMPRA),
+              quantidade: z.number().min(0).nullable(),
+              observacao: z.string().max(500),
+            })
+          ),
+        })
+      )
+      .mutation(({ input, ctx }) =>
+        salvarDecisoesCompraPapel({
+          cicloId: input.cicloId,
+          usuario: ctx.user?.email || ctx.user?.name || "usuario",
+          itens: input.itens,
+        })
+      ),
+    criarPapel: protectedProcedure
+      .input(
+        z.object({
+          codigo: z.string().min(1),
+          descricao: z.string().min(1),
+          gramatura: z.string().optional(),
+          formato: z.string().optional(),
+          tipo: z.string().optional(),
+          unidade: z.string().optional(),
+        })
+      )
+      .mutation(({ input }) => criarPapel(input)),
+    atualizarPapel: protectedProcedure
+      .input(z.object({ id: z.number(), ativo: z.boolean() }))
+      .mutation(({ input }) => atualizarPapel(input.id, input.ativo)),
+    importarEstoque: protectedProcedure
+      .input(
+        z.object({
+          linhas: z.array(
+            z.object({
+              codigo: z.string().min(1),
+              quantidade: z.number().min(0),
+              unidade: z.string().min(1),
+              dataBase: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+            })
+          ),
+        })
+      )
+      .mutation(({ input }) => importarEstoquePapel(input.linhas)),
+    preverImportacao: protectedProcedure
+      .input(
+        z.object({
+          cicloId: z.number(),
+          linhas: z.array(
+            z.object({
+              linhaId: z.string(),
+              papel: z.string(),
+              risco: z.string(),
+              comprar: z.string(),
+              quantidade: z.string(),
+              observacao: z.string(),
+            })
+          ),
+        })
+      )
+      .mutation(({ input }) => preverImportacaoCompraPapel(input.cicloId, input.linhas)),
+    confirmarImportacao: protectedProcedure
+      .input(
+        z.object({
+          cicloId: z.number(),
+          linhas: z.array(
+            z.object({
+              linhaId: z.string(),
+              papel: z.string(),
+              risco: z.string(),
+              comprar: z.string(),
+              quantidade: z.string(),
+              observacao: z.string(),
+            })
+          ),
+        })
+      )
+      .mutation(({ input, ctx }) =>
+        confirmarImportacaoCompraPapel(input.cicloId, ctx.user?.email || ctx.user?.name || "usuario", input.linhas)
+      ),
   }),
 });
 

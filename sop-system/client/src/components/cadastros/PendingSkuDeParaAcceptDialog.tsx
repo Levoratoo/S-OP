@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -8,17 +8,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ProdutoCombobox, type ProdutoOpcao } from "@/components/cadastros/ProdutoCombobox";
 import { trpc } from "@/lib/trpc";
+import { escolherReferenciaSku, payloadConfirmarReferencias } from "@shared/de-para-combobox";
 import {
   SKU_SIMILARITY_AUTO_PICK,
   SKU_SIMILARITY_DEPARA_AUTO_PICK,
@@ -33,12 +27,14 @@ export type PendingSkuRow = {
   descricaoItem?: string | null;
 };
 
+type Sugestao = { codigo: string; descricao: string; marca?: string | null; score: number };
+
 type RowState = {
   codMaterial: string;
   descricao: string;
   marca: string;
   skuAntigo: string | null;
-  sugestoes: Array<{ codigo: string; descricao: string; marca?: string | null; score: number }>;
+  sugestoes: Sugestao[];
   loading: boolean;
 };
 
@@ -52,8 +48,6 @@ type Props = {
   isPending?: boolean;
 };
 
-const SEM_REF = "__sem__";
-
 export function PendingSkuDeParaAcceptDialog({
   open,
   onOpenChange,
@@ -63,28 +57,29 @@ export function PendingSkuDeParaAcceptDialog({
   isPending,
 }: Props) {
   const [rows, setRows] = useState<RowState[]>([]);
-  const [manualBusca, setManualBusca] = useState<Record<string, string>>({});
-
   const suggestBatch = trpc.cadastrosSistema.suggestSkuReferenciasBatch.useMutation();
-  const { data: produtosList } = trpc.produtos.list.useQuery(undefined, { enabled: open });
+  const skusKey = skus.map(item => item.codMaterial).join("|");
 
   useEffect(() => {
     if (!open || !skus.length) return;
-    const initial: RowState[] = skus.map(s => ({
-      codMaterial: s.codMaterial,
-      descricao: s.descricaoItem || s.codMaterial,
-      marca: s.marca || "",
-      skuAntigo: null,
-      sugestoes: [],
-      loading: true,
-    }));
-    setRows(initial);
+    let cancelado = false;
+    setRows(
+      skus.map(item => ({
+        codMaterial: item.codMaterial,
+        descricao: item.descricaoItem || item.codMaterial,
+        marca: item.marca || "",
+        skuAntigo: null,
+        sugestoes: [],
+        loading: true,
+      }))
+    );
     suggestBatch
-      .mutateAsync({ codMaterials: skus.map(s => s.codMaterial) })
+      .mutateAsync({ codMaterials: skus.map(item => item.codMaterial) })
       .then(map => {
+        if (cancelado) return;
         setRows(
-          skus.map(s => {
-            const sugestoes = map[s.codMaterial] ?? [];
+          skus.map(item => {
+            const sugestoes = map[item.codMaterial] ?? [];
             const best = sugestoes[0];
             const autoPick =
               mode === "depara"
@@ -95,9 +90,9 @@ export function PendingSkuDeParaAcceptDialog({
                   ? best.codigo
                   : null;
             return {
-              codMaterial: s.codMaterial,
-              descricao: s.descricaoItem || s.codMaterial,
-              marca: s.marca || "",
+              codMaterial: item.codMaterial,
+              descricao: item.descricaoItem || item.codMaterial,
+              marca: item.marca || "",
               skuAntigo: autoPick,
               sugestoes,
               loading: false,
@@ -105,222 +100,101 @@ export function PendingSkuDeParaAcceptDialog({
           })
         );
       })
-      .catch(() => setRows(prev => prev.map(r => ({ ...r, loading: false }))));
-  }, [open, skus, mode]);
-
-  const produtosBusca = useMemo(() => {
-    return (produtosList ?? []).map(p => ({
-      codigo: (p.codItem || p.codigo || "").trim(),
-      descricao: p.descricao || p.nome || "",
-      marca: p.marca,
-    }));
-  }, [produtosList]);
+      .catch(() => {
+        if (!cancelado) setRows(prev => prev.map(row => ({ ...row, loading: false })));
+      });
+    return () => {
+      cancelado = true;
+    };
+    // A identidade de `skus` muda a cada render do pai. A chave estável é a lista de códigos.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, skusKey, mode]);
 
   const setRef = (codMaterial: string, skuAntigo: string | null) => {
-    setRows(prev => prev.map(r => (r.codMaterial === codMaterial ? { ...r, skuAntigo } : r)));
+    setRows(prev => prev.map(row => (row.codMaterial === codMaterial ? { ...row, skuAntigo } : row)));
   };
 
-  const scoreFor = (row: RowState) => {
-    if (!row.skuAntigo) return null;
-    return row.sugestoes.find(s => s.codigo === row.skuAntigo)?.score ?? null;
+  const escolher = (row: RowState, opcao: ProdutoOpcao | null) => {
+    const sugestao = row.sugestoes[0]?.codigo ?? null;
+    const escolha =
+      opcao == null
+        ? "sem"
+        : sugestao && opcao.codigo.toUpperCase() === sugestao.toUpperCase()
+          ? "sugestao"
+          : { codigo: opcao.codigo };
+    const resultado = escolherReferenciaSku(
+      { codMaterial: row.codMaterial, skuAntigo: row.skuAntigo, sugestaoCodigo: sugestao },
+      escolha
+    );
+    if (resultado.erro) return;
+    setRef(row.codMaterial, resultado.linha.skuAntigo);
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] w-[95vw] max-w-6xl overflow-y-auto sm:max-w-6xl">
-        <DialogHeader className="pr-8">
-          <DialogTitle>Substituição De-Para (SKU antigo → novo)</DialogTitle>
-          <DialogDescription>
-            Escolha o SKU de referência para cada código novo ou marque &quot;Sem referência&quot; para cadastrar
-            sem De-Para.
+      <DialogContent className="flex max-h-[90vh] w-[95vw] max-w-6xl flex-col gap-0 overflow-hidden p-0 sm:max-w-6xl">
+        <DialogHeader className="shrink-0 px-4 pr-10 pt-4 text-left sm:px-6 sm:pt-6">
+          <DialogTitle className="text-left leading-snug break-words">
+            Substituição De-Para (SKU antigo → novo)
+          </DialogTitle>
+          <DialogDescription className="text-left break-words">
+            A sugestão por similaridade já vem selecionada. Busque outro produto cadastrado ou marque Sem referência.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-3 md:hidden">
-          {rows.map(row => {
-            const score = scoreFor(row);
-            const warn = score != null && score < SKU_SIMILARITY_REVIEW_WARN;
-            const busca = manualBusca[row.codMaterial] ?? "";
-            return (
-              <article key={row.codMaterial} className="space-y-2 rounded-md border p-3">
-                <p className="font-mono text-xs">{row.codMaterial}</p>
-                <p className="text-sm">{row.descricao}</p>
-                <p className="text-xs text-muted-foreground">{row.marca || "—"}</p>
-                {row.loading ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <>
-                    <Label className="text-xs">Substitui o SKU (De-Para)</Label>
-                    <Select
-                      value={row.skuAntigo ?? SEM_REF}
-                      onValueChange={v => setRef(row.codMaterial, v === SEM_REF ? null : v)}
-                    >
-                      <SelectTrigger
-                        title={
-                          row.skuAntigo
-                            ? row.sugestoes.find(s => s.codigo === row.skuAntigo)?.descricao
-                              ? `${row.skuAntigo} — ${row.sugestoes.find(s => s.codigo === row.skuAntigo)?.descricao}`
-                              : row.skuAntigo
-                            : "Sem referência"
-                        }
-                        className={cn(
-                          "h-auto min-h-9 w-full whitespace-normal py-1.5 [&_[data-slot=select-value]]:line-clamp-2 [&_[data-slot=select-value]]:whitespace-normal",
-                          warn && row.skuAntigo ? "border-amber-400 bg-amber-50/80" : undefined
-                        )}
-                      >
-                        <SelectValue placeholder="Sem referência" />
-                      </SelectTrigger>
-                      <SelectContent className="w-full sm:min-w-[28rem]">
-                        <SelectItem value={SEM_REF}>Sem referência</SelectItem>
-                        {row.sugestoes.map(s => {
-                          const label = `${s.codigo} — ${s.descricao} (${Math.round(s.score * 100)}%)`;
-                          return (
-                            <SelectItem key={s.codigo} value={s.codigo} title={label} className="whitespace-normal">
-                              {label}
-                            </SelectItem>
-                          );
-                        })}
-                      </SelectContent>
-                    </Select>
-                    {score != null && row.skuAntigo ? (
-                      <p className={cn("text-xs", warn ? "text-amber-700" : "text-muted-foreground")}>
-                        Similaridade: {Math.round(score * 100)}%{warn ? " — revise" : ""}
-                      </p>
-                    ) : null}
-                    <Input
-                      className="h-8 text-xs"
-                      placeholder="Buscar outro SKU"
-                      value={busca}
-                      onChange={e => setManualBusca(prev => ({ ...prev, [row.codMaterial]: e.target.value }))}
-                    />
-                  </>
-                )}
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3 sm:px-6">
+          <div className="space-y-3 md:hidden">
+            {rows.map(row => (
+              <article key={row.codMaterial} className="flex min-w-0 flex-col gap-2 rounded-md border p-3">
+                <p className="break-all font-mono text-xs">{row.codMaterial}</p>
+                <p className="break-words text-sm leading-snug">{row.descricao}</p>
+                <p className="break-words text-xs text-muted-foreground">{row.marca || "—"}</p>
+                <ReferenciaCampo row={row} onChange={opcao => escolher(row, opcao)} />
               </article>
-            );
-          })}
-        </div>
-        <div className="hidden overflow-x-auto rounded-md border md:block">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Código novo</TableHead>
-                <TableHead>Descrição</TableHead>
-                <TableHead>Marca</TableHead>
-                <TableHead className="min-w-[280px]">Substitui o SKU (De-Para)</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map(row => {
-                const score = scoreFor(row);
-                const warn = score != null && score < SKU_SIMILARITY_REVIEW_WARN;
-                const busca = manualBusca[row.codMaterial] ?? "";
-                const buscaHits = busca.trim()
-                  ? produtosBusca
-                      .filter(
-                        p =>
-                          p.codigo &&
-                          p.codigo.toUpperCase() !== row.codMaterial.toUpperCase() &&
-                          [p.codigo, p.descricao, p.marca]
-                            .filter(Boolean)
-                            .some(v => String(v).toLowerCase().includes(busca.toLowerCase()))
-                      )
-                      .slice(0, 8)
-                  : [];
-                return (
+            ))}
+          </div>
+          <div className="hidden overflow-x-auto rounded-md border md:block">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Código novo</TableHead>
+                  <TableHead>Descrição</TableHead>
+                  <TableHead>Marca</TableHead>
+                  <TableHead className="min-w-[280px]">Substitui o SKU (De-Para)</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rows.map(row => (
                   <TableRow key={row.codMaterial}>
                     <TableCell className="font-mono text-xs">{row.codMaterial}</TableCell>
-                    <TableCell className="max-w-[200px] truncate" title={row.descricao}>
+                    <TableCell className="max-w-[200px] whitespace-normal break-words" title={row.descricao}>
                       {row.descricao}
                     </TableCell>
-                    <TableCell>{row.marca || "—"}</TableCell>
-                    <TableCell className="space-y-2">
-                      {row.loading ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <>
-                          <Select
-                            value={row.skuAntigo ?? SEM_REF}
-                            onValueChange={v => setRef(row.codMaterial, v === SEM_REF ? null : v)}
-                          >
-                            <SelectTrigger
-                              title={
-                                row.skuAntigo
-                                  ? `${row.skuAntigo} — ${row.sugestoes.find(s => s.codigo === row.skuAntigo)?.descricao ?? ""}`
-                                  : "Sem referência"
-                              }
-                              className={cn(
-                                "h-auto min-h-9 w-full whitespace-normal py-1.5 [&_[data-slot=select-value]]:line-clamp-2 [&_[data-slot=select-value]]:whitespace-normal",
-                                warn && row.skuAntigo ? "border-amber-400 bg-amber-50/80" : undefined
-                              )}
-                            >
-                              <SelectValue placeholder="Sem referência" />
-                            </SelectTrigger>
-                            <SelectContent className="w-full sm:min-w-[28rem]">
-                              <SelectItem value={SEM_REF}>Sem referência</SelectItem>
-                              {row.sugestoes.map(s => {
-                                const label = `${s.codigo} — ${s.descricao} (${Math.round(s.score * 100)}%)`;
-                                return (
-                                  <SelectItem key={s.codigo} value={s.codigo} title={label} className="whitespace-normal">
-                                    {label}
-                                  </SelectItem>
-                                );
-                              })}
-                            </SelectContent>
-                          </Select>
-                          {score != null && row.skuAntigo ? (
-                            <p className={cn("text-xs", warn ? "text-amber-700" : "text-muted-foreground")}>
-                              Similaridade: {Math.round(score * 100)}%
-                              {warn ? " — revise" : ""}
-                            </p>
-                          ) : null}
-                          <div className="space-y-1">
-                            <Label className="text-xs">Buscar outro SKU</Label>
-                            <Input
-                              className="h-8 text-xs"
-                              placeholder="Código ou descrição…"
-                              value={busca}
-                              onChange={e =>
-                                setManualBusca(prev => ({ ...prev, [row.codMaterial]: e.target.value }))
-                              }
-                            />
-                            {buscaHits.length > 0 ? (
-                              <div className="flex flex-wrap gap-1">
-                                {buscaHits.map(p => (
-                                  <Button
-                                    key={p.codigo}
-                                    type="button"
-                                    size="sm"
-                                    variant="outline"
-                                    className="h-7 text-xs"
-                                    onClick={() => setRef(row.codMaterial, p.codigo)}
-                                  >
-                                    {p.codigo}
-                                  </Button>
-                                ))}
-                              </div>
-                            ) : null}
-                          </div>
-                        </>
-                      )}
+                    <TableCell className="break-words">{row.marca || "—"}</TableCell>
+                    <TableCell>
+                      <ReferenciaCampo row={row} onChange={opcao => escolher(row, opcao)} />
                     </TableCell>
                   </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
         </div>
-        <DialogFooter className="flex flex-wrap gap-2">
+        <DialogFooter className="shrink-0 flex-wrap gap-2 border-t bg-background px-4 py-3 sm:px-6">
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             Cancelar
           </Button>
           <Button
             type="button"
-            disabled={isPending || rows.some(r => r.loading)}
+            disabled={isPending || rows.some(row => row.loading)}
             onClick={() =>
               onConfirm(
-                rows.map(r => ({
-                  codMaterial: r.codMaterial,
-                  skuAntigo: r.skuAntigo,
-                }))
+                payloadConfirmarReferencias(
+                  rows.map(row => ({
+                    codMaterial: row.codMaterial,
+                    skuAntigo: row.skuAntigo,
+                    sugestaoCodigo: row.sugestoes[0]?.codigo ?? null,
+                  }))
+                )
               )
             }
           >
@@ -331,4 +205,39 @@ export function PendingSkuDeParaAcceptDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+function ReferenciaCampo({ row, onChange }: { row: RowState; onChange: (opcao: ProdutoOpcao | null) => void }) {
+  const score = row.skuAntigo ? row.sugestoes.find(item => item.codigo === row.skuAntigo)?.score ?? null : null;
+  const warn = score != null && score < SKU_SIMILARITY_REVIEW_WARN;
+  const atual = valorSelecionado(row);
+  return (
+    <div className="min-w-0 space-y-1">
+      <Label className="text-xs">Substitui o SKU (De-Para)</Label>
+      {row.loading ? (
+        <Loader2 className="h-4 w-4 animate-spin" />
+      ) : (
+        <ProdutoCombobox
+          permitirSemReferencia
+          value={atual}
+          sugestoes={row.sugestoes}
+          excluir={[row.codMaterial]}
+          onChange={onChange}
+          placeholder="Buscar outro SKU"
+        />
+      )}
+      {score != null && row.skuAntigo ? (
+        <p className={cn("text-xs", warn ? "text-amber-700" : "text-muted-foreground")}>
+          Similaridade: {Math.round(score * 100)}%{warn ? " — revise" : ""}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function valorSelecionado(row: RowState): ProdutoOpcao | null {
+  if (!row.skuAntigo) return null;
+  const sugestao = row.sugestoes.find(item => item.codigo.toUpperCase() === row.skuAntigo?.toUpperCase());
+  if (sugestao) return sugestao;
+  return { codigo: row.skuAntigo, descricao: "", marca: null };
 }

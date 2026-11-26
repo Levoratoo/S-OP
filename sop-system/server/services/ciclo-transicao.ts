@@ -4,6 +4,8 @@ import { getDb } from "../db";
 import { cicloStatusHistorico, ciclosComerciais } from "../../drizzle/schema";
 import { assertCicloStatusTransition, passosFecharCiclo } from "./ciclo-status-flow";
 import { captureCicloSnapshot } from "./ciclo-snapshot";
+import { avaliarCompraPapelParaAprovacao, congelarCompraPapel } from "./compra-papel";
+import { mensagemPendenciasCompraPapel } from "@shared/compra-papel";
 import type { CicloStatus } from "@shared/ciclo-status";
 import { isCicloStatus } from "@shared/ciclo-status";
 
@@ -28,13 +30,27 @@ export async function transicionarCiclo(input: {
     viaFechar: input.viaFechar,
   });
 
+  let comentario = input.comentario ?? null;
   if (input.next === "APROVADO") {
+    const analise = await avaliarCompraPapelParaAprovacao(input.cicloId);
+    const bloqueio = mensagemPendenciasCompraPapel(analise.pendentes);
+    if (bloqueio) {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: bloqueio });
+    }
+    if (analise.total === 0) {
+      comentario = [comentario, "Análise de compra de papel com 0 linhas."].filter(Boolean).join(" ");
+    }
     await captureCicloSnapshot({
       cicloId: input.cicloId,
       createdBy: input.usuario,
-      comentario: input.comentario || "Snapshot da aprovação",
+      comentario: comentario || "Snapshot da aprovação",
       retroativo: false,
     });
+    await congelarCompraPapel(
+      input.cicloId,
+      input.usuario ?? null,
+      analise.total === 0 ? "Análise de compra de papel com 0 linhas." : comentario || "Snapshot da compra de papel"
+    );
   }
 
   await db.insert(cicloStatusHistorico).values({
@@ -42,7 +58,7 @@ export async function transicionarCiclo(input: {
     statusDe: ciclo.status,
     statusPara: input.next,
     usuario: input.usuario ?? null,
-    comentario: input.comentario ?? null,
+    comentario,
   });
   await db.update(ciclosComerciais).set({ status: input.next }).where(eq(ciclosComerciais.id, input.cicloId));
   return { status: input.next };

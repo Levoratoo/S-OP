@@ -81,7 +81,8 @@ export function skuFromProdutoCrm(raw: string) {
   return { sku, descricao };
 }
 
-function orcamentoFromCalculoOr(raw: unknown) {
+/** Primeiro inteiro do Cálculo OR. Vários números e sufixos /1 ficam só com o primeiro inteiro. */
+export function orcamentoFromCalculoOr(raw: unknown) {
   const text = String(raw ?? "").trim();
   if (!text || text === "0") return 0;
   const match = text.match(/^(\d+)/);
