@@ -31,7 +31,7 @@ const YOY =
   "sticky left-[17.5rem] z-30 w-[7rem] min-w-[7rem] align-top text-right sm:left-[27.5rem] shadow-[2px_0_0_0_hsl(var(--border))]";
 
 const AJUDA_EXCECAO =
-  "Exceção se, em algum mês passado, |realizado ÷ previsto − 1| passar da faixa. Previsto é a foto congelada; sem foto, usa a previsão estatística do mesmo mês. Previsto 0 com realizado maior que 0 é exceção. Os dois em 0 não são.";
+  "Exceção se, em algum mês passado, |realizado ÷ previsto − 1| passar da faixa. Previsto é a foto congelada; sem foto, a previsão do ciclo mais recente que cobria o mês; sem esse ciclo, a estatística do job mais recente. Sem base, o mês fica de fora. Previsto 0 com realizado maior que 0 é exceção. Os dois em 0 não são.";
 
 type Item = {
   id: number;
@@ -41,7 +41,9 @@ type Item = {
 } & Record<string, unknown>;
 
 type Realizado = Record<string, Record<number, number[]>>;
-type Previsto = Record<string, Record<string, number>>;
+type CelulaPrevisto = { valor: number; origem: "foto" | "ciclo" | "job"; rotulo: string };
+type Previsto = Record<string, Record<string, CelulaPrevisto>>;
+type MesesComFoto = Record<string, { rotulo: string }>;
 
 function formatNum(value: number) {
   return value.toLocaleString("pt-BR", { maximumFractionDigits: 0 });
@@ -81,7 +83,7 @@ export function GradeMts({
   mesInicio,
   realizado,
   previsto,
-  mesesSemFoto,
+  mesesComFoto,
   descricaoDe,
   somenteLeitura,
   revisarExcecoes,
@@ -92,7 +94,7 @@ export function GradeMts({
   mesInicio: number;
   realizado?: Realizado;
   previsto?: Previsto;
-  mesesSemFoto: string[];
+  mesesComFoto?: MesesComFoto;
   descricaoDe: (item: Item) => string;
   somenteLeitura: boolean;
   revisarExcecoes?: boolean;
@@ -101,22 +103,25 @@ export function GradeMts({
   const periodo = periodoAnoContraAno(anoInicio, mesInicio);
   const passados = mesesPassadosGrade(anoInicio, mesInicio);
   const futuros = mesesFuturosGrade(anoInicio, mesInicio);
-  const semFoto = new Set(mesesSemFoto);
+  const fotos = mesesComFoto ?? {};
   const colSpan = colunasGradeMts(anoInicio, mesInicio).length;
   const [faixa, setFaixa] = useState(30);
   const [soExcecoes, setSoExcecoes] = useState(false);
   const faixaAplicada = Math.min(200, Math.max(1, Number.isFinite(faixa) ? faixa : 30));
 
-  const mesesDoItem = (item: Item, sku: string): MesExcecao[] =>
+  const baseDoMes = (sku: string, chave: string): { valor: number; origem: "foto" | "ciclo" | "job"; rotulo: string } | null => {
+    const celula = previsto?.[sku]?.[chave];
+    if (celula) return celula;
+    const foto = fotos[chave];
+    if (!foto) return null;
+    return { valor: 0, origem: "foto", rotulo: foto.rotulo };
+  };
+  const mesesDoItem = (sku: string): MesExcecao[] =>
     passados.map(mes => {
-      const chave = chaveMes(mes.ano, mes.mes);
-      const sem = semFoto.has(chave);
-      const indiceFuturo = futuros.findIndex(futuro => futuro.ano === mes.ano && futuro.mes === mes.mes);
-      const estatistica = indiceFuturo >= 0 ? Number(item[EST_KEYS[indiceFuturo]] || 0) : null;
+      const base = baseDoMes(sku, chaveMes(mes.ano, mes.mes));
       return {
         realizado: qtdAno(realizado, sku, mes.ano, mes.mes),
-        previstoCongelado: sem ? null : Number(previsto?.[sku]?.[chave] || 0),
-        estatistica,
+        base: base ? base.valor : null,
       };
     });
 
@@ -124,10 +129,10 @@ export function GradeMts({
     const ids = new Set<number>();
     for (const item of itens) {
       const sku = String(item.sku || "").trim().toUpperCase();
-      if (skuEhExcecao(mesesDoItem(item, sku), faixaAplicada)) ids.add(item.id);
+      if (skuEhExcecao(mesesDoItem(sku), faixaAplicada)) ids.add(item.id);
     }
     return ids;
-  }, [itens, faixaAplicada, passados, futuros, realizado, previsto, semFoto]);
+  }, [itens, faixaAplicada, passados, realizado, previsto, fotos]);
 
   const visiveis = soExcecoes ? itens.filter(item => excecoes.has(item.id)) : itens;
 
@@ -250,8 +255,8 @@ export function GradeMts({
                   {passados.map(mes => {
                     const chave = chaveMes(mes.ano, mes.mes);
                     const real = qtdAno(realizado, sku, mes.ano, mes.mes);
-                    const sem = semFoto.has(chave);
-                    const prev = sem ? null : Number(previsto?.[sku]?.[chave] || 0);
+                    const base = baseDoMes(sku, chave);
+                    const prev = base ? base.valor : null;
                     const aderencia = pvVsRe(real, prev);
                     const faixa = faixaPvVsRe(aderencia);
                     const cor =
@@ -266,10 +271,13 @@ export function GradeMts({
                       <Fragment key={chave}>
                         <TableCell className="border-l p-1 text-right tabular-nums">{real ? formatNum(real) : "·"}</TableCell>
                         <TableCell
-                          className="p-1 text-right tabular-nums"
-                          title={sem ? "Sem ciclo congelado para este mês" : prev === 0 ? "Previsto zero na foto" : undefined}
+                          className={cn(
+                            "p-1 text-right tabular-nums",
+                            base && base.origem !== "foto" && "italic text-muted-foreground"
+                          )}
+                          title={base?.rotulo ?? "Sem previsão para este mês"}
                         >
-                          {sem ? "—" : formatNum(prev ?? 0)}
+                          {base ? formatNum(base.valor) : "—"}
                         </TableCell>
                         <TableCell className={`p-1 text-right tabular-nums ${cor}`} title="Realizado ÷ previsto × 100">
                           {aderencia == null ? "—" : `${aderencia.toLocaleString("pt-BR", { maximumFractionDigits: 0 })}%`}

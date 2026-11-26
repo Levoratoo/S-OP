@@ -620,7 +620,7 @@ export default function Colaboracoes() {
                           mesInicio={ciclo.mesInicio}
                           realizado={gradeMts?.realizado}
                           previsto={gradeMts?.previsto}
-                          mesesSemFoto={gradeMts?.mesesSemFoto ?? []}
+                          mesesComFoto={gradeMts?.mesesComFoto ?? {}}
                           descricaoDe={descricaoDoItem}
                           somenteLeitura={isCicloSomenteLeitura(ciclo.status)}
                           revisarExcecoes={ciclo.status === "EM_COLABORACAO" || ciclo.status === "CONSENSO"}

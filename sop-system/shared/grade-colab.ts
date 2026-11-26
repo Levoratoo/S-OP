@@ -1,4 +1,5 @@
 import { cicloHorizonCalendar } from "@shared/ciclo-horizon";
+import { isCicloStatus, type CicloStatus } from "@shared/ciclo-status";
 
 const MESES = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
 
@@ -69,7 +70,7 @@ export function rotuloMesCurto(ano: number, mes: number): string {
 /**
  * Aderência no sentido pedido para a grade: realizado ÷ previsto × 100.
  * A tela de Acuracidade mostra WMAPE do snapshot, não este percentual por célula.
- * Sem previsto (sem foto ou previsto 0) não há percentual.
+ * Sem base, ou com base 0, não há percentual.
  */
 export function pvVsRe(realizado: number, previsto: number | null): number | null {
   if (previsto == null || previsto === 0) return null;
@@ -79,19 +80,127 @@ export function pvVsRe(realizado: number, previsto: number | null): number | nul
 /** Perto de 100% verde; até 25 pontos amarelo; além disso vermelho. */
 export type MesExcecao = {
   realizado: number;
-  /** null quando o mês não tem foto congelada. */
-  previstoCongelado: number | null;
-  /** Previsão estatística do mesmo mês. Só entra se não houver foto. */
-  estatistica: number | null;
+  /** null quando nenhuma fonte tem base para o mês. 0 é base real. */
+  base: number | null;
 };
 
-/**
- * Base da exceção: foto congelada; sem foto, a estatística do mês.
- * Sem nenhuma das duas, o mês não entra na conta.
- */
 export function baseExcecao(mes: MesExcecao): number | null {
-  if (mes.previstoCongelado != null) return mes.previstoCongelado;
-  return mes.estatistica;
+  return mes.base;
+}
+
+export type OrigemPrevisto =
+  | { tipo: "foto"; cicloId: number }
+  | { tipo: "ciclo"; cicloId: number; status: string }
+  | { tipo: "job"; jobId: number };
+
+export type CelulaPrevisto = {
+  valor: number;
+  origem: OrigemPrevisto["tipo"];
+  rotulo: string;
+};
+
+function detalheCicloNaoFoto(status: CicloStatus): string {
+  switch (status) {
+    case "APROVADO":
+      return "aprovado, sem foto";
+    case "CONGELADO":
+      return "congelado, sem foto";
+    case "ABERTO":
+    case "EM_COLABORACAO":
+    case "CONSENSO":
+      return "não congelado";
+    default: {
+      const nunca: never = status;
+      return nunca;
+    }
+  }
+}
+
+export function rotuloOrigemPrevisto(origem: OrigemPrevisto): string {
+  switch (origem.tipo) {
+    case "foto":
+      return `Foto congelada do ciclo #${origem.cicloId}`;
+    case "ciclo":
+      return `Previsão do ciclo #${origem.cicloId} (${isCicloStatus(origem.status) ? detalheCicloNaoFoto(origem.status) : "não congelado"})`;
+    case "job":
+      return `Estatística job #${origem.jobId}`;
+    default: {
+      const nunca: never = origem;
+      return nunca;
+    }
+  }
+}
+
+/**
+ * Prioridade da base: foto do ciclo aprovado/congelado, depois o ciclo mais
+ * recente que gravou o SKU naquele mês, depois o job mais recente que gerou
+ * valor para o SKU naquele mês. Zero gravado não cai para a fonte seguinte.
+ * Na foto, SKU ausente vale 0. Nas outras, ausência não é base.
+ */
+export function resolverPrevistoMes(input: {
+  sku: string;
+  foto: { cicloId: number; porSku: Record<string, number> } | null;
+  ciclo: { cicloId: number; status: string; porSku: Record<string, number> } | null;
+  jobs: Array<{ jobId: number; porSku: Record<string, number> }>;
+}): CelulaPrevisto | null {
+  if (input.foto) {
+    const origem: OrigemPrevisto = { tipo: "foto", cicloId: input.foto.cicloId };
+    return { valor: input.foto.porSku[input.sku] ?? 0, origem: "foto", rotulo: rotuloOrigemPrevisto(origem) };
+  }
+  if (input.ciclo && Object.prototype.hasOwnProperty.call(input.ciclo.porSku, input.sku)) {
+    const origem: OrigemPrevisto = { tipo: "ciclo", cicloId: input.ciclo.cicloId, status: input.ciclo.status };
+    return { valor: input.ciclo.porSku[input.sku] ?? 0, origem: "ciclo", rotulo: rotuloOrigemPrevisto(origem) };
+  }
+  for (const job of input.jobs) {
+    if (!Object.prototype.hasOwnProperty.call(job.porSku, input.sku)) continue;
+    const origem: OrigemPrevisto = { tipo: "job", jobId: job.jobId };
+    return { valor: job.porSku[input.sku] ?? 0, origem: "job", rotulo: rotuloOrigemPrevisto(origem) };
+  }
+  return null;
+}
+
+const MESES_PROJECAO = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+
+/** Coluna do Detalhado: jan/2026_HOLT_WINTERS ou jan-26_MEDIA_SIMPLES. */
+export function interpretarColunaProjecao(coluna: string): { ano: number; mes: number; metodo: string } | null {
+  const match = coluna.trim().match(/^(jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)[/-](\d{2}|\d{4})_(.+)$/i);
+  if (!match) return null;
+  const mes = MESES_PROJECAO.indexOf(match[1]!.toLowerCase()) + 1;
+  const anoRaw = Number(match[2]);
+  const ano = match[2]!.length === 2 ? 2000 + anoRaw : anoRaw;
+  const metodo = match[3]!.trim().toUpperCase();
+  if (!mes || !Number.isFinite(ano) || !metodo) return null;
+  return { ano, mes, metodo };
+}
+
+/** Código do job no formato SKU ou SKU-marca. Grupo MTS-Marca-Linha fica de fora. */
+export function skuDaPrevisaoJob(codigo: string): string | null {
+  const texto = codigo.trim();
+  if (!/^\d/.test(texto)) return null;
+  const match = texto.match(/^([\d.]+[A-Za-z0-9]*)/);
+  const sku = (match?.[1] ?? texto).trim().toUpperCase();
+  return sku || null;
+}
+
+/** Melhor modelo de cada linha do Detalhado, só onde o código é um SKU. */
+export function serieEstatisticaDeLinhas(linhas: Array<Record<string, unknown>>): Record<string, Record<string, number>> {
+  const saida: Record<string, Record<string, number>> = {};
+  for (const linha of linhas) {
+    const sku = skuDaPrevisaoJob(String(linha.Codigo ?? linha.codigo ?? ""));
+    const metodo = String(linha.MELHOR_CENARIO ?? "").trim().toUpperCase();
+    if (!sku || !metodo) continue;
+    for (const [coluna, bruto] of Object.entries(linha)) {
+      const projecao = interpretarColunaProjecao(coluna);
+      if (!projecao || projecao.metodo !== metodo || bruto == null || String(bruto).trim() === "") continue;
+      const valor = typeof bruto === "number" ? bruto : Number(String(bruto).trim().replace(",", "."));
+      if (!Number.isFinite(valor)) continue;
+      const chave = chaveMes(projecao.ano, projecao.mes);
+      const meses = saida[sku] ?? {};
+      meses[chave] = (meses[chave] ?? 0) + valor;
+      saida[sku] = meses;
+    }
+  }
+  return saida;
 }
 
 /** |realizado / base − 1| > faixa. Base 0 com realizado > 0 é exceção. Os dois em 0 não são. */
@@ -137,6 +246,25 @@ export function escolherCicloDoMes(mes: MesCalendario, ciclos: CicloCobertura[])
   }
   if (!melhor) return null;
   return { id: melhor.id, anoInicio: melhor.anoInicio, mesInicio: melhor.mesInicio, indice: melhor.indice };
+}
+
+/** Ciclo mais recente, de qualquer status, cujo horizonte inclui o mês. O ciclo atual fica de fora. */
+export function escolherCicloRecenteDoMes(
+  mes: MesCalendario,
+  ciclos: CicloCobertura[],
+  excluirId: number
+): (CicloCobertura & { indice: number }) | null {
+  const alvo = mes.ano * 12 + (mes.mes - 1);
+  let melhor: (CicloCobertura & { indice: number }) | null = null;
+  for (const ciclo of ciclos) {
+    if (ciclo.id === excluirId) continue;
+    const inicio = cicloHorizonCalendar(ciclo.anoInicio, ciclo.mesInicio, 0);
+    const absInicio = inicio.year * 12 + (inicio.month - 1);
+    const indice = alvo - absInicio;
+    if (indice < 0 || indice > 11) continue;
+    if (!melhor || ciclo.id > melhor.id) melhor = { ...ciclo, indice };
+  }
+  return melhor;
 }
 
 export function colunasGradeMts(anoInicio: number, mesInicio: number): ColunaGrade[] {
