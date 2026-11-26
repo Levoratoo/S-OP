@@ -29,6 +29,7 @@ import { CicloLifecycleBar } from "@/components/ciclo/CicloLifecycleBar";
 import { CrmExcelLayoutError, parseCrmExcel } from "./parse-crm-excel";
 import { PipedriveCrmSync } from "./PipedriveCrmSync";
 import { GradeMts } from "./GradeMts";
+import { CompraPapel } from "./CompraPapel";
 
 type PlanoColab = "MTS" | "PV_MTO" | "CRM";
 type GradeAba = PlanoColab | "CONSOLIDADO";
@@ -75,7 +76,7 @@ export default function Colaboracoes() {
   const [abaGrade, setAbaGrade] = useState<GradeAba>("MTS");
   const plano: PlanoColab = abaGrade === "CONSOLIDADO" ? "MTS" : abaGrade;
   const [search, setSearch] = useState("");
-  const [abaPrincipal, setAbaPrincipal] = useState<"grade" | "consolidado">("grade");
+  const [abaPrincipal, setAbaPrincipal] = useState<"grade" | "consolidado" | "papel">("grade");
   const [wizardOpen, setWizardOpen] = useState(false);
   const defaults = defaultCicloInicio();
   const [jobIdInput, setJobIdInput] = useState("");
@@ -130,7 +131,14 @@ export default function Colaboracoes() {
       utils.cicloComercial.list.invalidate();
       if (selectedCicloId) utils.cicloComercial.getById.invalidate({ id: selectedCicloId });
     },
-    onError: error => toast.error(error.message),
+    onError: error => {
+      toast.error(error.message);
+      if (error.message.includes("Compra de papel")) {
+        utils.cicloComercial.list.invalidate();
+        if (selectedCicloId) utils.cicloComercial.getById.invalidate({ id: selectedCicloId });
+        setAbaPrincipal("papel");
+      }
+    },
   });
 
   const desagregarMutation = trpc.cicloComercial.desagregarDoJob.useMutation({
@@ -417,7 +425,11 @@ export default function Colaboracoes() {
               </Select>
             )}
             {ciclo && (
-              <CicloLifecycleBar cicloId={ciclo.id} status={ciclo.status} />
+              <CicloLifecycleBar
+                cicloId={ciclo.id}
+                status={ciclo.status}
+                onCompraPapel={() => setAbaPrincipal("papel")}
+              />
             )}
           </CardContent>
         </Card>
@@ -496,7 +508,7 @@ export default function Colaboracoes() {
           </CardContent>
         </Card>
       ) : (
-        <Tabs value={abaPrincipal} onValueChange={v => setAbaPrincipal(v as "grade" | "consolidado")}>
+        <Tabs value={abaPrincipal} onValueChange={v => setAbaPrincipal(v as "grade" | "consolidado" | "papel")}>
           <TabsList>
             <TabsTrigger value="grade" data-tour="page-colab-grade">
               Grade
@@ -504,6 +516,9 @@ export default function Colaboracoes() {
             <TabsTrigger value="consolidado" data-tour="page-colab-consolidado">
               Resumos do ciclo
             </TabsTrigger>
+            {ciclo && ["CONSENSO", "APROVADO", "CONGELADO"].includes(ciclo.status) ? (
+              <TabsTrigger value="papel">Compra de papel</TabsTrigger>
+            ) : null}
           </TabsList>
 
           <TabsContent value="grade" className="mt-4">
@@ -719,6 +734,10 @@ export default function Colaboracoes() {
                 </Tabs>
               </CardContent>
             </Card>
+          </TabsContent>
+
+          <TabsContent value="papel" className="mt-4">
+            {selectedCicloId && ciclo ? <CompraPapel cicloId={selectedCicloId} status={ciclo.status} /> : null}
           </TabsContent>
 
           <TabsContent value="consolidado" className="mt-4">

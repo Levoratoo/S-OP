@@ -4,11 +4,13 @@ import {
   cicloComercialItens,
   cicloCrmPipedriveSync,
   cicloStatusHistorico,
+  cicloCrmNegocio,
   ciclosComerciais,
   gestores,
   produtos,
   type InsertCicloComercialItem,
 } from "../../../drizzle/schema";
+import { precoUnitario4 } from "@shared/preco-unitario";
 import { importCrmParaCiclo, substituirCargaCrmDoCiclo } from "../ciclo-colab-extras";
 import { loadDeParaMap } from "../de-para-map";
 import { paraLinhaImportCrm, type LinhaCrmTratada } from "@shared/pipedrive-crm";
@@ -156,6 +158,35 @@ export function criarRepositorioPipedrive(): RepositorioPipedrive {
           },
           async substituirCarga(cicloId, itens) {
             await substituirCargaCrmDoCiclo(tx, cicloId, itens as InsertCicloComercialItem[]);
+          },
+          async substituirNegocios(cicloId, parcelas) {
+            await tx.delete(cicloCrmNegocio).where(eq(cicloCrmNegocio.cicloId, cicloId));
+            const linhas = parcelas.flatMap(parcela => {
+              const data = /^(\d{4})-(\d{2})/.exec(parcela.dataFaturamento);
+              if (!data || !(parcela.quantidade > 0)) return [];
+              return [{
+                cicloId,
+                dealId: parcela.dealId,
+                titulo: parcela.titulo.slice(0, 300),
+                proprietario: parcela.proprietario || null,
+                proprietarioEmail: parcela.proprietarioEmail || null,
+                marca: parcela.marca || null,
+                temperatura: parcela.temperatura || null,
+                sku: parcela.sku.trim().toUpperCase(),
+                descricao: parcela.descricao || null,
+                tipo: parcela.tipo,
+                anoEntrega: Number(data[1]),
+                mesEntrega: Number(data[2]),
+                quantidade: String(parcela.quantidade),
+                preco: precoUnitario4(parcela.preco),
+              }];
+            });
+            for (let i = 0; i < linhas.length; i += 200) {
+              await tx.insert(cicloCrmNegocio).values(linhas.slice(i, i + 200));
+            }
+          },
+          async limparNegocios(cicloId) {
+            await tx.delete(cicloCrmNegocio).where(eq(cicloCrmNegocio.cicloId, cicloId));
           },
           async registrarHistorico(entrada) {
             await tx.insert(cicloStatusHistorico).values({

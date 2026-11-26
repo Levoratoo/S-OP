@@ -158,6 +158,7 @@ export type DealPipedrive = {
   id: number;
   title?: string | null;
   owner_id?: number | { id?: number; name?: string | null; email?: string | null } | null;
+  probability?: number | null;
   /** Campo legado da API v1. A v2 manda `owner_id`. */
   user_id?: number | { id?: number; name?: string | null; email?: string | null } | null;
   org_id?: number | { id?: number; name?: string | null } | null;
@@ -232,6 +233,8 @@ export type LinhaExportacaoPipedrive = {
   codigoProduto: string;
   funil: string;
   marcaOrganizacao: string;
+  /** Probabilidade do negócio no Pipedrive, quando a etiqueta de temperatura não vem. */
+  probabilidade: number | null;
 };
 
 export type ContextoTratamentoCrm = {
@@ -250,6 +253,20 @@ export type ResultadoTratamento = {
   linhasProduto: number;
   produtosDesabilitados: number;
   parcelasFora: number;
+  parcelasNegocio?: Array<{
+    dealId: number;
+    titulo: string;
+    proprietario: string;
+    proprietarioEmail: string;
+    marca: string;
+    temperatura: string;
+    sku: string;
+    descricao: string;
+    tipo: string;
+    dataFaturamento: string;
+    quantidade: number;
+    preco: number;
+  }>;
 };
 
 export type MesPreviaCrm = {
@@ -783,6 +800,7 @@ export function extrairLinhasExportacao(pacote: PacotePipedrive, configEntrada: 
         codigoProduto: codigo,
         funil: deal.pipeline_id != null ? funis.get(Number(deal.pipeline_id)) ?? "" : "",
         marcaOrganizacao: "",
+        probabilidade: numeroOuNulo(deal.probability),
       });
     }
   }
@@ -881,6 +899,7 @@ export function parseMatrizExportacaoAq(matrix: unknown[][]): LinhaExportacaoPip
       codigoProduto: String(cell(line, "codigoProduto") ?? "").trim(),
       funil: colapsarEspacos(String(cell(line, "funil") ?? "")),
       marcaOrganizacao: String(cell(line, "marcaOrganizacao") ?? "").trim(),
+      probabilidade: null,
     });
   }
   return linhas;
@@ -947,6 +966,7 @@ export function tratarLinhasExportacao(
   const dePara = mapaDePara(ctx.dePara);
   const catalogo = indiceCatalogo(ctx.produtos);
   const saida: LinhaCrmTratada[] = [];
+  const parcelasNegocio: NonNullable<ResultadoTratamento["parcelasNegocio"]> = [];
   const alertas: AlertaPipedrive[] = [];
   let parcelasFora = 0;
 
@@ -1054,7 +1074,9 @@ export function tratarLinhasExportacao(
         descricao: codigo.descricao,
         marca: linha.marca.trim(),
         gestor: gestor.gestor,
-        temperatura: classes.temperatura,
+        temperatura:
+          classes.temperatura ||
+          (linha.probabilidade != null && Number.isFinite(linha.probabilidade) ? `${linha.probabilidade}%` : ""),
         tipo: colaboracao,
         orcamento: index === 0 ? orcamento : 0,
         dataFaturamento: parcela.iso,
@@ -1065,6 +1087,25 @@ export function tratarLinhasExportacao(
         tipoNegocio: linha.tipo.trim(),
         dealId: linha.dealId,
       });
+      const competencia = /^(\d{4})-(\d{2})/.exec(parcela.iso);
+      if (competencia && codigo.sku) {
+        parcelasNegocio.push({
+          dealId: linha.dealId,
+          titulo: linha.titulo,
+          proprietario: linha.proprietario,
+          proprietarioEmail: linha.proprietarioEmail,
+          marca: linha.marca.trim(),
+          temperatura:
+            classes.temperatura ||
+            (linha.probabilidade != null && Number.isFinite(linha.probabilidade) ? `${linha.probabilidade}%` : ""),
+          sku: codigo.sku,
+          descricao: codigo.descricao,
+          tipo: colaboracao,
+          dataFaturamento: parcela.iso,
+          quantidade: parcela.qtd,
+          preco: Number(precoUnitario4(linha.preco)),
+        });
+      }
     });
   }
 
@@ -1085,6 +1126,7 @@ export function tratarLinhasExportacao(
     linhasProduto: meta?.linhasProduto ?? linhas.length,
     produtosDesabilitados: meta?.produtosDesabilitados ?? 0,
     parcelasFora,
+    parcelasNegocio,
   };
 }
 

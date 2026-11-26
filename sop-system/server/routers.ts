@@ -82,6 +82,16 @@ import {
   syncPvFromCarteira,
 } from "./services/ciclo-colab-extras";
 import { getGradeMtsDados } from "./services/grade-colab-dados";
+import {
+  confirmarImportacaoCompraPapel,
+  criarPapel,
+  atualizarPapel,
+  importarEstoquePapel,
+  listarCompraPapel,
+  preverImportacaoCompraPapel,
+  salvarDecisoesCompraPapel,
+} from "./services/compra-papel";
+import { DECISOES_COMPRA, RISCOS_COMPRA } from "@shared/compra-papel";
 import { syncCarteiraFromErp } from "./services/carteira-sql-sync";
 import { syncEstatisticaIaCadastros } from "./services/sync-estatistica-ia";
 import { carregarConfigPipedrive } from "@shared/pipedrive-config";
@@ -2652,6 +2662,100 @@ export const appRouter = router({
         
         return resultados;
       }),
+  }),
+
+  compraPapel: router({
+    visao: protectedProcedure
+      .input(z.object({ cicloId: z.number() }))
+      .query(({ input }) => listarCompraPapel(input.cicloId)),
+    salvar: protectedProcedure
+      .input(
+        z.object({
+          cicloId: z.number(),
+          itens: z.array(
+            z.object({
+              linhaId: z.string().min(1),
+              papelId: z.number().nullable(),
+              risco: z.enum(RISCOS_COMPRA).nullable(),
+              comprar: z.enum(DECISOES_COMPRA),
+              quantidade: z.number().min(0).nullable(),
+              observacao: z.string().max(500),
+            })
+          ),
+        })
+      )
+      .mutation(({ input, ctx }) =>
+        salvarDecisoesCompraPapel({
+          cicloId: input.cicloId,
+          usuario: ctx.user?.email || ctx.user?.name || "usuario",
+          itens: input.itens,
+        })
+      ),
+    criarPapel: protectedProcedure
+      .input(
+        z.object({
+          codigo: z.string().min(1),
+          descricao: z.string().min(1),
+          gramatura: z.string().optional(),
+          formato: z.string().optional(),
+          tipo: z.string().optional(),
+          unidade: z.string().optional(),
+        })
+      )
+      .mutation(({ input }) => criarPapel(input)),
+    atualizarPapel: protectedProcedure
+      .input(z.object({ id: z.number(), ativo: z.boolean() }))
+      .mutation(({ input }) => atualizarPapel(input.id, input.ativo)),
+    importarEstoque: protectedProcedure
+      .input(
+        z.object({
+          linhas: z.array(
+            z.object({
+              codigo: z.string().min(1),
+              quantidade: z.number().min(0),
+              unidade: z.string().min(1),
+              dataBase: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+            })
+          ),
+        })
+      )
+      .mutation(({ input }) => importarEstoquePapel(input.linhas)),
+    preverImportacao: protectedProcedure
+      .input(
+        z.object({
+          cicloId: z.number(),
+          linhas: z.array(
+            z.object({
+              linhaId: z.string(),
+              papel: z.string(),
+              risco: z.string(),
+              comprar: z.string(),
+              quantidade: z.string(),
+              observacao: z.string(),
+            })
+          ),
+        })
+      )
+      .mutation(({ input }) => preverImportacaoCompraPapel(input.cicloId, input.linhas)),
+    confirmarImportacao: protectedProcedure
+      .input(
+        z.object({
+          cicloId: z.number(),
+          linhas: z.array(
+            z.object({
+              linhaId: z.string(),
+              papel: z.string(),
+              risco: z.string(),
+              comprar: z.string(),
+              quantidade: z.string(),
+              observacao: z.string(),
+            })
+          ),
+        })
+      )
+      .mutation(({ input, ctx }) =>
+        confirmarImportacaoCompraPapel(input.cicloId, ctx.user?.email || ctx.user?.name || "usuario", input.linhas)
+      ),
   }),
 });
 

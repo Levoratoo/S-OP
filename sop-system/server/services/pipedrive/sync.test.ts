@@ -74,6 +74,12 @@ function criarMemoria() {
     async snapshotCarga() {
       return structuredClone(cargaCrm());
     },
+    async substituirNegocios() {
+      return undefined;
+    },
+    async limparNegocios() {
+      return undefined;
+    },
     async substituirCarga(cicloId: number, novos: object[]) {
       itens = itens.filter(item => !(item.cicloId === cicloId && item.planoColab === "CRM" && item.origem === "CRM"));
       if (falharInsert) throw new Error("insert falhou");

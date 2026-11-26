@@ -1,4 +1,4 @@
-import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, decimal, boolean, date } from "drizzle-orm/mysql-core";
+import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, decimal, boolean, date, uniqueIndex } from "drizzle-orm/mysql-core";
 
 // ==================== USUÁRIOS ====================
 export const users = mysqlTable("users", {
@@ -905,3 +905,74 @@ export const cicloCrmPipedriveSync = mysqlTable("ciclo_crm_pipedrive_sync", {
 
 export type CicloCrmPipedriveSync = typeof cicloCrmPipedriveSync.$inferSelect;
 export type InsertCicloCrmPipedriveSync = typeof cicloCrmPipedriveSync.$inferInsert;
+
+export const papeis = mysqlTable("papeis", {
+  id: int("id").autoincrement().primaryKey(),
+  codigo: varchar("codigo", { length: 40 }).notNull().unique(),
+  descricao: varchar("descricao", { length: 300 }).notNull(),
+  gramatura: varchar("gramatura", { length: 40 }),
+  formato: varchar("formato", { length: 80 }),
+  tipo: varchar("tipo", { length: 80 }),
+  unidade: varchar("unidade", { length: 20 }).default("KG").notNull(),
+  ativo: boolean("ativo").default(true).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export const papelEstoque = mysqlTable("papel_estoque", {
+  id: int("id").autoincrement().primaryKey(),
+  papelId: int("papelId").notNull().unique(),
+  quantidade: decimal("quantidade", { precision: 18, scale: 4 }).notNull(),
+  unidade: varchar("unidade", { length: 20 }).notNull(),
+  dataBase: date("dataBase").notNull(),
+  origem: varchar("origem", { length: 40 }).default("MANUAL").notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export const cicloCrmNegocio = mysqlTable("ciclo_crm_negocio", {
+  id: int("id").autoincrement().primaryKey(),
+  cicloId: int("cicloId").notNull(),
+  dealId: int("dealId").notNull(),
+  titulo: varchar("titulo", { length: 300 }).notNull(),
+  proprietario: varchar("proprietario", { length: 200 }),
+  proprietarioEmail: varchar("proprietarioEmail", { length: 200 }),
+  marca: varchar("marca", { length: 120 }),
+  temperatura: varchar("temperatura", { length: 40 }),
+  sku: varchar("sku", { length: 80 }).notNull(),
+  descricao: varchar("descricao", { length: 300 }),
+  tipo: varchar("tipo", { length: 40 }).notNull(),
+  anoEntrega: int("anoEntrega").notNull(),
+  mesEntrega: int("mesEntrega").notNull(),
+  quantidade: decimal("quantidade", { precision: 18, scale: 4 }).notNull(),
+  preco: decimal("preco", { precision: 15, scale: 4 }).notNull(),
+});
+
+export const compraPapelDecisao = mysqlTable("compra_papel_decisao", {
+  id: int("id").autoincrement().primaryKey(),
+  cicloId: int("cicloId").notNull(),
+  linhaId: varchar("linhaId", { length: 160 }).notNull(),
+  papelId: int("papelId"),
+  risco: varchar("risco", { length: 20 }),
+  comprar: varchar("comprar", { length: 20 }).default("PENDENTE").notNull(),
+  quantidade: decimal("quantidade", { precision: 18, scale: 4 }),
+  observacao: varchar("observacao", { length: 500 }),
+  decididoPor: varchar("decididoPor", { length: 320 }),
+  decididoEm: timestamp("decididoEm"),
+}, table => [uniqueIndex("uk_compra_papel_linha").on(table.cicloId, table.linhaId)]);
+
+export const compraPapelSnapshot = mysqlTable("compra_papel_snapshot", {
+  id: int("id").autoincrement().primaryKey(),
+  cicloId: int("cicloId").notNull(),
+  versao: int("versao").notNull(),
+  linhas: int("linhas").default(0).notNull(),
+  comentario: varchar("comentario", { length: 500 }),
+  createdBy: varchar("createdBy", { length: 320 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => [uniqueIndex("uk_compra_papel_snap").on(table.cicloId, table.versao)]);
+
+export const compraPapelSnapshotLinhas = mysqlTable("compra_papel_snapshot_linhas", {
+  id: int("id").autoincrement().primaryKey(),
+  snapshotId: int("snapshotId").notNull(),
+  linhaId: varchar("linhaId", { length: 160 }).notNull(),
+  payloadJson: text("payloadJson").notNull(),
+});

@@ -12,6 +12,7 @@ import {
   type LinhaCrmTratada,
   type PacotePipedrive,
   type PreviaCrm,
+  type ResultadoTratamento,
 } from "@shared/pipedrive-crm";
 import { isCicloSomenteLeitura } from "@shared/ciclo-status";
 import { hashPreviaPipedrive } from "./hash";
@@ -91,6 +92,11 @@ export type TransacaoPipedrive = {
   }) => Promise<void>;
   ultimaSync: (cicloId: number) => Promise<RegistroSync | null>;
   marcarDesfeita: (id: number, quando: Date) => Promise<void>;
+  substituirNegocios: (
+    cicloId: number,
+    parcelas: NonNullable<ResultadoTratamento["parcelasNegocio"]>
+  ) => Promise<void>;
+  limparNegocios: (cicloId: number) => Promise<void>;
 };
 
 export type RepositorioPipedrive = {
@@ -263,6 +269,7 @@ export async function syncPipedrive(input: {
     assertCicloAceitaSyncPipedrive(status);
     const anteriores = await tx.snapshotCarga(ciclo.id);
     await tx.substituirCarga(ciclo.id, itens);
+    await tx.substituirNegocios(ciclo.id, avaliado.tratamento.parcelasNegocio ?? []);
     await tx.registrarSync({
       cicloId: ciclo.id,
       usuario: input.usuario,
@@ -320,6 +327,7 @@ export async function desfazerPipedrive(input: {
     }
     const itens = bruto.map(item => prepararItemCrm(item as Record<string, unknown>, ciclo.id));
     await tx.substituirCarga(ciclo.id, itens);
+    await tx.limparNegocios(ciclo.id);
     await tx.marcarDesfeita(ultima.id, new Date());
     await tx.registrarHistorico({
       cicloId: ciclo.id,
