@@ -8,7 +8,7 @@ import {
   payloadConfirmarReferencias,
   validarParesDePara,
 } from "@shared/de-para-combobox";
-import { filtrarProdutosBusca } from "@shared/produto-busca";
+import { filtrarProdutosBusca, listaComboboxProdutos, rotuloProduto } from "@shared/produto-busca";
 
 const catalogo = [
   { codigo: "80.02.000955", descricao: "Sacola EXPP- Pink Cheeks FSC Misto", marca: "Pink Cheeks" },
@@ -26,6 +26,48 @@ describe("busca de produtos cadastrados", () => {
     ]);
     expect(filtrarProdutosBusca(catalogo, "ACUCAR uniao", 30).map(item => item.codigo)).toEqual(["80.04.000010"]);
     expect(filtrarProdutosBusca(catalogo, "inexistente", 30)).toEqual([]);
+  });
+
+  it("filtra sugestões pelo termo e não diz vazio se alguma casa", () => {
+    const sugestoes = [
+      { codigo: "80.01.000001", descricao: "Sacola Aurora", marca: "Aurora", score: 0.4 },
+      { codigo: "80.02.000956", descricao: "Sacola P - Pink Cheeks FSC Misto", marca: "Pink Cheeks", score: 0.85 },
+      { codigo: "80.06.001773", descricao: "Sacola P - Alakazoo FSC Misto", marca: "Alakazoo", score: 0.91 },
+    ];
+    const semRelacao = listaComboboxProdutos({
+      termo: "alakazoo",
+      sugestoes: [
+        ...Array.from({ length: 7 }, (_, indice) => ({
+          codigo: `80.09.00000${indice}`,
+          descricao: `Outra sacola ${indice}`,
+          marca: "Outra",
+          score: 0.5,
+        })),
+      ],
+      resultados: [sugestoes[2]!],
+    });
+    expect(semRelacao.sugestoes).toEqual([]);
+    expect(semRelacao.resultados.map(item => item.codigo)).toEqual(["80.06.001773"]);
+    expect(semRelacao.vazio).toBe(false);
+
+    const casa = listaComboboxProdutos({
+      termo: "alakazoo",
+      sugestoes,
+      resultados: [sugestoes[2]!],
+    });
+    expect(casa.sugestoes.map(item => item.codigo)).toEqual(["80.06.001773"]);
+    expect(casa.sugestoes[0]?.score).toBe(0.91);
+    expect(rotuloProduto(casa.sugestoes[0]!)).toContain("91%");
+    expect(casa.resultados).toEqual([]);
+    expect(casa.vazio).toBe(false);
+
+    const nada = listaComboboxProdutos({
+      termo: "inexistente",
+      sugestoes,
+      resultados: [],
+    });
+    expect(nada.vazio).toBe(true);
+    expect(listaComboboxProdutos({ termo: "", sugestoes, resultados: [] }).sugestoes).toHaveLength(3);
   });
 });
 

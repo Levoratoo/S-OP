@@ -36,6 +36,39 @@ export function filtrarProdutosBusca(
   return saida;
 }
 
+export type SugestaoProduto = ProdutoBuscaItem & { score?: number | null };
+
+/**
+ * Lista do combobox. Campo vazio: todas as sugestões.
+ * Com termo: sugestões que casam (código, descrição ou marca) e, depois,
+ * os resultados do servidor que ainda não estão nessa lista.
+ */
+export function listaComboboxProdutos(input: {
+  termo: string;
+  sugestoes: SugestaoProduto[];
+  resultados: ProdutoBuscaItem[];
+  excluir?: string[];
+}): { sugestoes: SugestaoProduto[]; resultados: ProdutoBuscaItem[]; vazio: boolean } {
+  const ban = new Set((input.excluir ?? []).map(codigo => codigo.trim().toUpperCase()).filter(Boolean));
+  const termo = input.termo.trim();
+  const sugestoes = input.sugestoes.filter(item => {
+    const codigo = item.codigo.trim();
+    if (!codigo || ban.has(codigo.toUpperCase())) return false;
+    return produtoCombinaBusca(item, termo);
+  });
+  const jaMostradas = new Set(sugestoes.map(item => item.codigo.trim().toUpperCase()));
+  const resultados = input.resultados.filter(item => {
+    const codigo = item.codigo.trim();
+    if (!codigo || ban.has(codigo.toUpperCase()) || jaMostradas.has(codigo.toUpperCase())) return false;
+    return true;
+  });
+  return {
+    sugestoes,
+    resultados,
+    vazio: termo.length > 0 && sugestoes.length === 0 && resultados.length === 0,
+  };
+}
+
 export function rotuloProduto(item: {
   codigo: string;
   descricao?: string | null;

@@ -12,7 +12,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { alternarSelecaoProduto, type ProdutoSelecionado } from "@shared/de-para-combobox";
-import { rotuloProduto, type ProdutoBuscaItem } from "@shared/produto-busca";
+import { listaComboboxProdutos, rotuloProduto, type ProdutoBuscaItem } from "@shared/produto-busca";
 
 export type ProdutoOpcao = ProdutoSelecionado & { score?: number | null };
 
@@ -87,12 +87,12 @@ export function ProdutoCombobox(props: SingleProps | MultiProps) {
     setAberto(false);
   };
 
-  const sugestoesVisiveis = sugestoes.filter(
-    item => !excluir.some(codigo => codigo.trim().toUpperCase() === item.codigo.toUpperCase())
-  );
-  const resultados = (data ?? []).filter(
-    item => !sugestoesVisiveis.some(sugestao => sugestao.codigo.toUpperCase() === item.codigo.toUpperCase())
-  );
+  const lista = listaComboboxProdutos({
+    termo: consultar ? termo : "",
+    sugestoes,
+    resultados: consultar ? (data ?? []) : [],
+    excluir,
+  });
 
   return (
     <div className="min-w-0 space-y-2">
@@ -162,7 +162,7 @@ export function ProdutoCombobox(props: SingleProps | MultiProps) {
               {consultar && isError ? (
                 <p className="px-3 py-3 text-sm text-destructive">Não foi possível buscar os produtos.</p>
               ) : null}
-              {consultar && !isFetching && !isError && resultados.length === 0 ? (
+              {consultar && !isFetching && !isError && lista.vazio ? (
                 <p className="px-3 py-2 text-sm text-muted-foreground">Nenhum produto encontrado</p>
               ) : null}
               {!consultar ? (
@@ -175,7 +175,7 @@ export function ProdutoCombobox(props: SingleProps | MultiProps) {
                     Sem referência
                   </CommandItem>
                 ) : null}
-                {sugestoesVisiveis.map(item => (
+                {lista.sugestoes.map(item => (
                   <ItemProduto
                     key={`s-${item.codigo}`}
                     item={item}
@@ -183,7 +183,7 @@ export function ProdutoCombobox(props: SingleProps | MultiProps) {
                     onSelect={() => escolher(item)}
                   />
                 ))}
-                {resultados.map(item => (
+                {lista.resultados.map(item => (
                   <ItemProduto
                     key={item.codigo}
                     item={item}
