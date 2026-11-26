@@ -263,7 +263,16 @@ export function ColaboracaoArquivo({
           <TableHeader className="sticky top-0 z-10 bg-background">
             <TableRow>
               {CONSOLIDADO_EXCEL_HEADERS.map(header => (
-                <TableHead key={header} className="whitespace-nowrap">
+                <TableHead
+                  key={header}
+                  className={
+                    header === "Sku"
+                      ? "sticky left-0 z-20 w-[7.5rem] min-w-[7.5rem] bg-background"
+                      : header === "Descrição"
+                        ? "sticky left-[7.5rem] z-20 w-[10rem] min-w-[10rem] bg-background sm:w-[20rem] sm:min-w-[20rem]"
+                        : "whitespace-nowrap"
+                  }
+                >
                   {header}
                 </TableHead>
               ))}
@@ -280,8 +289,10 @@ export function ColaboracaoArquivo({
               preview.map(row => (
                 <TableRow key={`${row.relatorio}-${row.sku}-${row.mes}-${row.tipo}`}>
                   <TableCell className="whitespace-nowrap font-medium">{row.skuMarca}</TableCell>
-                  <TableCell className="whitespace-nowrap">{row.sku}</TableCell>
-                  <TableCell className="max-w-[200px] truncate" title={row.descricao}>
+                  <TableCell className="sticky left-0 z-10 w-[7.5rem] min-w-[7.5rem] bg-background align-top whitespace-normal break-words shadow-[2px_0_0_0_hsl(var(--border))]">
+                    {row.sku}
+                  </TableCell>
+                  <TableCell className="sticky left-[7.5rem] z-10 w-[10rem] min-w-[10rem] whitespace-normal break-words bg-background align-top shadow-[2px_0_0_0_hsl(var(--border))] sm:w-[20rem] sm:min-w-[20rem]">
                     {row.descricao}
                   </TableCell>
                   <TableCell>{row.linha}</TableCell>

@@ -171,7 +171,9 @@ export function PvMtoPivotTable({
               <TableHead className="sticky left-[88px] z-30 min-w-[104px] bg-sky-700 text-white">
                 Cod Item
               </TableHead>
-              <TableHead className="min-w-[200px] bg-sky-700 text-white">Descrição</TableHead>
+              <TableHead className="sticky left-[192px] z-30 w-[10rem] min-w-[10rem] bg-sky-700 text-white sm:w-[18rem] sm:min-w-[18rem]">
+                Descrição
+              </TableHead>
               <TableHead className="min-w-[72px] bg-sky-700 text-white">Tipo</TableHead>
               <TableHead className="min-w-[100px] bg-sky-700 text-white text-right">Preço Unitário</TableHead>
               <TableHead className="min-w-[100px] bg-sky-700 text-white border-r border-sky-600">
@@ -198,7 +200,7 @@ export function PvMtoPivotTable({
               <TableHead className="sticky left-[88px] z-30 bg-sky-100 p-1 dark:bg-sky-950">
                 <Input className="h-7 text-xs" placeholder="Filtrar" value={fCod} onChange={e => setFCod(e.target.value)} />
               </TableHead>
-              <TableHead className="p-1">
+              <TableHead className="sticky left-[192px] z-30 bg-sky-100 p-1 dark:bg-sky-950">
                 <Input className="h-7 text-xs" placeholder="Filtrar" value={fDesc} onChange={e => setFDesc(e.target.value)} />
               </TableHead>
               <TableHead className="p-1">
@@ -262,7 +264,7 @@ export function PvMtoPivotTable({
                       ) : null}
                     </div>
                   </TableCell>
-                  <TableCell className="max-w-[240px] whitespace-normal text-xs" title={row.descricao ?? ""}>
+                  <TableCell className="sticky left-[192px] z-20 w-[10rem] min-w-[10rem] max-w-[10rem] whitespace-normal break-words bg-white align-top text-xs shadow-[2px_0_0_0_hsl(var(--border))] dark:bg-slate-950 sm:w-[18rem] sm:min-w-[18rem] sm:max-w-[18rem]">
                     {row.descricao || "—"}
                   </TableCell>
                   <TableCell>{row.tipo || "—"}</TableCell>

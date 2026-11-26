@@ -81,6 +81,7 @@ import {
   importCrmParaCiclo,
   syncPvFromCarteira,
 } from "./services/ciclo-colab-extras";
+import { getGradeMtsDados } from "./services/grade-colab-dados";
 import { syncCarteiraFromErp } from "./services/carteira-sql-sync";
 import { syncEstatisticaIaCadastros } from "./services/sync-estatistica-ia";
 import { carregarConfigPipedrive } from "@shared/pipedrive-config";
@@ -992,6 +993,10 @@ export const appRouter = router({
     consolidado: protectedProcedure
       .input(z.object({ cicloId: z.number() }))
       .query(({ input }) => db.getCicloComercialConsolidado(input.cicloId)),
+
+    gradeMts: protectedProcedure
+      .input(z.object({ cicloId: z.number() }))
+      .query(({ input }) => getGradeMtsDados(input.cicloId)),
 
     /** Realizado mensal 2025/2026 (e outros anos) para grade MTS. */
     realizadoAnual: protectedProcedure
