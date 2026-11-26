@@ -98,7 +98,34 @@ export type AlertaPipedrive = {
   titulo: string;
   sku: string;
   detalhe: string;
+  proprietario: string;
+  proprietarioEmail: string;
 };
+
+export const COLUNAS_CSV_ALERTAS = [
+  { key: "tipo", title: "Alerta" },
+  { key: "dealId", title: "Negócio" },
+  { key: "titulo", title: "Título" },
+  { key: "proprietario", title: "Proprietário" },
+  { key: "proprietarioEmail", title: "E-mail do proprietário" },
+  { key: "sku", title: "SKU" },
+  { key: "detalhe", title: "Detalhe" },
+] as const;
+
+export function linhaCsvAlerta(
+  alerta: AlertaPipedrive,
+  rotulo = ROTULOS_ALERTA[alerta.tipo]
+): Record<(typeof COLUNAS_CSV_ALERTAS)[number]["key"], string | number> {
+  return {
+    tipo: rotulo,
+    dealId: alerta.dealId,
+    titulo: alerta.titulo,
+    proprietario: alerta.proprietario,
+    proprietarioEmail: alerta.proprietarioEmail,
+    sku: alerta.sku,
+    detalhe: alerta.detalhe,
+  };
+}
 
 export type LinhaCrmTratada = {
   sku: string;
@@ -130,7 +157,9 @@ export type CampoPipedrive = {
 export type DealPipedrive = {
   id: number;
   title?: string | null;
-  owner_id?: number | { id?: number; name?: string | null } | null;
+  owner_id?: number | { id?: number; name?: string | null; email?: string | null } | null;
+  /** Campo legado da API v1. A v2 manda `owner_id`. */
+  user_id?: number | { id?: number; name?: string | null; email?: string | null } | null;
   org_id?: number | { id?: number; name?: string | null } | null;
   stage_id?: number | null;
   pipeline_id?: number | null;
@@ -162,7 +191,11 @@ export type ProdutoPipedrive = {
 };
 
 export type OrgPipedrive = { id: number; name?: string | null };
-export type UsuarioPipedrive = { id: number; name?: string | null };
+export type UsuarioPipedrive = {
+  id: number;
+  name?: string | null;
+  email?: string | Array<{ value?: string | null; primary?: boolean }> | null;
+};
 export type EtapaPipedrive = { id: number; name?: string | null };
 export type FunilPipedrive = { id: number; name?: string | null };
 
@@ -184,6 +217,7 @@ export type LinhaExportacaoPipedrive = {
   organizacao: string;
   marca: string;
   proprietario: string;
+  proprietarioEmail: string;
   etapa: string;
   dataFechamento: string;
   nomeProduto: string;
@@ -627,6 +661,32 @@ function nomeRelacionado(
   return "";
 }
 
+export type ProprietarioNegocio = { nome: string; email: string };
+
+/** Nome e e-mail do dono. O mapa vem de `/users` (uma leitura por extração). */
+function emailDeUsuario(value: UsuarioPipedrive["email"]): string {
+  if (typeof value === "string") return colapsarEspacos(value);
+  if (!Array.isArray(value)) return "";
+  const primario = value.find(item => item?.primary) ?? value[0];
+  return colapsarEspacos(String(primario?.value ?? ""));
+}
+
+export function resolverProprietario(
+  deal: Pick<DealPipedrive, "owner_id" | "user_id">,
+  usuarios: Map<number, ProprietarioNegocio>
+): ProprietarioNegocio {
+  const fonte = deal.owner_id ?? deal.user_id ?? null;
+  const id = idDe(fonte);
+  const doCadastro = id != null ? usuarios.get(id) : undefined;
+  let nome = doCadastro?.nome ?? "";
+  let email = doCadastro?.email ?? "";
+  if (fonte && typeof fonte === "object") {
+    if (!nome && "name" in fonte) nome = colapsarEspacos(String(fonte.name ?? ""));
+    if (!email && "email" in fonte) email = colapsarEspacos(String(fonte.email ?? ""));
+  }
+  return { nome, email };
+}
+
 export function dealNoRecorte(deal: DealPipedrive, config: ConfigPipedrive): boolean {
   if (deal.is_deleted || deal.is_archived) return false;
   if ((deal.status ?? "open") !== "open") return false;
@@ -646,7 +706,15 @@ export type ExtracaoExportacao = {
 export function extrairLinhasExportacao(pacote: PacotePipedrive, configEntrada: ConfigPipedrive): ExtracaoExportacao {
   const dicionario = resolverCamposPipedrive(configEntrada, pacote.dealFields, pacote.productFields);
   const config = dicionario.config;
-  const usuarios = new Map(pacote.users.map(usuario => [Number(usuario.id), colapsarEspacos(usuario.name ?? "")]));
+  const usuarios = new Map(
+    pacote.users.map(usuario => [
+      Number(usuario.id),
+      {
+        nome: colapsarEspacos(usuario.name ?? ""),
+        email: emailDeUsuario(usuario.email),
+      },
+    ])
+  );
   const orgs = new Map(pacote.organizations.map(org => [Number(org.id), colapsarEspacos(org.name ?? "")]));
   const etapas = new Map(pacote.stages.map(etapa => [Number(etapa.id), colapsarEspacos(etapa.name ?? "")]));
   const funis = new Map(pacote.pipelines.map(funil => [Number(funil.id), colapsarEspacos(funil.name ?? "")]));
@@ -681,6 +749,7 @@ export function extrairLinhasExportacao(pacote: PacotePipedrive, configEntrada: 
       .map(id => dicionario.nomesEtiqueta.get(id) ?? "")
       .filter(Boolean);
     const data = String(deal.expected_close_date ?? "").trim().slice(0, 10);
+    const dono = resolverProprietario(deal, usuarios);
     for (const item of habilitados) {
       const produto = item.product_id != null ? produtos.get(Number(item.product_id)) : undefined;
       const nome = colapsarEspacos(String(item.name ?? "").trim() || String(produto?.name ?? ""));
@@ -694,7 +763,8 @@ export function extrairLinhasExportacao(pacote: PacotePipedrive, configEntrada: 
         titulo: colapsarEspacos(String(deal.title ?? "")) || `Negócio ${deal.id}`,
         organizacao: nomeRelacionado(deal.org_id, orgs),
         marca: customComoTexto(custom[config.campos.marca]).trim(),
-        proprietario: nomeRelacionado(deal.owner_id, usuarios),
+        proprietario: dono.nome,
+        proprietarioEmail: dono.email,
         etapa: deal.stage_id != null ? etapas.get(Number(deal.stage_id)) ?? "" : "",
         dataFechamento: /^\d{4}-\d{2}-\d{2}$/.test(data) ? data : "",
         nomeProduto: nome,
@@ -796,6 +866,7 @@ export function parseMatrizExportacaoAq(matrix: unknown[][]): LinhaExportacaoPip
       organizacao: colapsarEspacos(String(cell(line, "organizacao") ?? "")),
       marca: String(cell(line, "marca") ?? "").trim(),
       proprietario: colapsarEspacos(String(cell(line, "proprietario") ?? "")),
+      proprietarioEmail: "",
       etapa: colapsarEspacos(String(cell(line, "etapa") ?? "")),
       dataFechamento: /^\d{4}-\d{2}-\d{2}$/.test(data) ? data : "",
       nomeProduto,
@@ -853,11 +924,19 @@ function indiceCatalogo(produtos: ContextoTratamentoCrm["produtos"]) {
 
 function alerta(
   tipo: TipoAlertaPipedrive,
-  linha: Pick<LinhaExportacaoPipedrive, "dealId" | "titulo">,
+  linha: Pick<LinhaExportacaoPipedrive, "dealId" | "titulo" | "proprietario" | "proprietarioEmail">,
   sku: string,
   detalhe: string
 ): AlertaPipedrive {
-  return { tipo, dealId: linha.dealId, titulo: linha.titulo, sku, detalhe };
+  return {
+    tipo,
+    dealId: linha.dealId,
+    titulo: linha.titulo,
+    sku,
+    detalhe,
+    proprietario: linha.proprietario,
+    proprietarioEmail: linha.proprietarioEmail,
+  };
 }
 
 export function tratarLinhasExportacao(

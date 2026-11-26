@@ -11,6 +11,8 @@ import type { InsertCliente, InsertProduto } from "../../drizzle/schema";
 import { isSkuAcabado } from "@shared/sku-acabado";
 import { invalidateDeParaCache } from "./de-para-map";
 import { normalizeTipoNegocioComercial } from "@shared/tipo-negocio";
+import { precoManualSincronizado } from "./produto-preco-backfill";
+import { inheritProjetarFromAntigo, validateDeParaEdge } from "./de-para-validate";
 import { ensureFatSkuCatalog, invalidateFatSkuCatalogReady, listFatSkuCatalog } from "./fat-sku-catalog";
 
 export type SeedFromFaturamentoResult = {
@@ -430,11 +432,20 @@ export type AcceptPendingSkusBatchResult = {
   }>;
 };
 
-export type AcceptPendingSkuItem = { codMaterial: string; skuAntigo?: string | null };
+export type AcceptPendingSkuItem = {
+  codMaterial: string;
+  skuAntigo?: string | null;
+  cadastro?: {
+    descricao?: string | null;
+    marca?: string | null;
+    tipoNegocio?: string | null;
+    precoUnitario?: number | null;
+  } | null;
+};
 
 export async function acceptPendingSkusFromFaturamentoBatch(
   items: string[] | AcceptPendingSkuItem[],
-  opts?: { skipIdentityDePara?: boolean }
+  opts?: { skipIdentityDePara?: boolean; atomico?: boolean }
 ): Promise<AcceptPendingSkusBatchResult> {
   const normalizedItems: AcceptPendingSkuItem[] = items.map(item =>
     typeof item === "string" ? { codMaterial: item } : item
@@ -445,6 +456,11 @@ export async function acceptPendingSkusFromFaturamentoBatch(
   const antigoByCod = new Map(
     normalizedItems
       .map(i => [clean(i.codMaterial)?.toUpperCase() ?? "", clean(i.skuAntigo)] as const)
+      .filter(([k]) => Boolean(k))
+  );
+  const cadastroByCod = new Map(
+    normalizedItems
+      .map(i => [clean(i.codMaterial)?.toUpperCase() ?? "", i.cadastro ?? null] as const)
       .filter(([k]) => Boolean(k))
   );
   if (codes.length === 0) {
@@ -482,70 +498,92 @@ export async function acceptPendingSkusFromFaturamentoBatch(
       if (p.codigo) existingByCode.set(p.codigo.trim().toUpperCase(), p.id);
     }
 
-    const deParaRows = await tx
-      .select({ skuAntigo: deParaCodigos.skuAntigo })
-      .from(deParaCodigos);
-    const deParaCodes = new Set(
-      deParaRows.map(d => (d.skuAntigo || "").trim().toUpperCase()).filter(Boolean)
-    );
+    const accPairs = (await tx.select().from(deParaCodigos)).map(row => ({
+      skuAntigo: row.skuAntigo,
+      skuNovo: row.skuNovo,
+    }));
+    const preExisting = new Set(existingByCode.keys());
+    const batchCodes = new Set(codes.map(code => code.toUpperCase()));
+
+    const falhar = (codMaterial: string, message: string): never | void => {
+      if (opts?.atomico) throw new Error(message);
+      erros.push({ codMaterial, message });
+    };
 
     for (const raw of codes) {
       const cod = raw.toUpperCase();
-      const row = fatByCode.get(cod);
+      const fat = fatByCode.get(cod);
+      const override = cadastroByCod.get(cod);
+      const row: FatProdutoRow | undefined =
+        fat || override?.descricao
+          ? {
+              codMaterial: cod,
+              descricaoItem: clean(override?.descricao) || fat?.descricaoItem || cod,
+              marca: clean(override?.marca) || fat?.marca || null,
+              linhaProduto: fat?.linhaProduto ?? null,
+              tipoNegocio: clean(override?.tipoNegocio) || fat?.tipoNegocio || null,
+              tipoEstoque: fat?.tipoEstoque ?? null,
+              grupoProduto: fat?.grupoProduto ?? null,
+            }
+          : undefined;
       if (!row) {
-        erros.push({ codMaterial: raw, message: `SKU ${raw} não encontrado no faturamento` });
+        falhar(raw, `SKU ${raw} não encontrado no faturamento`);
         continue;
       }
 
       const existingId = existingByCode.get(cod);
-      if (existingId != null) {
+      let produtoId = existingId ?? 0;
+      let created = false;
+      if (existingId == null) {
+        const insertProduto = buildProduto(row, marcaIdByName);
+        const preco = override?.precoUnitario;
+        const gravar =
+          preco != null && Number.isFinite(preco) && preco >= 0
+            ? { ...insertProduto, ...precoManualSincronizado(preco) }
+            : insertProduto;
+        const insertResult = await tx.insert(produtos).values(gravar);
+        produtoId = Number(insertResult[0].insertId ?? 0);
+        existingByCode.set(cod, produtoId);
+        created = true;
+        criados += 1;
+      } else {
         jaExistiam += 1;
-        detalhes.push({
-          codMaterial: raw,
-          created: false,
-          produtoId: existingId,
-          deParaCriado: false,
-        });
-        continue;
       }
-
-      const insertProduto = buildProduto(row, marcaIdByName);
-      const insertResult = await tx.insert(produtos).values(insertProduto);
-      const produtoId = Number(insertResult[0].insertId ?? 0);
-      existingByCode.set(cod, produtoId);
 
       let deParaCriado = false;
       const skuAntigoRef = antigoByCod.get(cod);
-      if (
-        !opts?.skipIdentityDePara &&
-        skuAntigoRef &&
-        skuAntigoRef.toUpperCase() !== cod &&
-        skuAntigoRef.toUpperCase() !== clean(row.codMaterial)!.toUpperCase()
-      ) {
-        const { validateDeParaEdge, inheritProjetarFromAntigo } = await import("./de-para-validate");
-        const others = (await tx.select().from(deParaCodigos)).map(r => ({
-          skuAntigo: r.skuAntigo,
-          skuNovo: r.skuNovo,
-        }));
-        await validateDeParaEdge(skuAntigoRef.toUpperCase(), clean(row.codMaterial)!, others);
-        await tx.insert(deParaCodigos).values({
-          skuAntigo: skuAntigoRef.toUpperCase(),
-          skuNovo: clean(row.codMaterial)!,
-        });
-        deParaCriado = true;
+      if (!opts?.skipIdentityDePara && skuAntigoRef && skuAntigoRef.toUpperCase() !== cod) {
+        const ant = skuAntigoRef.toUpperCase();
+        if (batchCodes.has(ant)) {
+          falhar(cod, `Referência ${skuAntigoRef} está no mesmo lote de aceite — escolha um SKU já cadastrado.`);
+        } else if (!preExisting.has(ant)) {
+          falhar(cod, `Referência ${skuAntigoRef} não está cadastrada como produto.`);
+        } else {
+          try {
+            await validateDeParaEdge(ant, cod, accPairs);
+            await tx
+              .insert(deParaCodigos)
+              .values({ skuAntigo: ant, skuNovo: cod })
+              .onDuplicateKeyUpdate({ set: { skuNovo: cod } });
+            await inheritProjetarFromAntigo(ant, cod);
+            accPairs.push({ skuAntigo: ant, skuNovo: cod });
+            deParaCriado = true;
+          } catch (err) {
+            falhar(cod, err instanceof Error ? err.message : String(err));
+          }
+        }
       }
 
-      criados += 1;
       detalhes.push({
         codMaterial: raw,
-        created: true,
+        created,
         produtoId,
         deParaCriado,
       });
     }
   });
 
-  if (criados > 0) {
+  if (criados > 0 || detalhes.some(item => item.deParaCriado)) {
     invalidateDeParaCache();
     pendingSkusCache = null;
     invalidatePendingMarcasCache();

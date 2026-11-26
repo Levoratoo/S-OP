@@ -14,7 +14,10 @@ import {
   interpretarEntregas,
   linhasExportacaoParaMatriz,
   mesesConsecutivos,
+  COLUNAS_CSV_ALERTAS,
+  linhaCsvAlerta,
   montarPreviaCrm,
+  resolverProprietario,
   parseMatrizExportacaoAq,
   ratearValor4,
   ratearInteiro,
@@ -292,6 +295,39 @@ describe("pacote fictício da API v2", () => {
   it("não importa sem código e descarta o que cai fora do horizonte", () => {
     expect(doDeal(tratamento.linhas, 910005)).toHaveLength(0);
     expect(tratamento.alertas.some(alerta => alerta.dealId === 910005 && alerta.tipo === "sem_codigo")).toBe(true);
+    const semCodigo = tratamento.alertas.find(alerta => alerta.dealId === 910005 && alerta.tipo === "sem_codigo");
+    expect(semCodigo?.proprietario).toBe("ana souza");
+    expect(semCodigo?.proprietarioEmail).toBe("ana@printbag.local");
+    const csv = linhaCsvAlerta(semCodigo!);
+    expect(COLUNAS_CSV_ALERTAS.map(coluna => coluna.key)).toEqual([
+      "tipo",
+      "dealId",
+      "titulo",
+      "proprietario",
+      "proprietarioEmail",
+      "sku",
+      "detalhe",
+    ]);
+    expect(csv.proprietario).toBe("ana souza");
+    expect(csv.proprietarioEmail).toBe("ana@printbag.local");
+    expect(csv.tipo).toBe("Sem código");
+    for (const alerta of tratamento.alertas) {
+      expect(alerta).toHaveProperty("proprietario");
+      expect(alerta).toHaveProperty("proprietarioEmail");
+    }
+    const usuarios = new Map([
+      [7, { nome: "Fulano", email: "fulano@printbag.local" }],
+    ]);
+    expect(resolverProprietario({ owner_id: 7 }, usuarios)).toEqual({
+      nome: "Fulano",
+      email: "fulano@printbag.local",
+    });
+    expect(resolverProprietario({ user_id: 7 }, usuarios).email).toBe("fulano@printbag.local");
+    expect(resolverProprietario({ owner_id: 99 }, usuarios)).toEqual({ nome: "", email: "" });
+    expect(resolverProprietario({ owner_id: { id: 7, name: "Nome do deal" } }, usuarios)).toEqual({
+      nome: "Fulano",
+      email: "fulano@printbag.local",
+    });
     expect(doDeal(tratamento.linhas, 910006)).toHaveLength(0);
     expect(tratamento.alertas.some(alerta => alerta.dealId === 910006 && alerta.tipo === "fora_horizonte")).toBe(true);
 

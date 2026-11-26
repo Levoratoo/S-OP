@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input";
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { exportToCsv } from "@/lib/exportCsv";
 import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Download, Info } from "lucide-react";
 import { precoOrigemPvLabel, type PrecoOrigemPv } from "@shared/pv-preco-fallback";
 import { formatPreco4Moeda } from "@shared/pv-preco-round";
@@ -32,6 +33,7 @@ type Props = {
   emptyMessage: string;
   extraColumns?: React.ReactNode;
   showClienteFaturado?: boolean;
+  onCadastrar?: (row: PvPivotRow) => void;
 };
 
 function formatQty(value: number) {
@@ -54,6 +56,7 @@ export function PvMtoPivotTable({
   exportFileName,
   emptyMessage,
   showClienteFaturado,
+  onCadastrar,
 }: Props) {
   const [fMarca, setFMarca] = useState("");
   const [fCod, setFCod] = useState("");
@@ -235,9 +238,27 @@ export function PvMtoPivotTable({
                     <div className="flex flex-wrap items-center gap-1">
                       <span>{row.codItem}</span>
                       {row.semCadastro ? (
-                        <Badge variant="outline" className="text-[10px] px-1 py-0 h-5">
-                          sem cadastro
-                        </Badge>
+                        onCadastrar ? (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <button
+                                type="button"
+                                className="cursor-pointer"
+                                aria-label={`Cadastrar item ${row.codItem}`}
+                                onClick={() => onCadastrar(row)}
+                              >
+                                <Badge variant="outline" className="h-5 cursor-pointer px-1 py-0 text-[10px] hover:bg-amber-50">
+                                  sem cadastro
+                                </Badge>
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent>Cadastrar item</TooltipContent>
+                          </Tooltip>
+                        ) : (
+                          <Badge variant="outline" className="h-5 px-1 py-0 text-[10px]">
+                            sem cadastro
+                          </Badge>
+                        )
                       ) : null}
                     </div>
                   </TableCell>

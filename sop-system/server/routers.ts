@@ -50,6 +50,7 @@ import {
   suggestSkuReferencias,
   suggestSkuReferenciasBatch,
 } from "./services/pending-sku-accept";
+import { buscarProdutosCadastrados, exigirProdutosCadastrados } from "./services/produto-busca";
 import { assertCrmExcelHeaders, assertCrmImportRows } from "./services/crm-import-validate";
 import {
   clearSazonalidadeFatores,
@@ -153,6 +154,12 @@ async function runGerarBasesOrThrow(input?: { dataInicio?: string; dataFim?: str
   }
 }
 
+function erroNegocioDePara(err: unknown): TRPCError {
+  if (err instanceof TRPCError) return err;
+  const message = err instanceof Error && err.message ? err.message : "Não foi possível gravar o De-Para.";
+  return new TRPCError({ code: "BAD_REQUEST", message });
+}
+
 export const appRouter = router({
   system: systemRouter,
   
@@ -199,6 +206,21 @@ export const appRouter = router({
   // ==================== PRODUTOS ====================
   produtos: router({
     list: protectedProcedure.query(() => db.listProdutos()),
+    buscar: protectedProcedure
+      .input(
+        z.object({
+          query: z.string().max(120).default(""),
+          limit: z.number().int().min(1).max(50).default(30),
+          excluir: z.array(z.string()).max(20).optional(),
+        })
+      )
+      .query(({ input }) =>
+        buscarProdutosCadastrados({
+          query: input.query,
+          limit: input.limit,
+          excluir: input.excluir,
+        })
+      ),
     backfillPrecos: protectedProcedure.mutation(() => refreshPrecosProdutosAutomatico()),
     setPrecoManual: protectedProcedure
       .input(z.object({ id: z.number(), precoUnitario: z.number().positive() }))
@@ -1609,10 +1631,15 @@ export const appRouter = router({
         skuNovo: z.string().min(1), 
       }))
       .mutation(async ({ input }) => {
-        const result = await db.createDeParaCodigo(input);
-        invalidateDeParaCache();
-        invalidateDeParaEnrichedCache();
-        return result;
+        try {
+          await exigirProdutosCadastrados([input.skuAntigo, input.skuNovo]);
+          const result = await db.createDeParaCodigo(input);
+          invalidateDeParaCache();
+          invalidateDeParaEnrichedCache();
+          return result;
+        } catch (err) {
+          throw erroNegocioDePara(err);
+        }
       }),
     update: protectedProcedure
       .input(z.object({ 
@@ -1621,11 +1648,17 @@ export const appRouter = router({
         skuNovo: z.string().optional(), 
       }))
       .mutation(async ({ input }) => {
-        const { id, ...rest } = input;
-        const result = await db.updateDeParaCodigo(id, rest);
-        invalidateDeParaCache();
-        invalidateDeParaEnrichedCache();
-        return result;
+        try {
+          const codigos = [input.skuAntigo, input.skuNovo].filter((codigo): codigo is string => Boolean(codigo));
+          await exigirProdutosCadastrados(codigos);
+          const { id, ...rest } = input;
+          const result = await db.updateDeParaCodigo(id, rest);
+          invalidateDeParaCache();
+          invalidateDeParaEnrichedCache();
+          return result;
+        } catch (err) {
+          throw erroNegocioDePara(err);
+        }
       }),
     delete: protectedProcedure.input(z.object({ id: z.number() })).mutation(async ({ input }) => {
       const result = await db.deleteDeParaCodigo(input.id);
@@ -1639,10 +1672,15 @@ export const appRouter = router({
         skuNovo: z.string(), 
       })))
       .mutation(async ({ input }) => {
-        const result = await db.createDeParaCodigosBatch(input);
-        invalidateDeParaCache();
-        invalidateDeParaEnrichedCache();
-        return result;
+        try {
+          await exigirProdutosCadastrados(input.flatMap(item => [item.skuAntigo, item.skuNovo]));
+          const result = await db.createDeParaCodigosBatch(input);
+          invalidateDeParaCache();
+          invalidateDeParaEnrichedCache();
+          return result;
+        } catch (err) {
+          throw erroNegocioDePara(err);
+        }
       }),
     getCodigoAtual: protectedProcedure
       .input(z.object({ codigo: z.string() }))
@@ -2303,17 +2341,44 @@ export const appRouter = router({
               z.object({
                 codMaterial: z.string().min(1),
                 skuAntigo: z.string().nullable().optional(),
+                cadastro: z
+                  .object({
+                    descricao: z.string().min(1).max(300),
+                    marca: z.string().max(100).nullable().optional(),
+                    tipoNegocio: z.string().max(20).nullable().optional(),
+                    precoUnitario: z.number().min(0).nullable().optional(),
+                  })
+                  .nullable()
+                  .optional(),
               })
             )
             .min(1)
             .max(5000),
         })
       )
-      .mutation(({ input }) => acceptPendingSkusWithDePara(input.items)),
+      .mutation(async ({ input }) => {
+        try {
+          return await acceptPendingSkusWithDePara(input.items);
+        } catch (err) {
+          throw erroNegocioDePara(err);
+        }
+      }),
 
     suggestSkuReferencias: protectedProcedure
-      .input(z.object({ codMaterial: z.string().min(1), limit: z.number().min(1).max(20).optional() }))
-      .query(({ input }) => suggestSkuReferencias(input.codMaterial, input.limit ?? 10)),
+      .input(
+        z.object({
+          codMaterial: z.string().min(1),
+          limit: z.number().min(1).max(20).optional(),
+          descricao: z.string().max(300).optional(),
+          marca: z.string().max(120).optional(),
+        })
+      )
+      .query(({ input }) =>
+        suggestSkuReferencias(input.codMaterial, input.limit ?? 10, {
+          descricao: input.descricao,
+          marca: input.marca,
+        })
+      ),
 
     suggestSkuReferenciasBatch: protectedProcedure
       .input(z.object({ codMaterials: z.array(z.string().min(1)).min(1).max(500) }))

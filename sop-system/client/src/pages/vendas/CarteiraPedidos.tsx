@@ -4,12 +4,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PvMtoPivotTable, type PvPivotRow } from "@/components/pv/PvMtoPivotTable";
+import { CadastrarItemCarteiraDialog } from "@/components/pv/CadastrarItemCarteiraDialog";
 import { trpc } from "@/lib/trpc";
 import { Database, Loader2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 
 export default function CarteiraPedidos() {
   const [search, setSearch] = useState("");
+  const [itemCadastro, setItemCadastro] = useState<PvPivotRow | null>(null);
   const utils = trpc.useUtils();
   const { data, isLoading } = trpc.carteiraPedidos.pivotGrade.useQuery();
   const { data: pedidos } = trpc.carteiraPedidos.list.useQuery({
@@ -136,10 +138,18 @@ export default function CarteiraPedidos() {
               exportFileName="carteira-pv-pivot"
               emptyMessage="Nenhum pedido na carteira — clique em Atualizar do ERP"
               showClienteFaturado
+              onCadastrar={setItemCadastro}
             />
           )}
         </CardContent>
       </Card>
+      <CadastrarItemCarteiraDialog
+        row={itemCadastro}
+        open={itemCadastro !== null}
+        onOpenChange={aberto => {
+          if (!aberto) setItemCadastro(null);
+        }}
+      />
     </div>
   );
 }

@@ -316,7 +316,7 @@ export function pacoteFicticio(): PacotePipedrive {
     ],
     organizations: [{ id: 50, name: "Cliente Aurora Ltda" }],
     users: [
-      { id: 1, name: "ana souza" },
+      { id: 1, name: "ana souza", email: "ana@printbag.local" },
       { id: 2, name: "Bruno Lima" },
       { id: 3, name: "Pessoa Sem Cadastro" },
     ],

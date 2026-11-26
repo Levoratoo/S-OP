@@ -18,6 +18,8 @@ import {
   cicloAceitaSyncPipedrive,
   gravidadeAlerta,
   mensagemSyncPipedriveRecusada,
+  COLUNAS_CSV_ALERTAS,
+  linhaCsvAlerta,
   ORDEM_ALERTAS,
   ROTULOS_ALERTA,
   type TipoAlertaPipedrive,
@@ -61,6 +63,8 @@ type Previa = {
     titulo: string;
     sku: string;
     detalhe: string;
+    proprietario: string;
+    proprietarioEmail: string;
   }>;
   contagens: Record<TipoAlertaPipedrive, number>;
 };
@@ -151,21 +155,9 @@ export function PipedriveCrmSync({
       return;
     }
     exportToCsv(
-      previa.alertas.map(item => ({
-        tipo: ROTULOS_ALERTA[item.tipo],
-        dealId: item.dealId,
-        titulo: item.titulo,
-        sku: item.sku,
-        detalhe: item.detalhe,
-      })),
+      previa.alertas.map(item => linhaCsvAlerta(item)),
       `alertas-pipedrive-ciclo-${cicloId}`,
-      [
-        { key: "tipo", title: "Alerta" },
-        { key: "dealId", title: "Negócio" },
-        { key: "titulo", title: "Título" },
-        { key: "sku", title: "SKU" },
-        { key: "detalhe", title: "Detalhe" },
-      ]
+      COLUNAS_CSV_ALERTAS.map(coluna => ({ key: coluna.key, title: coluna.title }))
     );
   };
 
@@ -360,6 +352,7 @@ export function PipedriveCrmSync({
                             <p className="font-medium">
                               #{item.dealId} {item.titulo}
                               {item.sku ? ` · ${item.sku}` : ""}
+                              {item.proprietario ? ` · Proprietário: ${item.proprietario}` : ""}
                             </p>
                             <p className="text-muted-foreground">{item.detalhe}</p>
                           </div>
